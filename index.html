@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sonam Tuitions · Online Test Series</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+<style>
+:root{
+  --paper:#f6f3ec; --paper-2:#fffdf8; --ink:#23211c; --ink-soft:#5b574c;
+  --line:#e2dccd; --line-2:#cfc7b3;
+  --accent:#1f5c52; --accent-soft:#e6efe9; --accent-ink:#143f38;
+  --gold:#b8893b; --danger:#a3402f; --danger-soft:#f6e7e2;
+  --ok:#2f6b3a; --warn:#9a6b15;
+  --shadow:0 1px 2px rgba(35,33,28,.05),0 8px 24px rgba(35,33,28,.07);
+  --radius:14px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:'Hanken Grotesk',system-ui,sans-serif;
+  background:
+    radial-gradient(900px 500px at 85% -10%, #eef3ee 0%, transparent 60%),
+    radial-gradient(700px 500px at -5% 110%, #f1ece0 0%, transparent 55%),
+    var(--paper);
+  color:var(--ink); min-height:100vh; -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,.serif{font-family:'Spectral',Georgia,serif}
+button{font-family:inherit;cursor:pointer}
+.hidden{display:none !important}
+a{color:var(--accent)}
+
+.auth-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
+.auth-card{width:100%;max-width:410px;background:var(--paper-2);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:34px 30px}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.brand .mark{width:42px;height:42px;border-radius:11px;background:var(--accent);color:#fff;display:grid;place-items:center;font-family:'Spectral';font-weight:700;font-size:22px}
+.brand .mark span{transform:translateY(-1px)}
+.brand h1{font-size:21px;margin:0;letter-spacing:.2px}
+.brand .sub{font-size:12.5px;color:var(--ink-soft);margin-top:1px}
+.auth-card h2{font-size:24px;margin:22px 0 4px}
+.auth-card p.lede{color:var(--ink-soft);font-size:14px;margin:0 0 20px}
+label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:14px 0 6px;letter-spacing:.2px}
+input,select,textarea{width:100%;padding:11px 13px;border:1px solid var(--line-2);border-radius:10px;background:#fff;font-size:15px;color:var(--ink);font-family:inherit}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 18px;border-radius:10px;border:1px solid transparent;font-weight:700;font-size:14.5px;background:var(--accent);color:#fff;transition:.15s}
+.btn:hover{background:var(--accent-ink)}
+.btn.full{width:100%;margin-top:18px}
+.btn.ghost{background:transparent;color:var(--accent);border-color:var(--line-2)}
+.btn.ghost:hover{background:var(--accent-soft);color:var(--accent-ink)}
+.btn.sm{padding:7px 13px;font-size:13px;border-radius:8px}
+.btn.danger{background:var(--danger)} .btn.danger:hover{background:#822f22}
+.btn.gold{background:var(--gold)} .btn.gold:hover{background:#9a7330}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.msg{margin-top:14px;font-size:13.5px;padding:10px 12px;border-radius:9px;display:none}
+.msg.err{display:block;background:var(--danger-soft);color:#822f22}
+.msg.ok{display:block;background:var(--accent-soft);color:var(--accent-ink)}
+
+.app{display:none;min-height:100vh}
+header.top{position:sticky;top:0;z-index:20;background:rgba(246,243,236,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:0 22px;display:flex;align-items:center;gap:16px;height:62px}
+header .brand h1{font-size:17px}
+header .brand .sub{display:none}
+.spacer{flex:1}
+.whoami{text-align:right;font-size:13px;line-height:1.3}
+.whoami b{display:block;font-size:14px}
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;letter-spacing:.4px;text-transform:uppercase}
+.pill.master{background:#efe3cf;color:#7a5713}
+.pill.admin{background:var(--accent-soft);color:var(--accent-ink)}
+.pill.student{background:#e7ecf5;color:#2c4470}
+
+.layout{display:flex;max-width:1180px;margin:0 auto;width:100%}
+nav.side{width:218px;flex:none;padding:22px 14px;border-right:1px solid var(--line);min-height:calc(100vh - 62px)}
+nav.side a{display:flex;align-items:center;gap:10px;padding:10px 13px;border-radius:10px;color:var(--ink-soft);text-decoration:none;font-weight:600;font-size:14px;margin-bottom:3px;cursor:pointer}
+nav.side a:hover{background:#efeadd;color:var(--ink)}
+nav.side a.active{background:var(--accent);color:#fff}
+nav.side .navlabel{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--line-2);margin:18px 0 7px 13px}
+main.content{flex:1;padding:28px 30px;min-width:0}
+.page-title{font-size:27px;margin:0 0 4px}
+.page-sub{color:var(--ink-soft);margin:0 0 22px;font-size:14.5px}
+
+.grid{display:grid;gap:16px}
+.cols-3{grid-template-columns:repeat(3,1fr)}
+.cols-2{grid-template-columns:repeat(2,1fr)}
+@media(max-width:900px){.cols-3,.cols-2{grid-template-columns:1fr}.layout{flex-direction:column}nav.side{width:auto;display:flex;flex-wrap:wrap;min-height:0;border-right:none;border-bottom:1px solid var(--line)}}
+.card{background:var(--paper-2);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 4px;font-size:18px}
+.stat{font-family:'Spectral';font-size:34px;font-weight:600;color:var(--accent);line-height:1}
+.stat .lbl{display:block;font-family:'Hanken Grotesk';font-size:12.5px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+.muted{color:var(--ink-soft);font-size:13.5px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row.end{justify-content:flex-end}
+.bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px}
+.bar .grow{flex:1;min-width:160px}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line)}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft);font-weight:700}
+tr:last-child td{border-bottom:none}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;letter-spacing:.3px}
+.tag.live{background:var(--accent-soft);color:var(--accent-ink)}
+.tag.pending{background:#f6eede;color:var(--warn)}
+.tag.phy{background:#e7ecf5;color:#2c4470}.tag.chem{background:#f3e8ee;color:#7a2f57}
+.tag.math{background:#e9f1e7;color:#33602f}.tag.bio{background:#eaf0e2;color:#4d6322}
+.tag.bot{background:#e7f0e4;color:#3c6b2f}.tag.zoo{background:#f0ece1;color:#6b551f}
+.tag.exam{background:#ece3f0;color:#5a3a73}
+.tag.scheduled{background:#e7ecf5;color:#2c4470}.tag.open{background:var(--accent-soft);color:var(--accent-ink)}
+.tag.closed{background:#ece9e0;color:var(--ink-soft)}
+
+.modal-bg{position:fixed;inset:0;background:rgba(35,33,28,.46);display:none;place-items:center;z-index:60;padding:20px;overflow:auto}
+.modal-bg.show{display:grid}
+.modal{background:var(--paper-2);border-radius:16px;max-width:560px;width:100%;padding:26px;box-shadow:0 20px 60px rgba(0,0,0,.25);max-height:90vh;overflow:auto}
+.modal.wide{max-width:760px}
+.modal h2{margin:0 0 16px;font-size:22px}
+.modal .x{float:right;background:none;border:none;font-size:22px;color:var(--ink-soft);line-height:1;margin-top:-6px}
+
+.exam{display:none;position:fixed;inset:0;background:var(--paper);z-index:80;overflow:auto}
+.exam .ebar{position:sticky;top:0;background:var(--accent);color:#fff;padding:0 22px;height:60px;display:flex;align-items:center;gap:18px;z-index:5}
+.exam .ebar h2{margin:0;font-size:17px;color:#fff}
+.timer{font-family:'Spectral';font-size:22px;font-weight:600;background:rgba(255,255,255,.16);padding:5px 14px;border-radius:9px;letter-spacing:1px}
+.timer.low{background:var(--danger);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.6}}
+.exam-body{max-width:1080px;margin:0 auto;display:flex;gap:24px;padding:26px 22px}
+.q-main{flex:1;min-width:0}
+.q-card{background:var(--paper-2);border:1px solid var(--line);border-radius:14px;padding:26px;box-shadow:var(--shadow)}
+.q-meta{font-size:12.5px;color:var(--ink-soft);font-weight:600;margin-bottom:10px;text-transform:uppercase;letter-spacing:.4px}
+.q-text{font-size:18px;line-height:1.55;margin:0 0 22px;font-weight:500}
+.opt{display:flex;gap:13px;align-items:flex-start;padding:14px 16px;border:1.5px solid var(--line-2);border-radius:11px;margin-bottom:11px;cursor:pointer;transition:.12s;background:#fff}
+.opt:hover{border-color:var(--accent)}
+.opt.sel{border-color:var(--accent);background:var(--accent-soft)}
+.opt .k{width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line-2);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none}
+.opt.sel .k{background:var(--accent);color:#fff;border-color:var(--accent)}
+.opt.correct{border-color:var(--ok);background:#e9f1e7}.opt.correct .k{background:var(--ok);color:#fff;border-color:var(--ok)}
+.opt.wrong{border-color:var(--danger);background:var(--danger-soft)}.opt.wrong .k{background:var(--danger);color:#fff;border-color:var(--danger)}
+.q-side{width:240px;flex:none}
+.palette{background:var(--paper-2);border:1px solid var(--line);border-radius:14px;padding:18px;position:sticky;top:84px}
+.palette h4{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft)}
+.pgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.pgrid button{aspect-ratio:1;border-radius:8px;border:1.5px solid var(--line-2);background:#fff;font-weight:700;font-size:13px;color:var(--ink-soft)}
+.pgrid button.cur{outline:2px solid var(--accent);outline-offset:1px}
+.pgrid button.answered{background:var(--accent);color:#fff;border-color:var(--accent)}
+.pgrid button.review{background:var(--gold);color:#fff;border-color:var(--gold)}
+.legend{font-size:12px;color:var(--ink-soft);margin-top:14px;line-height:1.9}
+.legend .dot{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.solution{margin-top:16px;padding:16px;border-radius:11px;background:var(--accent-soft);border:1px solid #cfe0d7;font-size:14.5px;line-height:1.55}
+.solution b{color:var(--accent-ink)}
+
+.score-hero{text-align:center;padding:30px 20px;background:var(--paper-2);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);margin-bottom:22px}
+.score-hero .big{font-family:'Spectral';font-size:64px;font-weight:600;color:var(--accent);line-height:1}
+.score-hero .big small{font-size:28px;color:var(--ink-soft)}
+.score-hero .pct{font-size:17px;color:var(--ink-soft);margin-top:6px}
+.skpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
+.kpi{background:var(--paper-2);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center}
+.kpi .n{font-family:'Spectral';font-size:26px;font-weight:600}
+.kpi .l{font-size:12px;color:var(--ink-soft);font-weight:600}
+.kpi.c .n{color:var(--ok)} .kpi.w .n{color:var(--danger)} .kpi.u .n{color:var(--ink-soft)}
+
+.empty{text-align:center;padding:46px 20px;color:var(--ink-soft)}
+.empty .ico{font-size:36px;opacity:.5}
+.loader{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.note{font-size:12.5px;color:var(--warn);background:#f8f1df;border:1px solid #ecdcb4;padding:9px 12px;border-radius:9px;margin-top:10px}
+hr.sep{border:none;border-top:1px solid var(--line);margin:22px 0}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div class="auth-wrap" id="authWrap">
+  <div class="auth-card">
+    <div class="brand"><div class="mark"><span>S</span></div>
+      <div><h1>Sonam Tuitions</h1><div class="sub">Online Test Series · MHT-CET / JEE Main / NEET</div></div></div>
+    <h2>Sign in</h2>
+    <p class="lede">Use the email &amp; password issued by your centre.</p>
+    <label>Email</label><input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="username"/>
+    <label>Password</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password"/>
+    <button class="btn full" id="loginBtn" onclick="doLogin()">Sign in</button>
+    <div class="msg" id="authMsg"></div>
+    <p class="muted" style="margin-top:18px;text-align:center;font-size:12.5px">
+      First-time setup? Open the browser console and run <code>bootstrapMaster()</code> once.</p>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand"><div class="mark"><span>S</span></div><div><h1>Sonam Tuitions</h1></div></div>
+    <div class="spacer"></div>
+    <div class="whoami"><b id="meName">—</b><span id="meRole"></span></div>
+    <button class="btn ghost sm" onclick="doLogout()">Sign out</button>
+  </header>
+  <div class="layout"><nav class="side" id="sideNav"></nav><main class="content" id="view"></main></div>
+</div>
+
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()"><div class="modal" id="modalBox"></div></div>
+
+<!-- ============ EXAM SCREEN ============ -->
+<div class="exam" id="examScreen">
+  <div class="ebar"><h2 id="examTitle">Test</h2><div class="spacer"></div>
+    <div class="timer" id="examTimer">--:--</div>
+    <button class="btn gold sm" id="submitBtn" onclick="confirmSubmit()">Submit test</button></div>
+  <div class="exam-body">
+    <div class="q-main">
+      <div class="q-card" id="qCard"></div>
+      <div class="row" style="margin-top:18px;justify-content:space-between">
+        <button class="btn ghost" onclick="navQ(-1)">‹ Previous</button>
+        <div class="row">
+          <button class="btn ghost" id="reviewBtn" onclick="toggleReview()">Mark for review</button>
+          <button class="btn" onclick="navQ(1)">Save &amp; Next ›</button></div></div>
+    </div>
+    <div class="q-side"><div class="palette"><h4>Questions</h4><div class="pgrid" id="palette"></div>
+      <div class="legend">
+        <div><span class="dot" style="background:var(--accent)"></span>Answered</div>
+        <div><span class="dot" style="background:var(--gold)"></span>Marked for review</div>
+        <div><span class="dot" style="background:#fff;border:1.5px solid var(--line-2)"></span>Not visited</div>
+      </div></div></div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   1. FIREBASE CONFIG  — replace with your project's config
+   ============================================================ */
+const firebaseConfig = {
+  apiKey: "AIzaSyBCqeyIezHGgTh5oXjaM4SZ9fxRA5QT3e0",
+  authDomain: "sonam-tests.firebaseapp.com",
+  projectId: "sonam-tests",
+  storageBucket: "sonam-tests.firebasestorage.app",
+  messagingSenderId: "195991189268",
+  appId: "1:195991189268:web:43fa213463ff1a7edb3401"
+};
+const AI_FUNCTION_URL = "PASTE_CLOUD_FUNCTION_URL"; // set after deploying functions/
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db   = firebase.firestore();
+const secondaryApp = firebase.initializeApp(firebaseConfig, "secondary");
+
+/* ============================================================
+   2. EXAM PATTERNS — all three exams encoded here
+   ============================================================ */
+const EXAMS = {
+  "MHT-CET": {
+    streams:{ PCM:["Physics","Chemistry","Mathematics"], PCB:["Physics","Chemistry","Biology"] },
+    marks:{Physics:1,Chemistry:1,Mathematics:2,Biology:1}, negative:0,
+    note:"No negative marking · Maths 2 marks, Physics/Chemistry/Biology 1 mark each"
+  },
+  "JEE Main": {
+    streams:{ PCM:["Physics","Chemistry","Mathematics"] },
+    marks:{Physics:4,Chemistry:4,Mathematics:4}, negative:1,
+    note:"+4 for correct, −1 for wrong, 0 if skipped"
+  },
+  "NEET": {
+    streams:{ PCB:["Physics","Chemistry","Botany","Zoology"] },
+    marks:{Physics:4,Chemistry:4,Botany:4,Zoology:4}, negative:1,
+    note:"+4 for correct, −1 for wrong, 0 if skipped"
+  }
+};
+const EXAM_KEYS = Object.keys(EXAMS);
+function examSubjects(exam){const s=new Set();Object.values(EXAMS[exam].streams).forEach(a=>a.forEach(x=>s.add(x)));return [...s];}
+function examMarks(exam,subject){return (EXAMS[exam]&&EXAMS[exam].marks[subject])||1;}
+function examNeg(exam){return (EXAMS[exam]&&EXAMS[exam].negative)||0;}
+function streamsFor(exam){return Object.keys(EXAMS[exam].streams);}
+function examsForStream(stream){return EXAM_KEYS.filter(k=>EXAMS[k].streams[stream]);}
+
+const CENTRES = [
+  {id:"AMB", name:"Ambernath"}, {id:"UNR3", name:"Ulhasnagar 3"},
+  {id:"UNR5", name:"Ulhasnagar 5"}, {id:"KE", name:"Kalyan East"},
+  {id:"KW", name:"Kalyan West"}, {id:"KHP", name:"Khopoli"}
+];
+const centreName = id => id==="all" ? "All centres" : (CENTRES.find(c=>c.id===id)?.name || id);
+
+const ALL_SUBJECTS = ["Physics","Chemistry","Mathematics","Biology","Botany","Zoology"];
+const TOPICS = {
+  Physics:["Laws of Motion","Electrostatics","Current Electricity","Optics","Rotational Motion","Magnetism","Thermodynamics","Modern Physics"],
+  Chemistry:["Chemical Bonding","Solutions","Electrochemistry","Coordination Compounds","Hydrocarbons","Thermodynamics","p-Block Elements","Aldehydes & Ketones"],
+  Mathematics:["Trigonometry","Vectors","Probability","Matrices","Integration","Differentiation","Straight Lines","Complex Numbers"],
+  Biology:["Cell Biology","Genetics","Human Physiology","Plant Physiology","Biomolecules","Reproduction"],
+  Botany:["Cell Structure & Function","Plant Kingdom","Photosynthesis","Plant Physiology","Genetics & Evolution","Biomolecules","Reproduction in Plants","Ecology"],
+  Zoology:["Human Physiology","Animal Kingdom","Cell Division","Human Reproduction","Biotechnology","Evolution","Human Health & Disease","Neural Control & Coordination"]
+};
+
+let ME = null, CURRENT_PAGE = null;
+
+/* ============================================================
+   3. AUTH
+   ============================================================ */
+function doLogin(){
+  const email=val("loginEmail").trim(), pass=val("loginPass");
+  if(!email||!pass) return authMsg("Enter email and password.","err");
+  setBtn("loginBtn",true,"Signing in…");
+  auth.signInWithEmailAndPassword(email,pass).catch(e=>{authMsg(prettyAuthErr(e),"err");setBtn("loginBtn",false,"Sign in");});
+}
+function doLogout(){ auth.signOut(); }
+auth.onAuthStateChanged(async user=>{
+  if(!user){ showLogin(); return; }
+  try{
+    const snap=await db.collection("users").doc(user.uid).get();
+    if(!snap.exists){ authMsg("No profile found. Ask your centre admin to add you.","err"); setBtn("loginBtn",false,"Sign in"); await auth.signOut(); return; }
+    ME={uid:user.uid, email:user.email, ...snap.data()}; enterApp();
+  }catch(e){ authMsg("Could not load profile: "+e.message,"err"); setBtn("loginBtn",false,"Sign in"); }
+});
+function showLogin(){ ME=null; el("app").style.display="none"; el("authWrap").style.display="grid"; setBtn("loginBtn",false,"Sign in"); }
+function enterApp(){
+  el("authWrap").style.display="none"; el("app").style.display="block";
+  el("meName").textContent=ME.name||ME.email;
+  el("meRole").innerHTML=roleBadge(ME.role)+(ME.role!=="master"?` · ${centreName(ME.centreId)}`:"");
+  buildNav(); go(NAV[ME.role][0].id);
+}
+function roleBadge(r){return `<span class="pill ${r}">${r}</span>`;}
+
+/* ============================================================
+   4. NAVIGATION
+   ============================================================ */
+const STAFF_NAV=[
+  {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
+  {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
+  {id:"students",label:"Students",ic:"☺"},{id:"results",label:"Results & report cards",ic:"⤓"}
+];
+const NAV={ master:STAFF_NAV, admin:STAFF_NAV,
+  student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"history",label:"My results",ic:"⤓"}] };
+function buildNav(){
+  const wrap=el("sideNav"); wrap.innerHTML="";
+  if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
+  NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
+    a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
+}
+function go(page){
+  CURRENT_PAGE=page;
+  document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
+  el("nav-"+page)?.classList.add("active");
+  ({dashboard:pageDashboard,tests:pageTests,questions:pageQuestions,review:pageReview,students:pageStudents,
+    results:pageResults,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
+}
+
+/* ============================================================
+   5. DASHBOARD (staff)
+   ============================================================ */
+async function pageDashboard(){
+  setView(`<h1 class="page-title">Dashboard</h1>
+    <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · overview</p>
+    <div class="grid cols-3" id="kpis"><div class="card"><div class="muted">Loading…</div></div></div>
+    <div class="card" style="margin-top:18px"><h3>Recent tests</h3><div id="recentTests" class="muted">Loading…</div></div>`);
+  const [tests,students,pending]=await Promise.all([scopedCount("tests"),scopedCount("users",true),scopedCount("questions",false,{status:"pending"})]);
+  el("kpis").innerHTML=`${statCard("Tests created",tests)}${statCard("Active students",students)}${statCard("Awaiting review",pending)}`;
+  try{
+    const snap=await db.collection("tests").orderBy("createdAt","desc").limit(6).get();
+    const docs=ME.role==="master"?snap.docs:snap.docs.filter(d=>d.data().scope===ME.centreId||d.data().scope==="all");
+    el("recentTests").innerHTML=!docs.length?emptyState("No tests yet","Create one from the Tests tab.")
+      :tableHTML(["Title","Exam","Subjects","Scope","Window","Status"],
+        docs.map(d=>{const t=d.data();return [`<b>${esc(t.title)}</b>`,examTag(t.exam),subjChips(t.subjects),centreName(t.scope),windowLabel(t),testStatusTag(t)];}));
+  }catch(e){ el("recentTests").innerHTML=errBox(e); }
+}
+function statCard(lbl,n){return `<div class="card"><div class="stat"><span class="lbl">${lbl}</span>${n}</div></div>`;}
+async function scopedCount(coll,studentsOnly=false,extra=null){
+  try{
+    let q=db.collection(coll);
+    if(coll==="users") q=q.where("role","==","student");
+    if(ME.role==="admin"&&coll!=="tests") q=q.where("centreId","==",ME.centreId);
+    if(extra) for(const k in extra) q=q.where(k,"==",extra[k]);
+    if(coll==="tests"){
+      if(ME.role==="master") return (await db.collection("tests").get()).size;
+      const own=await db.collection("tests").where("scope","==",ME.centreId).get();
+      const all=await db.collection("tests").where("scope","==","all").get();
+      return own.size+all.size;
+    }
+    return (await q.get()).size;
+  }catch(e){ return "—"; }
+}
+
+/* ============================================================
+   6. QUESTION BANK + AI GENERATION (approval gate)
+   ============================================================ */
+async function pageQuestions(){
+  setView(`<h1 class="page-title">Question bank</h1>
+    <p class="page-sub">Approved questions available for tests &amp; practice. AI drafts land in the Review queue first.</p>
+    <div class="bar">
+      <div><label>Exam</label>${examSelect("qfExam")}</div>
+      <div><label>Subject</label><select id="qfSubject"><option value="all">All subjects</option></select></div>
+      <div><label>Class</label>${classSelect("qfClass")}</div>
+      <div class="spacer" style="flex:1"></div>
+      <button class="btn gold" onclick="openAIGen()">✦ Generate with AI</button>
+      <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
+    </div>
+    <div class="card"><div id="qList" class="muted">Loading…</div></div>`);
+  fillSubjects("qfExam","qfSubject",true);
+  el("qfExam").onchange=()=>{fillSubjects("qfExam","qfSubject",true);loadQuestions();};
+  el("qfSubject").onchange=loadQuestions; el("qfClass").onchange=loadQuestions;
+  loadQuestions();
+}
+async function loadQuestions(){
+  const exam=val("qfExam"),subj=val("qfSubject"),cls=val("qfClass");
+  let q=db.collection("questions").where("status","==","live").where("exam","==",exam);
+  if(subj!=="all") q=q.where("subject","==",subj);
+  if(cls!=="all") q=q.where("class","==",cls);
+  try{
+    const snap=await q.limit(100).get();
+    el("qList").innerHTML=snap.empty?emptyState("No live questions yet","Generate or add some, then approve them in the Review queue.")
+      :tableHTML(["Question","Subject","Topic","Class","Diff."],
+        snap.docs.map(d=>{const x=d.data();return [esc(truncate(x.text,90)),subjTag(x.subject),esc(x.topic||"—"),x.class,x.difficulty];}));
+  }catch(e){ el("qList").innerHTML=errBox(e); }
+}
+function openAIGen(){
+  modal(`<h2>✦ Generate questions with AI</h2>
+    <p class="muted">Claude drafts exam-pattern questions with full solutions. Every draft goes to the <b>Review queue</b> for your approval before any student sees it.</p>
+    <div class="grid cols-2"><div><label>Exam</label>${examSelect("gExam")}</div><div><label>Class</label>${classSelect("gClass",false)}</div></div>
+    <div class="grid cols-2"><div><label>Subject</label><select id="gSubject"></select></div><div><label>Topic</label><select id="gTopic"></select></div></div>
+    <div class="grid cols-2"><div><label>Difficulty</label><select id="gDiff"><option>Easy</option><option>Easy-Moderate</option></select></div>
+      <div><label>How many</label><select id="gCount"><option>3</option><option>5</option><option>8</option><option>10</option></select></div></div>
+    ${AI_FUNCTION_URL.startsWith("PASTE")?`<div class="note">⚠ AI generation needs the Cloud Function deployed first (see README). Until then, use "Add manually".</div>`:""}
+    <div class="msg" id="genMsg"></div>
+    <div class="row end" style="margin-top:18px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn gold" id="genBtn" onclick="runAIGen()">Generate &amp; send to review</button></div>`);
+  fillSubjects("gExam","gSubject",false); syncTopics("gSubject","gTopic");
+  el("gExam").onchange=()=>{fillSubjects("gExam","gSubject",false);syncTopics("gSubject","gTopic");};
+  el("gSubject").onchange=()=>syncTopics("gSubject","gTopic");
+}
+async function runAIGen(){
+  if(AI_FUNCTION_URL.startsWith("PASTE")) return setMsg("genMsg","Deploy the Cloud Function first.","err");
+  const payload={exam:val("gExam"),subject:val("gSubject"),cls:val("gClass"),topic:val("gTopic"),difficulty:val("gDiff"),count:parseInt(val("gCount"))};
+  setBtn("genBtn",true,`<span class="loader"></span> Generating…`); setMsg("genMsg","Contacting AI… ~10-20 seconds.","ok");
+  try{
+    const token=await auth.currentUser.getIdToken();
+    const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
+    if(!res.ok) throw new Error("Server returned "+res.status);
+    const data=await res.json(); const items=data.questions||[];
+    if(!items.length) throw new Error("No questions returned.");
+    const batch=db.batch();
+    items.forEach(it=>{const ref=db.collection("questions").doc();
+      batch.set(ref,{exam:payload.exam,subject:payload.subject,topic:payload.topic,class:payload.cls,difficulty:payload.difficulty,
+        text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,
+        status:"pending",source:"ai",createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
+        createdAt:firebase.firestore.FieldValue.serverTimestamp()});});
+    await batch.commit();
+    setMsg("genMsg",`✓ ${items.length} draft questions created. Approve them in the Review queue.`,"ok");
+    setBtn("genBtn",false,"Generate &amp; send to review");
+    setTimeout(()=>{closeModal();go("review");},1400);
+  }catch(e){ setMsg("genMsg","Generation failed: "+e.message,"err"); setBtn("genBtn",false,"Generate &amp; send to review"); }
+}
+function openManualQ(){
+  modal(`<h2>Add a question</h2>
+    <div class="grid cols-2"><div><label>Exam</label>${examSelect("mExam")}</div><div><label>Class</label>${classSelect("mClass",false)}</div></div>
+    <div class="grid cols-2"><div><label>Subject</label><select id="mSubject"></select></div><div><label>Topic</label><select id="mTopic"></select></div></div>
+    <label>Question</label><textarea id="mText" rows="3" placeholder="Type the question…"></textarea>
+    ${[0,1,2,3].map(i=>`<label>Option ${"ABCD"[i]} ${i===0?'<span class="muted">(mark the correct one)</span>':''}</label>
+      <div class="row"><input id="mOpt${i}" style="flex:1" placeholder="Option ${"ABCD"[i]}"/>
+      <label style="margin:0;display:flex;align-items:center;gap:5px"><input type="radio" name="mCorrect" value="${i}" style="width:auto" ${i===0?"checked":""}/> correct</label></div>`).join("")}
+    <label>Solution / explanation</label><textarea id="mSol" rows="3" placeholder="Step-by-step solution shown after the test…"></textarea>
+    <label>Difficulty</label><select id="mDiff"><option>Easy</option><option>Easy-Moderate</option></select>
+    <div class="msg" id="mMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="mSaveBtn" onclick="saveManualQ()">Save to bank (live)</button></div>`);
+  fillSubjects("mExam","mSubject",false); syncTopics("mSubject","mTopic");
+  el("mExam").onchange=()=>{fillSubjects("mExam","mSubject",false);syncTopics("mSubject","mTopic");};
+  el("mSubject").onchange=()=>syncTopics("mSubject","mTopic");
+}
+async function saveManualQ(){
+  const text=val("mText").trim(),opts=[0,1,2,3].map(i=>val("mOpt"+i).trim());
+  const correct=parseInt(document.querySelector('input[name=mCorrect]:checked').value);
+  if(!text||opts.some(o=>!o)) return setMsg("mMsg","Fill the question and all 4 options.","err");
+  setBtn("mSaveBtn",true,"Saving…");
+  try{
+    await db.collection("questions").add({exam:val("mExam"),subject:val("mSubject"),topic:val("mTopic"),class:val("mClass"),
+      difficulty:val("mDiff"),text,options:opts,correct,solution:val("mSol").trim(),status:"live",source:"manual",
+      createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    closeModal(); if(CURRENT_PAGE==="questions") loadQuestions();
+  }catch(e){ setMsg("mMsg",errMsg(e),"err"); setBtn("mSaveBtn",false,"Save to bank (live)"); }
+}
+
+/* ============================================================
+   7. REVIEW QUEUE
+   ============================================================ */
+async function pageReview(){
+  setView(`<h1 class="page-title">Review queue</h1>
+    <p class="page-sub">AI &amp; pending questions. Nothing here is visible to students until you approve it.</p>
+    <div id="revList" class="muted">Loading…</div>`);
+  loadReview();
+}
+async function loadReview(){
+  try{
+    const snap=await db.collection("questions").where("status","==","pending").orderBy("createdAt","desc").limit(50).get();
+    if(snap.empty){ el("revList").innerHTML=`<div class="card">${emptyState("Queue is clear","No drafts waiting for approval. 🎉")}</div>`; return; }
+    el("revList").innerHTML=snap.docs.map(d=>reviewCard(d.id,d.data())).join("");
+  }catch(e){ el("revList").innerHTML=errBox(e); }
+}
+function reviewCard(id,x){
+  return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
+    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''}</div>
+    <p class="q-text" style="font-size:16px;margin:12px 0">${esc(x.text)}</p>
+    <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${esc(o)}</div></div>`).join("")}</div>
+    ${x.solution?`<div class="solution"><b>Solution:</b> ${esc(x.solution)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
+    <div class="row end" style="margin-top:14px"><button class="btn danger sm" onclick="rejectQ('${id}')">Reject</button>
+      <button class="btn ghost sm" onclick="editReviewQ('${id}')">Edit</button>
+      <button class="btn sm" onclick="approveQ('${id}')">✓ Approve &amp; go live</button></div></div>`;
+}
+async function approveQ(id){ await db.collection("questions").doc(id).update({status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()}); el("rev-"+id)?.remove(); loadReview(); }
+async function rejectQ(id){ if(!confirm("Reject and delete this draft?"))return; await db.collection("questions").doc(id).delete(); el("rev-"+id)?.remove(); loadReview(); }
+async function editReviewQ(id){
+  const x=(await db.collection("questions").doc(id).get()).data();
+  modal(`<h2>Edit question</h2>
+    <label>Question</label><textarea id="eText" rows="3">${esc(x.text)}</textarea>
+    ${[0,1,2,3].map(i=>`<label>Option ${"ABCD"[i]}</label><div class="row"><input id="eOpt${i}" style="flex:1" value="${esc(x.options[i]||"")}"/>
+      <label style="margin:0;display:flex;gap:5px"><input type="radio" name="eCorrect" value="${i}" style="width:auto" ${i===x.correct?"checked":""}/> correct</label></div>`).join("")}
+    <label>Solution</label><textarea id="eSol" rows="3">${esc(x.solution||"")}</textarea>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="saveEditQ('${id}')">Save &amp; approve</button></div>`);
+}
+async function saveEditQ(id){
+  const correct=parseInt(document.querySelector('input[name=eCorrect]:checked').value);
+  await db.collection("questions").doc(id).update({text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
+  closeModal(); loadReview();
+}
+
+/* ============================================================
+   8. TESTS — create / schedule (exam-aware)
+   ============================================================ */
+async function pageTests(){
+  setView(`<h1 class="page-title">Tests</h1>
+    <p class="page-sub">Schedule tests for your students. Pick the exam — subjects &amp; marking are set automatically.</p>
+    <div class="bar"><div class="spacer" style="flex:1"></div><button class="btn" onclick="openCreateTest()">+ New test</button></div>
+    <div class="card"><div id="testList" class="muted">Loading…</div></div>`);
+  loadTests();
+}
+async function loadTests(){
+  try{
+    let docs;
+    if(ME.role==="master"){ docs=(await db.collection("tests").orderBy("createdAt","desc").limit(60).get()).docs; }
+    else{
+      const own=await db.collection("tests").where("scope","==",ME.centreId).get();
+      const all=await db.collection("tests").where("scope","==","all").get();
+      docs=[...own.docs,...all.docs].sort((a,b)=>(b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0));
+    }
+    el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
+      :tableHTML(["Title","Exam","Subjects","Q","Scope","Window","Status",""],
+        docs.map(d=>{const t=d.data();return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${t.class}</span>`,
+          examTag(t.exam),subjChips(t.subjects),(t.questionIds||[]).length,centreName(t.scope),windowLabel(t),testStatusTag(t),
+          `<button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button>`];}));
+  }catch(e){ el("testList").innerHTML=errBox(e); }
+}
+function openCreateTest(){
+  modal(`<h2>New test</h2>
+    <label>Title</label><input id="tTitle" placeholder="e.g. Weekly Mock — Mechanics"/>
+    <div class="grid cols-2"><div><label>Exam</label>${examSelect("tExam")}</div>
+      <div><label>Stream</label><select id="tStream"></select></div></div>
+    <label>Subjects to include</label><div class="row" id="tSubjects"></div>
+    <div class="grid cols-2"><div><label>Class</label>${classSelect("tClass",false)}</div>
+      <div><label>Questions per subject</label><select id="tPer"><option>5</option><option>10</option><option>15</option><option>20</option></select></div></div>
+    <div class="grid cols-2"><div><label>Duration (min)</label><input id="tDur" type="number" value="30"/></div>
+      <div><label>Assign to</label>${ME.role==="master"?`<select id="tScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
+    <div class="grid cols-2"><div><label>Opens</label><input id="tStart" type="datetime-local"/></div><div><label>Closes</label><input id="tEnd" type="datetime-local"/></div></div>
+    <div class="note" id="tMark"></div>
+    <div class="msg" id="tMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="tSaveBtn" onclick="createTest()">Create &amp; schedule</button></div>`);
+  fillStreams("tExam","tStream"); tBuildSubjects();
+  el("tExam").onchange=()=>{fillStreams("tExam","tStream");tBuildSubjects();};
+  el("tStream").onchange=tBuildSubjects;
+}
+function tBuildSubjects(){
+  const exam=val("tExam"),stream=val("tStream"); const subs=EXAMS[exam].streams[stream]||[];
+  el("tSubjects").innerHTML=subs.map(s=>`<label style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" class="tsub" value="${s}" checked style="width:auto"/> ${s}</label>`).join("");
+  el("tMark").textContent="Marking: "+EXAMS[exam].note;
+}
+async function createTest(){
+  const title=val("tTitle").trim(),exam=val("tExam"),stream=val("tStream");
+  const subjects=[...document.querySelectorAll(".tsub:checked")].map(c=>c.value);
+  const per=parseInt(val("tPer")),cls=val("tClass"),scope=ME.role==="master"?val("tScope"):ME.centreId;
+  if(!title||!subjects.length) return setMsg("tMsg","Add a title and at least one subject.","err");
+  setBtn("tSaveBtn",true,"Building…");
+  try{
+    let questionIds=[];
+    for(const s of subjects){
+      const snap=await db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",s).where("class","==",cls).limit(per*2).get();
+      const ids=shuffle(snap.docs.map(d=>d.id)).slice(0,per);
+      if(ids.length<per){ setMsg("tMsg",`Only ${ids.length} live ${exam} ${s} (Class ${cls}) questions available — need ${per}. Generate/approve more.`,"err"); setBtn("tSaveBtn",false,"Create & schedule"); return; }
+      questionIds.push(...ids);
+    }
+    await db.collection("tests").add({title,exam,stream,subjects,class:cls,questionIds,duration:parseInt(val("tDur"))||30,scope,isPractice:false,
+      startAt:val("tStart")?firebase.firestore.Timestamp.fromDate(new Date(val("tStart"))):null,
+      endAt:val("tEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("tEnd"))):null,
+      createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    closeModal(); loadTests();
+  }catch(e){ setMsg("tMsg",errMsg(e),"err"); setBtn("tSaveBtn",false,"Create & schedule"); }
+}
+
+/* ============================================================
+   9. STUDENTS
+   ============================================================ */
+async function pageStudents(){
+  setView(`<h1 class="page-title">Students</h1>
+    <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · create logins &amp; manage students</p>
+    <div class="bar"><div class="spacer" style="flex:1"></div>
+      ${ME.role==="master"?`<button class="btn ghost" onclick="openAddAdmin()">+ Add centre admin</button>`:""}
+      <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
+    <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
+  loadStudents();
+}
+async function loadStudents(){
+  let q=db.collection("users").where("role","==","student");
+  if(ME.role==="admin") q=q.where("centreId","==",ME.centreId);
+  try{
+    const snap=await q.limit(300).get();
+    el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
+      :tableHTML(["Name","Email","Class","Stream","Targets","Centre"],
+        snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.email||"—"),"Class "+s.class,s.stream||"—",
+          (examsForStream(s.stream||"PCM")).map(examTag).join(" "),centreName(s.centreId)];}));
+  }catch(e){ el("stuList").innerHTML=errBox(e); }
+}
+function openAddStudent(){
+  modal(`<h2>Add student</h2>
+    <p class="muted">Creates the student's login. They sign in with the email &amp; password you set here.</p>
+    <label>Full name</label><input id="sName"/>
+    <label>Email</label><input id="sEmail" type="email"/>
+    <label>Password</label><input id="sPass" placeholder="min 6 characters"/>
+    <div class="grid cols-2"><div><label>Class</label>${classSelect("sClass",false)}</div>
+      <div><label>Stream</label><select id="sStream" onchange="sStreamNote()"><option>PCM</option><option>PCB</option></select></div></div>
+    <div class="note" id="sNote"></div>
+    ${ME.role==="master"?`<label>Centre</label><select id="sCentre">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
+    <div class="msg" id="sMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="sBtn" onclick="addStudent()">Create login</button></div>`);
+  sStreamNote();
+}
+function sStreamNote(){ const st=val("sStream"); el("sNote").textContent="Can attempt: "+examsForStream(st).join(", "); }
+async function addStudent(){
+  const name=val("sName").trim(),email=val("sEmail").trim(),pass=val("sPass");
+  const centreId=ME.role==="master"?val("sCentre"):ME.centreId;
+  if(!name||!email||pass.length<6) return setMsg("sMsg","Name, email, and a 6+ char password are required.","err");
+  setBtn("sBtn",true,"Creating…");
+  try{
+    const cred=await secondaryApp.auth().createUserWithEmailAndPassword(email,pass);
+    await db.collection("users").doc(cred.user.uid).set({role:"student",name,email,class:val("sClass"),stream:val("sStream"),
+      centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    await secondaryApp.auth().signOut();
+    closeModal(); loadStudents();
+  }catch(e){ setMsg("sMsg",errMsg(e),"err"); setBtn("sBtn",false,"Create login"); }
+}
+function openAddAdmin(){
+  modal(`<h2>Add centre admin</h2>
+    <p class="muted">Creates a login that can manage one centre — schedule tests, add students, generate &amp; approve questions for that centre.</p>
+    <label>Full name</label><input id="aName"/>
+    <label>Email</label><input id="aEmail" type="email"/>
+    <label>Password</label><input id="aPass" placeholder="min 6 characters"/>
+    <label>Centre</label><select id="aCentre">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>
+    <div class="msg" id="aMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="aBtn" onclick="addAdmin()">Create admin login</button></div>`);
+}
+async function addAdmin(){
+  const name=val("aName").trim(),email=val("aEmail").trim(),pass=val("aPass"),centreId=val("aCentre");
+  if(!name||!email||pass.length<6) return setMsg("aMsg","Name, email, and a 6+ char password are required.","err");
+  setBtn("aBtn",true,"Creating…");
+  try{
+    const cred=await secondaryApp.auth().createUserWithEmailAndPassword(email,pass);
+    await db.collection("users").doc(cred.user.uid).set({role:"admin",name,email,centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    await secondaryApp.auth().signOut();
+    closeModal();
+  }catch(e){ setMsg("aMsg",errMsg(e),"err"); setBtn("aBtn",false,"Create admin login"); }
+}
+
+/* ============================================================
+   10. RESULTS + ONE-CLICK REPORT CARD
+   ============================================================ */
+async function pageResults(){
+  setView(`<h1 class="page-title">Results &amp; report cards</h1>
+    <p class="page-sub">Pick a student to see every attempt and download a report card PDF.</p>
+    <div class="bar"><div class="grow"><label>Find student</label><select id="rStudent"><option value="">— select a student —</option></select></div></div>
+    <div id="rResults"></div>`);
+  let q=db.collection("users").where("role","==","student");
+  if(ME.role==="admin") q=q.where("centreId","==",ME.centreId);
+  const snap=await q.get();
+  el("rStudent").innerHTML+=snap.docs.map(d=>`<option value="${d.id}">${esc(d.data().name)} · ${centreName(d.data().centreId)}</option>`).join("");
+  el("rStudent").onchange=()=>loadStudentResults(val("rStudent"));
+}
+async function loadStudentResults(uid){
+  if(!uid){ el("rResults").innerHTML=""; return; }
+  el("rResults").innerHTML=`<div class="card muted">Loading…</div>`;
+  const [stuDoc,attempts]=await Promise.all([db.collection("users").doc(uid).get(),
+    db.collection("attempts").where("studentUid","==",uid).orderBy("submittedAt","desc").get()]);
+  const stu=stuDoc.data();
+  if(attempts.empty){ el("rResults").innerHTML=`<div class="card">${emptyState("No attempts yet",esc(stu.name)+" hasn't taken any tests.")}</div>`; return; }
+  const rows=attempts.docs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+    `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>`];});
+  el("rResults").innerHTML=`<div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <h3>${esc(stu.name)} <span class="muted">· Class ${stu.class} ${stu.stream||""} · ${centreName(stu.centreId)}</span></h3>
+      <button class="btn gold" onclick='downloadReportCard("${uid}")'>⤓ Download report card</button></div>
+    ${tableHTML(["Test","Exam","Date","Score","%","Breakdown",""],rows)}</div>`;
+}
+async function downloadReportCard(uid){
+  const [stuDoc,attempts]=await Promise.all([db.collection("users").doc(uid).get(),
+    db.collection("attempts").where("studentUid","==",uid).orderBy("submittedAt","desc").get()]);
+  const stu=stuDoc.data(); const {jsPDF}=window.jspdf; const doc=new jsPDF();
+  doc.setFillColor(31,92,82); doc.rect(0,0,210,30,"F");
+  doc.setTextColor(255); doc.setFont("times","bold"); doc.setFontSize(20); doc.text("Sonam Tuitions",14,14);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.text("Online Test Series — Performance Report Card",14,22);
+  doc.setTextColor(35,33,28); doc.setFontSize(12); doc.setFont("helvetica","bold"); doc.text(`${stu.name}`,14,42);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text(`Class ${stu.class} ${stu.stream||""}   |   Centre: ${centreName(stu.centreId)}   |   Generated: ${new Date().toLocaleDateString()}`,14,49);
+  const rows=attempts.docs.map(d=>{const a=d.data();return [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",`${a.correct}`,`${a.wrong}`,`${a.unattempted}`];});
+  const totS=attempts.docs.reduce((s,d)=>s+d.data().score,0), totT=attempts.docs.reduce((s,d)=>s+d.data().total,0);
+  doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Correct","Wrong","Skipped"]],body:rows,
+    headStyles:{fillColor:[31,92,82]},styles:{fontSize:8.5,cellPadding:2.5},alternateRowStyles:{fillColor:[246,243,236]}});
+  let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  doc.text(`Overall: ${totS}/${totT}  (${pct(totS,totT)}%)   ·   Tests taken: ${attempts.size}`,14,y);
+  doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(120);
+  doc.text("Computer-generated by the Sonam Tuitions test portal.",14,285);
+  doc.save(`ReportCard_${stu.name.replace(/\s+/g,"_")}.pdf`);
+}
+
+/* ============================================================
+   11. STUDENT — home, practice, history
+   ============================================================ */
+async function pageStudentHome(){
+  setView(`<h1 class="page-title">My tests</h1>
+    <p class="page-sub">Tests scheduled for you by ${centreName(ME.centreId)}.</p><div id="myTests" class="muted">Loading…</div>`);
+  try{
+    const [own,all]=await Promise.all([
+      db.collection("tests").where("scope","==",ME.centreId).where("isPractice","==",false).get(),
+      db.collection("tests").where("scope","==","all").where("isPractice","==",false).get()]);
+    let docs=[...own.docs,...all.docs].filter(d=>d.data().class===ME.class && examsForStream(ME.stream||"PCM").includes(d.data().exam));
+    const att=await db.collection("attempts").where("studentUid","==",ME.uid).get();
+    const done=new Set(att.docs.map(d=>d.data().testId));
+    if(!docs.length){ el("myTests").innerHTML=`<div class="card">${emptyState("No tests scheduled","Check the Practice tab to build your own.")}</div>`; return; }
+    el("myTests").innerHTML=`<div class="grid cols-2">`+docs.map(d=>{const t=d.data();const st=testStatus(t);const taken=done.has(d.id);
+      return `<div class="card"><div class="row" style="justify-content:space-between"><h3>${esc(t.title)}</h3>${testStatusTag(t)}</div>
+        <p class="muted">${examTag(t.exam)} ${subjChips(t.subjects)} · ${(t.questionIds||[]).length} Q · ${t.duration} min</p>
+        <p class="muted" style="font-size:12.5px">${windowLabel(t)} · ${EXAMS[t.exam]?.note||""}</p>
+        ${taken?`<button class="btn ghost full" disabled>✓ Completed</button>`
+          :st==="open"?`<button class="btn full" onclick="startTest('${d.id}')">Start test</button>`
+          :st==="scheduled"?`<button class="btn ghost full" disabled>Opens ${fmtDate(t.startAt)}</button>`
+          :`<button class="btn ghost full" disabled>Closed</button>`}</div>`;}).join("")+`</div>`;
+  }catch(e){ el("myTests").innerHTML=errBox(e); }
+}
+function pagePractice(){
+  const myExams=examsForStream(ME.stream||"PCM");
+  setView(`<h1 class="page-title">Practice</h1>
+    <p class="page-sub">Build your own practice test from the question bank — anytime you like.</p>
+    <div class="card" style="max-width:560px">
+      <div class="grid cols-2"><div><label>Exam</label><select id="pExam">${myExams.map(e=>`<option>${e}</option>`).join("")}</select></div>
+        <div><label>Difficulty</label><select id="pDiff"><option value="">Any</option><option>Easy</option><option>Easy-Moderate</option></select></div></div>
+      <div class="grid cols-2"><div><label>Subject</label><select id="pSubject"></select></div><div><label>Topic</label><select id="pTopic"></select></div></div>
+      <div class="grid cols-2"><div><label>No. of questions</label><select id="pCount"><option>5</option><option>10</option><option>15</option><option>20</option></select></div>
+        <div><label>Time limit (min)</label><input id="pDur" type="number" value="15"/></div></div>
+      <div class="msg" id="pMsg"></div>
+      <button class="btn full" id="pBtn" onclick="startPractice()">Start practice test</button></div>`);
+  fillSubjects("pExam","pSubject",false,ME.stream); syncTopics("pSubject","pTopic",true);
+  el("pExam").onchange=()=>{fillSubjects("pExam","pSubject",false,ME.stream);syncTopics("pSubject","pTopic",true);};
+  el("pSubject").onchange=()=>syncTopics("pSubject","pTopic",true);
+}
+async function startPractice(){
+  const exam=val("pExam"),subject=val("pSubject"),topic=val("pTopic"),diff=val("pDiff"),count=parseInt(val("pCount"));
+  setBtn("pBtn",true,"Building…");
+  try{
+    let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject).where("class","==",ME.class);
+    if(topic!=="any") q=q.where("topic","==",topic);
+    const snap=await q.limit(count*3).get();
+    let docs=snap.docs.filter(d=>!diff||d.data().difficulty===diff);
+    let ids=shuffle(docs.map(d=>d.id)).slice(0,count);
+    if(!ids.length){ setMsg("pMsg","No matching live questions yet. Try another subject/topic.","err"); setBtn("pBtn",false,"Start practice test"); return; }
+    launchExam({id:"practice_"+Date.now(),title:`Practice · ${exam} · ${subject}${topic!=="any"?" · "+topic:""}`,exam,subjects:[subject],questionIds:ids,duration:parseInt(val("pDur"))||15,isPractice:true},true);
+  }catch(e){ setMsg("pMsg",errMsg(e),"err"); setBtn("pBtn",false,"Start practice test"); }
+}
+async function pageHistory(){
+  setView(`<h1 class="page-title">My results</h1><p class="page-sub">Every test you've completed.</p>
+    <div class="card"><div id="histList" class="muted">Loading…</div></div>`);
+  try{
+    const snap=await db.collection("attempts").where("studentUid","==",ME.uid).orderBy("submittedAt","desc").get();
+    el("histList").innerHTML=snap.empty?emptyState("No attempts yet","Take a test or practice to see results here.")
+      :tableHTML(["Test","Exam","Date","Score","%","Breakdown",""],
+        snap.docs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+          `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn ghost sm" onclick='reviewAttempt("${d.id}")'>Review</button>`];}));
+  }catch(e){ el("histList").innerHTML=errBox(e); }
+}
+
+/* ============================================================
+   12. EXAM ENGINE (exam-aware scoring + negative marking)
+   ============================================================ */
+let EXAM=null;
+async function startTest(testId){ const doc=await db.collection("tests").doc(testId).get(); launchExam({id:testId,...doc.data()},false); }
+async function launchExam(test,isPractice){
+  const qDocs=await Promise.all(test.questionIds.map(id=>db.collection("questions").doc(id).get()));
+  const questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
+  if(!questions.length){ alert("This test has no available questions."); return; }
+  EXAM={test,questions,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000};
+  el("examTitle").textContent=test.title;
+  el("examScreen").style.display="block"; document.body.style.overflow="hidden";
+  renderPalette(); renderQ(); startTimer();
+}
+function startTimer(){
+  clearInterval(EXAM.timerInt);
+  EXAM.timerInt=setInterval(()=>{
+    const left=Math.max(0,EXAM.endTime-Date.now());
+    const m=Math.floor(left/60000),s=Math.floor((left%60000)/1000);
+    const t=el("examTimer"); t.textContent=`${pad(m)}:${pad(s)}`; t.classList.toggle("low",left<60000);
+    if(left<=0){ clearInterval(EXAM.timerInt); submitExam(true); }
+  },500);
+}
+function renderQ(){
+  const i=EXAM.cur,q=EXAM.questions[i],sel=EXAM.answers[i],m=examMarks(EXAM.test.exam,q.subject);
+  el("qCard").innerHTML=`<div class="q-meta">Question ${i+1} of ${EXAM.questions.length} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
+    <p class="q-text">${esc(q.text)}</p>
+    <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${esc(o)}</div></div>`).join("")}</div>`;
+  el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review"; renderPalette();
+}
+function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
+function navQ(d){ const n=EXAM.cur+d; if(n>=0&&n<EXAM.questions.length){EXAM.cur=n;renderQ();} }
+function toggleReview(){ EXAM.review.has(EXAM.cur)?EXAM.review.delete(EXAM.cur):EXAM.review.add(EXAM.cur); renderQ(); }
+function renderPalette(){
+  el("palette").innerHTML=EXAM.questions.map((_,i)=>{let cls="";if(EXAM.review.has(i))cls="review";else if(EXAM.answers[i]!==undefined)cls="answered";if(i===EXAM.cur)cls+=" cur";
+    return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()">${i+1}</button>`;}).join("");
+}
+function confirmSubmit(){ const ans=Object.keys(EXAM.answers).length,tot=EXAM.questions.length; if(confirm(`You've answered ${ans} of ${tot} questions. Submit now?`)) submitExam(false); }
+async function submitExam(auto){
+  clearInterval(EXAM.timerInt);
+  const exam=EXAM.test.exam,neg=examNeg(exam);
+  let score=0,correct=0,wrong=0,unattempted=0;
+  EXAM.questions.forEach((q,i)=>{const sel=EXAM.answers[i],m=examMarks(exam,q.subject);
+    if(sel===undefined){unattempted++;}
+    else if(sel===q.correct){score+=m;correct++;}
+    else{score-=neg;wrong++;}});
+  const total=EXAM.questions.reduce((s,q)=>s+examMarks(exam,q.subject),0);
+  if(!EXAM.isPractice){
+    try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,studentUid:ME.uid,studentName:ME.name,
+      centreId:ME.centreId,score,total,correct,wrong,unattempted,
+      startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
+      submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
+    catch(e){ console.error("attempt save failed",e); }
+  }
+  showResult({score,total,correct,wrong,unattempted});
+}
+function showResult(r){
+  const p=pct(r.score,r.total);
+  el("examScreen").style.display="none"; document.body.style.overflow="";
+  setView(`<div class="score-hero">
+      <div class="muted" style="text-transform:uppercase;letter-spacing:1px;font-weight:700;font-size:12px">${esc(EXAM.test.title)}${EXAM.isPractice?" · Practice":""}</div>
+      <div class="big">${r.score}<small>/${r.total}</small></div>
+      <div class="pct">${p}% scored${EXAM.isPractice?" (practice — not saved to report card)":""}</div></div>
+    <div class="skpis">
+      <div class="kpi c"><div class="n">${r.correct}</div><div class="l">Correct</div></div>
+      <div class="kpi w"><div class="n">${r.wrong}</div><div class="l">Wrong</div></div>
+      <div class="kpi u"><div class="n">${r.unattempted}</div><div class="l">Skipped</div></div>
+      <div class="kpi"><div class="n">${EXAM.questions.length}</div><div class="l">Total Q</div></div></div>
+    <h2 class="serif" style="font-size:22px;margin:8px 0 14px">Detailed solutions</h2><div id="solList"></div>`);
+  el("solList").innerHTML=EXAM.questions.map((q,i)=>{const sel=EXAM.answers[i];
+    return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${q.subject}${q.topic?" · "+q.topic:""}</div>
+      <p class="q-text" style="font-size:16px;margin:6px 0 14px">${esc(q.text)}</p>
+      ${q.options.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
+        return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${esc(o)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
+      ${q.solution?`<div class="solution"><b>Solution:</b> ${esc(q.solution)}</div>`:""}</div>`;}).join("");
+}
+async function reviewAttempt(attemptId){
+  const a=(await db.collection("attempts").doc(attemptId).get()).data();
+  const t=await db.collection("tests").doc(a.testId).get();
+  if(!t.exists){ alert("Original test not found."); return; }
+  const test={id:a.testId,...t.data()};
+  const qDocs=await Promise.all(test.questionIds.map(id=>db.collection("questions").doc(id).get()));
+  EXAM={test,questions:qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()})),answers:{},isPractice:false};
+  showResult({score:a.score,total:a.total,correct:a.correct,wrong:a.wrong,unattempted:a.unattempted});
+}
+
+/* ============================================================
+   13. STAFF VIEW OF TEST RESULTS
+   ============================================================ */
+async function viewTestResults(testId){
+  const t=(await db.collection("tests").doc(testId).get()).data();
+  const snap=await db.collection("attempts").where("testId","==",testId).orderBy("score","desc").get();
+  modal(`<button class="x" onclick="closeModal()">×</button><h2>${esc(t.title)} — results</h2>
+    ${snap.empty?emptyState("No attempts yet","No students have taken this test."):
+      tableHTML(["Rank","Student","Centre","Score","%"],snap.docs.map((d,i)=>{const a=d.data();return [`#${i+1}`,esc(a.studentName),centreName(a.centreId),`${a.score}/${a.total}`,pct(a.score,a.total)+"%"];}))}`,true);
+}
+
+/* ============================================================
+   14. HELPERS
+   ============================================================ */
+function el(id){return document.getElementById(id);}
+function val(id){return el(id)?.value ?? "";}
+function setView(html){el("view").innerHTML=html;window.scrollTo(0,0);}
+function setBtn(id,disabled,html){const b=el(id);if(b){b.disabled=disabled;b.innerHTML=html;}}
+function authMsg(t,k){const m=el("authMsg");m.className="msg "+k;m.textContent=t;}
+function setMsg(id,t,k){const m=el(id);if(m){m.className="msg "+k;m.textContent=t;}}
+function esc(s){return (s??"").toString().replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function truncate(s,n){s=(s||"");return s.length>n?s.slice(0,n)+"…":s;}
+function pad(n){return n<10?"0"+n:n;}
+function pct(a,b){return b?Math.round(a/b*100):0;}
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function fmtDate(ts,short){if(!ts)return"—";const d=ts.toDate?ts.toDate():new Date(ts);return short?d.toLocaleDateString():d.toLocaleString([],{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}
+function tag(t){return `<span class="tag" style="background:#ece9e0;color:var(--ink-soft)">${esc(t)}</span>`;}
+function examTag(e){return `<span class="tag exam">${esc(e||"—")}</span>`;}
+function subjTag(s){const c={Physics:"phy",Chemistry:"chem",Mathematics:"math",Biology:"bio",Botany:"bot",Zoology:"zoo"}[s]||"";return `<span class="tag ${c}">${esc(s)}</span>`;}
+function subjChips(arr){return (arr||[]).map(subjTag).join(" ");}
+function tableHTML(head,rows){return `<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;}
+function emptyState(t,s){return `<div class="empty"><div class="ico">◔</div><h3 class="serif" style="margin:10px 0 4px">${t}</h3><p class="muted">${s}</p></div>`;}
+function errBox(e){return `<div class="note">Couldn't load: ${esc(errMsg(e))}. ${/index/i.test(e.message||"")?'A Firestore index may be needed — click the link in the browser console (F12) to create it, then reload.':''}</div>`;}
+function errMsg(e){return (e&&e.message)||String(e);}
+function modal(html,wide){el("modalBox").className="modal"+(wide?" wide":"");el("modalBox").innerHTML=html;el("modalBg").classList.add("show");}
+function closeModal(){el("modalBg").classList.remove("show");}
+function classSelect(id,withAll=true){return `<select id="${id}">${withAll?'<option value="all">All</option>':''}<option value="11">Class 11</option><option value="12">Class 12</option></select>`;}
+function examSelect(id){return `<select id="${id}">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select>`;}
+function fillSubjects(examId,subjId,withAll,stream){
+  const exam=val(examId); let subs=stream?EXAMS[exam].streams[stream]||examSubjects(exam):examSubjects(exam);
+  el(subjId).innerHTML=(withAll?'<option value="all">All subjects</option>':'')+subs.map(s=>`<option>${s}</option>`).join("");
+}
+function fillStreams(examId,streamId){const exam=val(examId);el(streamId).innerHTML=streamsFor(exam).map(s=>`<option>${s}</option>`).join("");}
+function syncTopics(subjId,topicId,withAny){const s=val(subjId);const list=TOPICS[s]||[];el(topicId).innerHTML=(withAny?'<option value="any">Any topic</option>':'')+list.map(t=>`<option>${t}</option>`).join("");}
+function windowLabel(t){if(!t.startAt&&!t.endAt)return"Always open";return `${t.startAt?fmtDate(t.startAt):"—"} → ${t.endAt?fmtDate(t.endAt):"—"}`;}
+function testStatus(t){const now=Date.now();const s=t.startAt?.toDate?.().getTime(),e=t.endAt?.toDate?.().getTime();if(s&&now<s)return"scheduled";if(e&&now>e)return"closed";return"open";}
+function testStatusTag(t){const st=testStatus(t);return `<span class="tag ${st}">${st}</span>`;}
+function prettyAuthErr(e){const m={"auth/invalid-credential":"Wrong email or password.","auth/user-not-found":"No account with that email.","auth/wrong-password":"Incorrect password.","auth/invalid-email":"That email looks invalid.","auth/too-many-requests":"Too many tries — wait a moment."};return m[e.code]||e.message;}
+
+/* ============================================================
+   15. FIRST-TIME SETUP — run bootstrapMaster() in console once
+   ============================================================ */
+async function bootstrapMaster(){
+  const email=prompt("Master email:"),pass=prompt("Master password (6+ chars):"),name=prompt("Your name:")||"Dr. Pritam Bhangale";
+  if(!email||!pass) return;
+  try{
+    const cred=await auth.createUserWithEmailAndPassword(email,pass);
+    await db.collection("users").doc(cred.user.uid).set({role:"master",name,email,centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    alert("Master account created. You're signed in.");
+  }catch(e){ alert("Setup failed: "+e.message); }
+}
+window.bootstrapMaster=bootstrapMaster;
+</script>
+</body>
+</html>
