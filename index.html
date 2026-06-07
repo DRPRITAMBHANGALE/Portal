@@ -14,6 +14,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js"></script>
 
 <style>
 :root{
@@ -394,6 +395,7 @@ async function pageQuestions(){
       <div><label>Class</label>${classSelect("qfClass")}</div>
       <div class="spacer" style="flex:1"></div>
       <button class="btn gold" onclick="openAIGen()">✦ Generate with AI</button>
+      <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
       <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
     </div>
     <div class="card"><div id="qList" class="muted">Loading…</div></div>`);
@@ -479,6 +481,107 @@ async function saveManualQ(){
       createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     closeModal(); if(CURRENT_PAGE==="questions") loadQuestions();
   }catch(e){ setMsg("mMsg",errMsg(e),"err"); setBtn("mSaveBtn",false,"Save to bank (live)"); }
+}
+
+/* ---- Bulk upload questions from a Word (.docx) or text file ---- */
+const TEMPLATE_DOCX_B64="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";
+function downloadTemplate(){
+  try{ const bin=atob(TEMPLATE_DOCX_B64); const bytes=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+    const blob=new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+    const url=URL.createObjectURL(blob); const a=document.createElement("a");
+    a.href=url; a.download="Question_Bank_Template.docx"; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+  }catch(e){ alert("Could not download template: "+e.message); }
+}
+let UPLOAD_PARSED=[];
+function openUploadQ(){
+  modal(`<h2>⬆ Upload question bank</h2>
+    <p class="muted">Upload a Word (.docx) or text file of questions with answers &amp; solutions. They're added <b>live</b> straight away — these are your own vetted questions.</p>
+    <div class="grid cols-2"><div><label>Exam (default)</label>${examSelect("uExam")}</div><div><label>Class (default)</label>${classSelect("uClass",false)}</div></div>
+    <div class="grid cols-2"><div><label>Subject (default)</label><select id="uSubject"></select></div><div><label>Topic (default)</label><select id="uTopic"></select></div></div>
+    <label>Difficulty (default)</label><select id="uDiff"><option>Easy</option><option>Easy-Moderate</option></select>
+    <div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Inside the file, write one question after another like this:
+      <code style="display:block;white-space:pre-wrap;margin-top:6px;font-size:12px">Q: Your question text here
+A) first option
+B) second option
+C) third option
+D) fourth option
+ANSWER: B
+SOLUTION: explanation shown after the test</code>
+      To switch subject/topic partway through one file, add a line like <code>SUBJECT: Chemistry</code> or <code>TOPIC: Solutions</code> before those questions.</div>
+    <div class="row" style="margin-top:12px;margin-bottom:2px"><button class="btn ghost sm" onclick="downloadTemplate()">⬇ Download Word template</button><span class="muted" style="font-size:12px">Don’t have a file yet? Grab the template, fill it in, then upload.</span></div>
+    <label>Choose file (.docx or .txt)</label><input type="file" id="uFile" accept=".docx,.txt" onchange="handleUploadFile()"/>
+    <div id="uPreview"></div>
+    <div class="msg" id="uMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="uImportBtn" onclick="doImport()" disabled>Import questions</button></div>`);
+  fillSubjects("uExam","uSubject",false); syncTopics("uSubject","uTopic");
+  el("uExam").onchange=()=>{fillSubjects("uExam","uSubject",false);syncTopics("uSubject","uTopic");};
+  el("uSubject").onchange=()=>syncTopics("uSubject","uTopic");
+}
+async function handleUploadFile(){
+  const f=el("uFile").files[0]; if(!f) return;
+  setMsg("uMsg","Reading file…","ok"); el("uPreview").innerHTML=""; el("uImportBtn").disabled=true;
+  try{
+    let raw;
+    if(f.name.toLowerCase().endsWith(".docx")){
+      if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
+      raw=(await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value;
+    } else { raw=await f.text(); }
+    const defaults={exam:val("uExam"),subject:val("uSubject"),cls:val("uClass"),topic:val("uTopic"),difficulty:val("uDiff")};
+    UPLOAD_PARSED=parseQuestionsFromText(raw,defaults);
+    const ok=UPLOAD_PARSED.filter(q=>!q.problems.length), bad=UPLOAD_PARSED.filter(q=>q.problems.length);
+    if(!UPLOAD_PARSED.length){ setMsg("uMsg","No questions found. Check the file follows the format shown above.","err"); return; }
+    setMsg("uMsg",`Found ${UPLOAD_PARSED.length} question(s): ${ok.length} ready${bad.length?`, ${bad.length} with problems (skipped)`:""}.`, bad.length?"err":"ok");
+    el("uImportBtn").disabled=ok.length===0; el("uImportBtn").textContent=`Import ${ok.length} question${ok.length===1?"":"s"}`;
+    el("uPreview").innerHTML=`<div style="max-height:240px;overflow:auto;margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:10px">`
+      +UPLOAD_PARSED.map((q,i)=>{const b=q.problems.length;
+        return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
+          <div style="font-size:13px">${b?'⚠️ ':'✓ '}<b>Q${i+1}.</b> ${esc(truncate(q.text||"(no text)",70))}</div>
+          <div class="muted" style="font-size:11.5px">${esc(q.subject||"?")} · ${esc(q.topic||"?")} · answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${b?` · <span style="color:var(--danger)">${q.problems.join(", ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
+  }catch(e){ setMsg("uMsg","Could not read file: "+errMsg(e),"err"); }
+}
+function parseQuestionsFromText(raw,defaults){
+  const lines=raw.split(/\r?\n/).map(l=>l.trim());
+  const out=[]; let ctx={...defaults}; let cur=null, mode=null;
+  const headerRe=/^(EXAM|SUBJECT|CLASS|TOPIC|DIFFICULTY)\s*[:\-]\s*(.+)$/i;
+  const qRe=/^Q\s*[:.)]\s*(.*)$/i, optRe=/^([A-D])\s*[).]\s*(.*)$/i;
+  const ansRe=/^ANS(?:WER)?\s*[:\-]\s*([A-D1-4])/i, solRe=/^SOL(?:UTION)?\s*[:\-]\s*(.*)$/i;
+  const push=()=>{ if(!cur)return; const p=[];
+    if(!cur.text)p.push("no question text");
+    if(cur.options.filter(o=>o&&o.trim()).length<4)p.push("needs 4 options");
+    if(cur.correct==null)p.push("no/invalid ANSWER");
+    cur.problems=p; out.push(cur); cur=null; mode=null; };
+  for(const line of lines){
+    if(!line) continue; let m;
+    if(m=line.match(headerRe)){ const k=m[1].toUpperCase(),v=m[2].trim();
+      if(k==="EXAM")ctx.exam=v; else if(k==="SUBJECT")ctx.subject=v;
+      else if(k==="CLASS")ctx.cls=(v.match(/\d+/)||[v])[0]; else if(k==="TOPIC")ctx.topic=v; else if(k==="DIFFICULTY")ctx.difficulty=v; continue; }
+    if(m=line.match(qRe)){ push();
+      cur={exam:ctx.exam,subject:ctx.subject,class:ctx.cls,topic:ctx.topic,difficulty:ctx.difficulty,text:m[1]||"",options:["","","",""],correct:null,solution:""}; mode="q"; continue; }
+    if(cur&&(m=line.match(optRe))){ const i="ABCD".indexOf(m[1].toUpperCase()); if(i>=0)cur.options[i]=m[2]; mode="opt"; continue; }
+    if(cur&&(m=line.match(ansRe))){ const a=m[1].toUpperCase(); cur.correct="ABCD".includes(a)?"ABCD".indexOf(a):(parseInt(a)-1); if(cur.correct<0||cur.correct>3)cur.correct=null; mode="ans"; continue; }
+    if(cur&&(m=line.match(solRe))){ cur.solution=m[1]||""; mode="sol"; continue; }
+    if(cur){ if(mode==="sol")cur.solution+=(cur.solution?" ":"")+line; else if(mode==="q")cur.text+=(cur.text?" ":"")+line; }
+  }
+  push(); return out;
+}
+async function doImport(){
+  const ok=UPLOAD_PARSED.filter(q=>!q.problems.length); if(!ok.length) return;
+  setBtn("uImportBtn",true,"Importing…");
+  try{
+    for(let i=0;i<ok.length;i+=400){
+      const chunk=ok.slice(i,i+400), batch=db.batch();
+      chunk.forEach(q=>{ const ref=db.collection("questions").doc();
+        batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.class,difficulty:q.difficulty,
+          text:q.text,options:q.options,correct:q.correct,solution:q.solution,status:"live",source:"upload",
+          createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
+      await batch.commit();
+    }
+    setMsg("uMsg",`✓ Imported ${ok.length} question(s) into the live bank.`,"ok");
+    setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="questions")loadQuestions();},1200);
+  }catch(e){ setMsg("uMsg",errMsg(e),"err"); setBtn("uImportBtn",false,"Import questions"); }
 }
 
 /* ============================================================
