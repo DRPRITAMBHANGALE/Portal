@@ -295,6 +295,7 @@ const TOPICS = {
 };
 
 let ME = null, CURRENT_PAGE = null;
+let SYLLABUS = {}; // custom chapter lists, keyed by "exam|class|subject"
 
 /* ============================================================
    3. AUTH
@@ -320,9 +321,23 @@ function enterApp(){
   el("authWrap").style.display="none"; el("app").style.display="block";
   el("meName").textContent=ME.name||ME.email;
   el("meRole").innerHTML=roleBadge(ME.role)+(ME.role!=="master"?` · ${centreName(ME.centreId)}`:"");
-  buildNav(); go(NAV[ME.role][0].id);
+  buildNav(); loadSyllabus(); go(NAV[ME.role][0].id);
 }
 function roleBadge(r){return `<span class="pill ${r}">${r}</span>`;}
+
+/* ---- Syllabus / chapter lists (custom, stored in Firestore) ---- */
+function synKey(exam,cls,subj){return `${exam}|${cls}|${subj}`;}
+function synDocId(exam,cls,subj){return (exam+"_"+cls+"_"+subj).replace(/[^A-Za-z0-9]+/g,"_");}
+function topicsFor(exam,cls,subj){
+  const k=synKey(exam,cls,subj);
+  if(SYLLABUS[k]&&SYLLABUS[k].length) return SYLLABUS[k];
+  return TOPICS[subj]||[];
+}
+async function loadSyllabus(){
+  try{ const snap=await db.collection("syllabus").get(); SYLLABUS={};
+    snap.forEach(d=>{const x=d.data(); SYLLABUS[synKey(x.exam,x.cls,x.subject)]=x.chapters||[];}); }
+  catch(e){ /* falls back to built-in topics */ }
+}
 
 /* ============================================================
    4. NAVIGATION
@@ -330,6 +345,7 @@ function roleBadge(r){return `<span class="pill ${r}">${r}</span>`;}
 const STAFF_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
   {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
+  {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
   {id:"students",label:"Students",ic:"☺"},{id:"results",label:"Results & report cards",ic:"⤓"}
 ];
 const NAV={ master:STAFF_NAV, admin:STAFF_NAV,
@@ -345,7 +361,7 @@ function go(page){
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
   ({dashboard:pageDashboard,tests:pageTests,questions:pageQuestions,review:pageReview,students:pageStudents,
-    results:pageResults,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
+    results:pageResults,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
 }
 
 /* ============================================================
@@ -395,6 +411,7 @@ async function pageQuestions(){
       <div><label>Class</label>${classSelect("qfClass")}</div>
       <div class="spacer" style="flex:1"></div>
       <button class="btn gold" onclick="openAIGen()">✦ Generate with AI</button>
+      <button class="btn gold" onclick="openAIGenAll()">✦ Generate all chapters</button>
       <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
       <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
     </div>
@@ -422,36 +439,91 @@ function openAIGen(){
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("gExam")}</div><div><label>Class</label>${classSelect("gClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="gSubject"></select></div><div><label>Topic</label><select id="gTopic"></select></div></div>
     <div class="grid cols-2"><div><label>Difficulty</label><select id="gDiff"><option>Easy</option><option>Easy-Moderate</option></select></div>
-      <div><label>How many</label><select id="gCount"><option>3</option><option>5</option><option>8</option><option>10</option></select></div></div>
+      <div><label>How many</label><input id="gCount" type="number" min="1" max="15" value="5" placeholder="any number"/></div></div>
     ${AI_FUNCTION_URL.startsWith("PASTE")?`<div class="note">⚠ AI generation needs the Cloud Function deployed first (see README). Until then, use "Add manually".</div>`:""}
     <div class="msg" id="genMsg"></div>
     <div class="row end" style="margin-top:18px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn gold" id="genBtn" onclick="runAIGen()">Generate &amp; send to review</button></div>`);
-  fillSubjects("gExam","gSubject",false); syncTopics("gSubject","gTopic");
-  el("gExam").onchange=()=>{fillSubjects("gExam","gSubject",false);syncTopics("gSubject","gTopic");};
-  el("gSubject").onchange=()=>syncTopics("gSubject","gTopic");
+  fillSubjects("gExam","gSubject",false); fillTopics("gExam",val("gClass"),"gSubject","gTopic");
+  el("gExam").onchange=()=>{fillSubjects("gExam","gSubject",false);fillTopics("gExam",val("gClass"),"gSubject","gTopic");};
+  el("gClass").onchange=()=>fillTopics("gExam",val("gClass"),"gSubject","gTopic");
+  el("gSubject").onchange=()=>fillTopics("gExam",val("gClass"),"gSubject","gTopic");
+}
+async function aiGenerate(payload){
+  const token=await auth.currentUser.getIdToken();
+  const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
+  if(!res.ok){ let m="server returned "+res.status; try{const j=await res.json(); if(j&&(j.message||j.error)) m=j.message||j.error;}catch(_){} throw new Error(m); }
+  const data=await res.json(); return data.questions||[];
+}
+async function saveDrafts(items,meta){
+  const batch=db.batch();
+  items.forEach(it=>{const ref=db.collection("questions").doc();
+    batch.set(ref,{exam:meta.exam,subject:meta.subject,topic:meta.topic,class:meta.cls,difficulty:meta.difficulty,
+      text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,
+      status:"pending",source:"ai",createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
+      createdAt:firebase.firestore.FieldValue.serverTimestamp()});});
+  await batch.commit();
 }
 async function runAIGen(){
   if(AI_FUNCTION_URL.startsWith("PASTE")) return setMsg("genMsg","Deploy the Cloud Function first.","err");
-  const payload={exam:val("gExam"),subject:val("gSubject"),cls:val("gClass"),topic:val("gTopic"),difficulty:val("gDiff"),count:parseInt(val("gCount"))};
+  const meta={exam:val("gExam"),subject:val("gSubject"),cls:val("gClass"),topic:val("gTopic"),difficulty:val("gDiff")};
+  const count=Math.min(15,Math.max(1,parseInt(val("gCount"))||5));
   setBtn("genBtn",true,`<span class="loader"></span> Generating…`); setMsg("genMsg","Contacting AI… ~10-20 seconds.","ok");
   try{
-    const token=await auth.currentUser.getIdToken();
-    const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
-    if(!res.ok) throw new Error("Server returned "+res.status);
-    const data=await res.json(); const items=data.questions||[];
+    const items=await aiGenerate({...meta,count});
     if(!items.length) throw new Error("No questions returned.");
-    const batch=db.batch();
-    items.forEach(it=>{const ref=db.collection("questions").doc();
-      batch.set(ref,{exam:payload.exam,subject:payload.subject,topic:payload.topic,class:payload.cls,difficulty:payload.difficulty,
-        text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,
-        status:"pending",source:"ai",createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
-        createdAt:firebase.firestore.FieldValue.serverTimestamp()});});
-    await batch.commit();
+    await saveDrafts(items,meta);
     setMsg("genMsg",`✓ ${items.length} draft questions created. Approve them in the Review queue.`,"ok");
     setBtn("genBtn",false,"Generate &amp; send to review");
     setTimeout(()=>{closeModal();go("review");},1400);
   }catch(e){ setMsg("genMsg","Generation failed: "+e.message,"err"); setBtn("genBtn",false,"Generate &amp; send to review"); }
+}
+
+/* ---- Generate for ALL chapters in a subject's syllabus ---- */
+function openAIGenAll(){
+  modal(`<h2>✦ Generate for all chapters</h2>
+    <p class="muted">Generates questions for every chapter saved in your Syllabus for this exam, class &amp; subject — all sent to the Review queue.</p>
+    <div class="grid cols-2"><div><label>Exam</label>${examSelect("gaExam")}</div><div><label>Class</label>${classSelect("gaClass",false)}</div></div>
+    <div class="grid cols-2"><div><label>Subject</label><select id="gaSubject"></select></div><div><label>Difficulty</label><select id="gaDiff"><option>Easy</option><option>Easy-Moderate</option></select></div></div>
+    <label>Questions per chapter</label><input id="gaPer" type="number" min="1" max="15" value="5"/>
+    <div id="gaChapters" class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7"></div>
+    ${AI_FUNCTION_URL.startsWith("PASTE")?`<div class="note">⚠ Needs the Cloud Function deployed first.</div>`:""}
+    <div id="gaProgress"></div>
+    <div class="msg" id="gaMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn gold" id="gaBtn" onclick="runAIGenAll()">Generate all chapters</button></div>`);
+  const refresh=()=>{ fillSubjects("gaExam","gaSubject",false); showGaChapters(); };
+  refresh();
+  el("gaExam").onchange=refresh; el("gaClass").onchange=showGaChapters; el("gaSubject").onchange=showGaChapters;
+}
+function showGaChapters(){
+  const list=topicsFor(val("gaExam"),val("gaClass"),val("gaSubject"));
+  const custom=SYLLABUS[synKey(val("gaExam"),val("gaClass"),val("gaSubject"))];
+  el("gaChapters").innerHTML = list.length
+    ? `Will generate for <b>${list.length}</b> chapter(s)${custom?"":" <i>(built-in defaults — save your own in the Syllabus screen)</i>"}: ${list.map(esc).join(", ")}`
+    : "No chapters found — add them in the Syllabus screen first.";
+}
+async function runAIGenAll(){
+  if(AI_FUNCTION_URL.startsWith("PASTE")) return setMsg("gaMsg","Deploy the Cloud Function first.","err");
+  const exam=val("gaExam"),cls=val("gaClass"),subject=val("gaSubject"),difficulty=val("gaDiff");
+  const per=Math.min(15,Math.max(1,parseInt(val("gaPer"))||5));
+  const chapters=topicsFor(exam,cls,subject);
+  if(!chapters.length) return setMsg("gaMsg","No chapters for this combination. Add them in Syllabus first.","err");
+  if(!confirm(`Generate ${per} question(s) for each of ${chapters.length} chapter(s)? This can take a few minutes.`)) return;
+  setBtn("gaBtn",true,`<span class="loader"></span> Working…`); el("gaMsg").className="msg"; el("gaMsg").textContent="";
+  let total=0; const fails=[];
+  for(let i=0;i<chapters.length;i++){
+    const ch=chapters[i];
+    el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Chapter ${i+1} of ${chapters.length}: <b>${esc(ch)}</b> — generating…</div>`;
+    try{
+      const items=await aiGenerate({exam,subject,cls,topic:ch,difficulty,count:per});
+      if(items.length){ await saveDrafts(items,{exam,subject,cls,topic:ch,difficulty}); total+=items.length; }
+      el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">✓ ${i+1}/${chapters.length} &nbsp;${esc(ch)} — ${items.length} added (running total ${total})</div>`;
+    }catch(e){ fails.push(ch); el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">⚠ ${esc(ch)} failed: ${esc(e.message)}</div>`; }
+  }
+  setMsg("gaMsg",`✓ Done — ${total} question(s) created across ${chapters.length-fails.length}/${chapters.length} chapters${fails.length?`. Couldn't do: ${fails.join(", ")} (try those again).`:"."} They're waiting in the Review queue.`, fails.length?"err":"ok");
+  setBtn("gaBtn",false,"Generate all chapters");
+  if(!fails.length) setTimeout(()=>{closeModal();go("review");},2000);
 }
 function openManualQ(){
   modal(`<h2>Add a question</h2>
@@ -466,9 +538,10 @@ function openManualQ(){
     <div class="msg" id="mMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="mSaveBtn" onclick="saveManualQ()">Save to bank (live)</button></div>`);
-  fillSubjects("mExam","mSubject",false); syncTopics("mSubject","mTopic");
-  el("mExam").onchange=()=>{fillSubjects("mExam","mSubject",false);syncTopics("mSubject","mTopic");};
-  el("mSubject").onchange=()=>syncTopics("mSubject","mTopic");
+  fillSubjects("mExam","mSubject",false); fillTopics("mExam",val("mClass"),"mSubject","mTopic");
+  el("mExam").onchange=()=>{fillSubjects("mExam","mSubject",false);fillTopics("mExam",val("mClass"),"mSubject","mTopic");};
+  el("mClass").onchange=()=>fillTopics("mExam",val("mClass"),"mSubject","mTopic");
+  el("mSubject").onchange=()=>fillTopics("mExam",val("mClass"),"mSubject","mTopic");
 }
 async function saveManualQ(){
   const text=val("mText").trim(),opts=[0,1,2,3].map(i=>val("mOpt"+i).trim());
@@ -597,8 +670,23 @@ async function loadReview(){
   try{
     const snap=await db.collection("questions").where("status","==","pending").orderBy("createdAt","desc").limit(50).get();
     if(snap.empty){ el("revList").innerHTML=`<div class="card">${emptyState("Queue is clear","No drafts waiting for approval. 🎉")}</div>`; return; }
-    el("revList").innerHTML=snap.docs.map(d=>reviewCard(d.id,d.data())).join("");
+    el("revList").innerHTML=`<div class="bar"><div class="muted grow">${snap.size} draft${snap.size===1?"":"s"} waiting${snap.size>=50?"+ (showing first 50)":""}.</div>
+        <button class="btn" onclick="approveAll()">✓ Approve all</button></div>`
+      +snap.docs.map(d=>reviewCard(d.id,d.data())).join("");
   }catch(e){ el("revList").innerHTML=errBox(e); }
+}
+async function approveAll(){
+  if(!confirm("Approve ALL pending questions and make them live for students?")) return;
+  try{
+    const snap=await db.collection("questions").where("status","==","pending").get();
+    const docs=snap.docs; if(!docs.length){ loadReview(); return; }
+    for(let i=0;i<docs.length;i+=400){
+      const batch=db.batch();
+      docs.slice(i,i+400).forEach(d=>batch.update(d.ref,{status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()}));
+      await batch.commit();
+    }
+    loadReview();
+  }catch(e){ alert("Could not approve all: "+errMsg(e)); }
 }
 function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
@@ -626,6 +714,45 @@ async function saveEditQ(id){
   const correct=parseInt(document.querySelector('input[name=eCorrect]:checked').value);
   await db.collection("questions").doc(id).update({text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
   closeModal(); loadReview();
+}
+
+/* ============================================================
+   7b. SYLLABUS / CHAPTER LISTS
+   ============================================================ */
+function pageSyllabus(){
+  setView(`<h1 class="page-title">Syllabus / chapters</h1>
+    <p class="page-sub">Enter your chapter list for each exam, class &amp; subject. These chapters become the Topic options when adding or AI-generating questions — so the AI follows your syllabus.</p>
+    <div class="card" style="max-width:620px">
+      <div class="grid cols-3">
+        <div><label>Exam</label>${examSelect("syExam")}</div>
+        <div><label>Class</label>${classSelect("syClass",false)}</div>
+        <div><label>Subject</label><select id="sySubject"></select></div>
+      </div>
+      <label>Chapters — one per line</label>
+      <textarea id="syText" rows="12" placeholder="Type or paste one chapter name per line, e.g.&#10;Laws of Motion&#10;Electrostatics&#10;Current Electricity"></textarea>
+      <div class="muted" style="font-size:12.5px;margin-top:6px">Tip: you can paste a list straight from a Word document — each line becomes one chapter.</div>
+      <div class="msg" id="syMsg"></div>
+      <div class="row end" style="margin-top:14px">
+        <button class="btn" id="syBtn" onclick="saveSyllabus()">Save chapters</button></div>
+    </div>`);
+  fillSubjects("syExam","sySubject",false); loadSyText();
+  el("syExam").onchange=()=>{fillSubjects("syExam","sySubject",false);loadSyText();};
+  el("syClass").onchange=loadSyText; el("sySubject").onchange=loadSyText;
+}
+function loadSyText(){
+  el("syText").value = topicsFor(val("syExam"),val("syClass"),val("sySubject")).join("\n");
+}
+async function saveSyllabus(){
+  const exam=val("syExam"),cls=val("syClass"),subj=val("sySubject");
+  const chapters=val("syText").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  setBtn("syBtn",true,"Saving…");
+  try{
+    await db.collection("syllabus").doc(synDocId(exam,cls,subj)).set({exam,cls,subject:subj,chapters,
+      updatedBy:ME.uid,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    SYLLABUS[synKey(exam,cls,subj)]=chapters;
+    setMsg("syMsg",`✓ Saved ${chapters.length} chapter(s) for ${exam} · Class ${cls} · ${subj}.`,"ok");
+    setBtn("syBtn",false,"Save chapters");
+  }catch(e){ setMsg("syMsg",errMsg(e),"err"); setBtn("syBtn",false,"Save chapters"); }
 }
 
 /* ============================================================
@@ -862,9 +989,9 @@ function pagePractice(){
         <div><label>Time limit (min)</label><input id="pDur" type="number" value="15"/></div></div>
       <div class="msg" id="pMsg"></div>
       <button class="btn full" id="pBtn" onclick="startPractice()">Start practice test</button></div>`);
-  fillSubjects("pExam","pSubject",false,ME.stream); syncTopics("pSubject","pTopic",true);
-  el("pExam").onchange=()=>{fillSubjects("pExam","pSubject",false,ME.stream);syncTopics("pSubject","pTopic",true);};
-  el("pSubject").onchange=()=>syncTopics("pSubject","pTopic",true);
+  fillSubjects("pExam","pSubject",false,ME.stream); fillTopics("pExam",ME.class,"pSubject","pTopic",true);
+  el("pExam").onchange=()=>{fillSubjects("pExam","pSubject",false,ME.stream);fillTopics("pExam",ME.class,"pSubject","pTopic",true);};
+  el("pSubject").onchange=()=>fillTopics("pExam",ME.class,"pSubject","pTopic",true);
 }
 async function startPractice(){
   const exam=val("pExam"),subject=val("pSubject"),topic=val("pTopic"),diff=val("pDiff"),count=parseInt(val("pCount"));
@@ -1020,7 +1147,7 @@ function fillSubjects(examId,subjId,withAll,stream){
   el(subjId).innerHTML=(withAll?'<option value="all">All subjects</option>':'')+subs.map(s=>`<option>${s}</option>`).join("");
 }
 function fillStreams(examId,streamId){const exam=val(examId);el(streamId).innerHTML=streamsFor(exam).map(s=>`<option>${s}</option>`).join("");}
-function syncTopics(subjId,topicId,withAny){const s=val(subjId);const list=TOPICS[s]||[];el(topicId).innerHTML=(withAny?'<option value="any">Any topic</option>':'')+list.map(t=>`<option>${t}</option>`).join("");}
+function fillTopics(examId,clsVal,subjId,topicId,withAny){const list=topicsFor(val(examId),clsVal,val(subjId));el(topicId).innerHTML=(withAny?'<option value="any">Any topic</option>':'')+list.map(t=>`<option>${esc(t)}</option>`).join("");}
 function windowLabel(t){if(!t.startAt&&!t.endAt)return"Always open";return `${t.startAt?fmtDate(t.startAt):"—"} → ${t.endAt?fmtDate(t.endAt):"—"}`;}
 function testStatus(t){const now=Date.now();const s=t.startAt?.toDate?.().getTime(),e=t.endAt?.toDate?.().getTime();if(s&&now<s)return"scheduled";if(e&&now>e)return"closed";return"open";}
 function testStatusTag(t){const st=testStatus(t);return `<span class="tag ${st}">${st}</span>`;}
