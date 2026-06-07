@@ -180,7 +180,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:22px 0}
       <div><h1>Sonam Tuitions</h1><div class="sub">Online Test Series · MHT-CET / JEE Main / NEET</div></div></div>
     <h2>Sign in</h2>
     <p class="lede">Use the email &amp; password issued by your centre.</p>
-    <label>Email</label><input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="username"/>
+    <label>Email or Login ID</label><input type="text" id="loginEmail" placeholder="your email or username" autocomplete="username"/>
     <label>Password</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password"/>
     <button class="btn full" id="loginBtn" onclick="doLogin()">Sign in</button>
     <div class="msg" id="authMsg"></div>
@@ -230,12 +230,12 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:22px 0}
    1. FIREBASE CONFIG  — replace with your project's config
    ============================================================ */
 const firebaseConfig = {
-  apiKey: "AIzaSyBCqeyIezHGgTh5oXjaM4SZ9fxRA5QT3e0",
-  authDomain: "sonam-tests.firebaseapp.com",
-  projectId: "sonam-tests",
-  storageBucket: "sonam-tests.firebasestorage.app",
-  messagingSenderId: "195991189268",
-  appId: "1:195991189268:web:43fa213463ff1a7edb3401"
+  apiKey: "PASTE_API_KEY",
+  authDomain: "PASTE.firebaseapp.com",
+  projectId: "PASTE_PROJECT_ID",
+  storageBucket: "PASTE.appspot.com",
+  messagingSenderId: "PASTE",
+  appId: "PASTE"
 };
 const AI_FUNCTION_URL = "PASTE_CLOUD_FUNCTION_URL"; // set after deploying functions/
 
@@ -278,6 +278,11 @@ const CENTRES = [
 ];
 const centreName = id => id==="all" ? "All centres" : (CENTRES.find(c=>c.id===id)?.name || id);
 
+// Students log in with a simple username (no email needed). It's turned into this
+// behind-the-scenes address so Firebase login still works.
+const STUDENT_LOGIN_DOMAIN = "sonamtuitions.app";
+const toLoginEmail = id => id.includes("@") ? id : id.toLowerCase()+"@"+STUDENT_LOGIN_DOMAIN;
+
 const ALL_SUBJECTS = ["Physics","Chemistry","Mathematics","Biology","Botany","Zoology"];
 const TOPICS = {
   Physics:["Laws of Motion","Electrostatics","Current Electricity","Optics","Rotational Motion","Magnetism","Thermodynamics","Modern Physics"],
@@ -294,8 +299,9 @@ let ME = null, CURRENT_PAGE = null;
    3. AUTH
    ============================================================ */
 function doLogin(){
-  const email=val("loginEmail").trim(), pass=val("loginPass");
-  if(!email||!pass) return authMsg("Enter email and password.","err");
+  const id=val("loginEmail").trim(), pass=val("loginPass");
+  if(!id||!pass) return authMsg("Enter your email/username and password.","err");
+  const email=toLoginEmail(id);
   setBtn("loginBtn",true,"Signing in…");
   auth.signInWithEmailAndPassword(email,pass).catch(e=>{authMsg(prettyAuthErr(e),"err");setBtn("loginBtn",false,"Sign in");});
 }
@@ -552,7 +558,7 @@ function openCreateTest(){
       <div><label>Stream</label><select id="tStream"></select></div></div>
     <label>Subjects to include</label><div class="row" id="tSubjects"></div>
     <div class="grid cols-2"><div><label>Class</label>${classSelect("tClass",false)}</div>
-      <div><label>Questions per subject</label><select id="tPer"><option>5</option><option>10</option><option>15</option><option>20</option></select></div></div>
+      <div><label>Questions per subject</label><input id="tPer" type="number" min="1" value="10" placeholder="any number"/></div></div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="tDur" type="number" value="30"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="tScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="tStart" type="datetime-local"/></div><div><label>Closes</label><input id="tEnd" type="datetime-local"/></div></div>
@@ -609,8 +615,8 @@ async function loadStudents(){
   try{
     const snap=await q.limit(300).get();
     el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
-      :tableHTML(["Name","Email","Class","Stream","Targets","Centre"],
-        snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.email||"—"),"Class "+s.class,s.stream||"—",
+      :tableHTML(["Name","Login ID","Class","Stream","Targets","Centre"],
+        snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.loginId||s.email||"—"),"Class "+s.class,s.stream||"—",
           (examsForStream(s.stream||"PCM")).map(examTag).join(" "),centreName(s.centreId)];}));
   }catch(e){ el("stuList").innerHTML=errBox(e); }
 }
@@ -618,7 +624,7 @@ function openAddStudent(){
   modal(`<h2>Add student</h2>
     <p class="muted">Creates the student's login. They sign in with the email &amp; password you set here.</p>
     <label>Full name</label><input id="sName"/>
-    <label>Email</label><input id="sEmail" type="email"/>
+    <label>Login ID (username)</label><input id="sLogin" placeholder="e.g. aarav01 — no spaces"/>
     <label>Password</label><input id="sPass" placeholder="min 6 characters"/>
     <div class="grid cols-2"><div><label>Class</label>${classSelect("sClass",false)}</div>
       <div><label>Stream</label><select id="sStream" onchange="sStreamNote()"><option>PCM</option><option>PCB</option></select></div></div>
@@ -631,13 +637,14 @@ function openAddStudent(){
 }
 function sStreamNote(){ const st=val("sStream"); el("sNote").textContent="Can attempt: "+examsForStream(st).join(", "); }
 async function addStudent(){
-  const name=val("sName").trim(),email=val("sEmail").trim(),pass=val("sPass");
+  const name=val("sName").trim(),loginId=val("sLogin").trim().toLowerCase(),pass=val("sPass");
   const centreId=ME.role==="master"?val("sCentre"):ME.centreId;
-  if(!name||!email||pass.length<6) return setMsg("sMsg","Name, email, and a 6+ char password are required.","err");
+  if(!name||!loginId||pass.length<6) return setMsg("sMsg","Name, login ID, and a 6+ char password are required.","err");
+  if(/[\s@]/.test(loginId)) return setMsg("sMsg","Login ID can't contain spaces or @ — use letters/numbers like aarav01.","err");
   setBtn("sBtn",true,"Creating…");
   try{
-    const cred=await secondaryApp.auth().createUserWithEmailAndPassword(email,pass);
-    await db.collection("users").doc(cred.user.uid).set({role:"student",name,email,class:val("sClass"),stream:val("sStream"),
+    const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
+    await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),class:val("sClass"),stream:val("sStream"),
       centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await secondaryApp.auth().signOut();
     closeModal(); loadStudents();
