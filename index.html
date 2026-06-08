@@ -15,6 +15,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <style>
 :root{
@@ -285,6 +286,7 @@ const STUDENT_LOGIN_DOMAIN = "sonamtuitions.app";
 const toLoginEmail = id => id.includes("@") ? id : id.toLowerCase()+"@"+STUDENT_LOGIN_DOMAIN;
 
 const ALL_SUBJECTS = ["Physics","Chemistry","Mathematics","Biology","Botany","Zoology"];
+const DIFFICULTIES = ["Easy","Easy-Moderate","Moderate","Moderate-Difficult","Difficult","Previous Year"];
 const TOPICS = {
   Physics:["Laws of Motion","Electrostatics","Current Electricity","Optics","Rotational Motion","Magnetism","Thermodynamics","Modern Physics"],
   Chemistry:["Chemical Bonding","Solutions","Electrochemistry","Coordination Compounds","Hydrocarbons","Thermodynamics","p-Block Elements","Aldehydes & Ketones"],
@@ -415,11 +417,29 @@ async function pageQuestions(){
       <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
       <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
     </div>
+    <div class="card" id="bankCounts" style="margin-bottom:16px"><div class="muted">Counting…</div></div>
     <div class="card"><div id="qList" class="muted">Loading…</div></div>`);
   fillSubjects("qfExam","qfSubject",true);
-  el("qfExam").onchange=()=>{fillSubjects("qfExam","qfSubject",true);loadQuestions();};
-  el("qfSubject").onchange=loadQuestions; el("qfClass").onchange=loadQuestions;
-  loadQuestions();
+  el("qfExam").onchange=()=>{fillSubjects("qfExam","qfSubject",true);loadQuestions();loadBankCounts();};
+  el("qfSubject").onchange=loadQuestions; el("qfClass").onchange=()=>{loadQuestions();loadBankCounts();};
+  loadQuestions(); loadBankCounts();
+}
+async function loadBankCounts(){
+  const exam=val("qfExam"),cls=val("qfClass");
+  const subs=examSubjects(exam);
+  el("bankCounts").innerHTML=`<h3 style="margin-bottom:10px">Live questions in the bank — ${esc(exam)}${cls!=="all"?" · Class "+cls:""}</h3><div class="muted">Counting…</div>`;
+  try{
+    let total=0; const parts=[];
+    for(const s of subs){
+      let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",s);
+      if(cls!=="all") q=q.where("class","==",cls);
+      let n; try{ n=(await q.count().get()).data().count; }catch(_){ n=(await q.get()).size; }
+      total+=n; parts.push(`<div class="kpi"><div class="n">${n}</div><div class="l">${esc(s)}</div></div>`);
+    }
+    el("bankCounts").innerHTML=`<h3 style="margin-bottom:4px">Live questions in the bank — ${esc(exam)}${cls!=="all"?" · Class "+cls:""}</h3>
+      <p class="muted" style="margin:0 0 12px">${total} total approved question${total===1?"":"s"} available for tests &amp; practice.</p>
+      <div class="skpis" style="margin-bottom:0">${parts.join("")}</div>`;
+  }catch(e){ el("bankCounts").innerHTML=errBox(e); }
 }
 async function loadQuestions(){
   const exam=val("qfExam"),subj=val("qfSubject"),cls=val("qfClass");
@@ -438,7 +458,7 @@ function openAIGen(){
     <p class="muted">Claude drafts exam-pattern questions with full solutions. Every draft goes to the <b>Review queue</b> for your approval before any student sees it.</p>
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("gExam")}</div><div><label>Class</label>${classSelect("gClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="gSubject"></select></div><div><label>Topic</label><select id="gTopic"></select></div></div>
-    <div class="grid cols-2"><div><label>Difficulty</label><select id="gDiff"><option>Easy</option><option>Easy-Moderate</option></select></div>
+    <div class="grid cols-2"><div><label>Difficulty</label>${difficultySelect("gDiff")}</div>
       <div><label>How many</label><input id="gCount" type="number" min="1" max="15" value="5" placeholder="any number"/></div></div>
     ${AI_FUNCTION_URL.startsWith("PASTE")?`<div class="note">⚠ AI generation needs the Cloud Function deployed first (see README). Until then, use "Add manually".</div>`:""}
     <div class="msg" id="genMsg"></div>
@@ -484,7 +504,7 @@ function openAIGenAll(){
   modal(`<h2>✦ Generate for all chapters</h2>
     <p class="muted">Generates questions for every chapter saved in your Syllabus for this exam, class &amp; subject — all sent to the Review queue.</p>
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("gaExam")}</div><div><label>Class</label>${classSelect("gaClass",false)}</div></div>
-    <div class="grid cols-2"><div><label>Subject</label><select id="gaSubject"></select></div><div><label>Difficulty</label><select id="gaDiff"><option>Easy</option><option>Easy-Moderate</option></select></div></div>
+    <div class="grid cols-2"><div><label>Subject</label><select id="gaSubject"></select></div><div><label>Difficulty</label>${difficultySelect("gaDiff")}</div></div>
     <label>Questions per chapter</label><input id="gaPer" type="number" min="1" max="15" value="5"/>
     <div id="gaChapters" class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7"></div>
     ${AI_FUNCTION_URL.startsWith("PASTE")?`<div class="note">⚠ Needs the Cloud Function deployed first.</div>`:""}
@@ -534,7 +554,7 @@ function openManualQ(){
       <div class="row"><input id="mOpt${i}" style="flex:1" placeholder="Option ${"ABCD"[i]}"/>
       <label style="margin:0;display:flex;align-items:center;gap:5px"><input type="radio" name="mCorrect" value="${i}" style="width:auto" ${i===0?"checked":""}/> correct</label></div>`).join("")}
     <label>Solution / explanation</label><textarea id="mSol" rows="3" placeholder="Step-by-step solution shown after the test…"></textarea>
-    <label>Difficulty</label><select id="mDiff"><option>Easy</option><option>Easy-Moderate</option></select>
+    <label>Difficulty</label>${difficultySelect("mDiff")}
     <div class="msg" id="mMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="mSaveBtn" onclick="saveManualQ()">Save to bank (live)</button></div>`);
@@ -573,7 +593,7 @@ function openUploadQ(){
     <p class="muted">Upload a Word (.docx) or text file of questions with answers &amp; solutions. They're added <b>live</b> straight away — these are your own vetted questions.</p>
     <div class="grid cols-2"><div><label>Exam (default)</label>${examSelect("uExam")}</div><div><label>Class (default)</label>${classSelect("uClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject (default)</label><select id="uSubject"></select></div><div><label>Topic (default)</label><select id="uTopic"></select></div></div>
-    <label>Difficulty (default)</label><select id="uDiff"><option>Easy</option><option>Easy-Moderate</option></select>
+    <label>Difficulty (default)</label>${difficultySelect("uDiff")}
     <div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Inside the file, write one question after another like this:
       <code style="display:block;white-space:pre-wrap;margin-top:6px;font-size:12px">Q: Your question text here
 A) first option
@@ -835,6 +855,7 @@ async function pageStudents(){
     <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · create logins &amp; manage students</p>
     <div class="bar"><div class="spacer" style="flex:1"></div>
       ${ME.role==="master"?`<button class="btn ghost" onclick="openAddAdmin()">+ Add centre admin</button>`:""}
+      <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
   loadStudents();
@@ -880,6 +901,92 @@ async function addStudent(){
     closeModal(); loadStudents();
   }catch(e){ setMsg("sMsg",errMsg(e),"err"); setBtn("sBtn",false,"Create login"); }
 }
+
+/* ---- Bulk add students from an Excel file → credentials Excel out ---- */
+function openBulkStudents(){
+  modal(`<h2>⬆ Upload students (Excel)</h2>
+    <p class="muted">Upload an Excel list of students. The app creates each login automatically and gives you back an Excel of their Login IDs &amp; passwords to share.</p>
+    <div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Your Excel needs these column headings in row 1:
+      <b>Name</b>, <b>Class</b> (11 or 12), <b>Stream</b> (PCM or PCB)${ME.role==="master"?`, <b>Centre</b> (one of: ${CENTRES.map(c=>c.id).join(", ")})`:""}.
+      Login IDs &amp; passwords are generated for you — don't add those columns.</div>
+    <div class="row" style="margin-top:12px;margin-bottom:2px"><button class="btn ghost sm" onclick="downloadStudentTemplate()">⬇ Download Excel template</button>
+      <span class="muted" style="font-size:12px">Grab the template, fill rows, then upload it.</span></div>
+    ${ME.role==="master"?`<label>Default centre (used if the Centre column is blank)</label><select id="bDefCentre">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
+    <label>Choose Excel file (.xlsx)</label><input type="file" id="bFile" accept=".xlsx,.xls" onchange="bulkPreview()"/>
+    <div id="bPreview"></div>
+    <div id="bProgress"></div>
+    <div class="msg" id="bMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Close</button>
+      <button class="btn" id="bBtn" onclick="runBulkStudents()" disabled>Create logins</button></div>`);
+}
+function downloadStudentTemplate(){
+  const headers = ME.role==="master" ? ["Name","Class","Stream","Centre"] : ["Name","Class","Stream"];
+  const sample = ME.role==="master"
+    ? [["Aarav Shah","11","PCM","AMB"],["Diya Patil","12","PCB","KW"]]
+    : [["Aarav Shah","11","PCM"],["Diya Patil","12","PCB"]];
+  const ws=XLSX.utils.aoa_to_sheet([headers,...sample]);
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Students");
+  XLSX.writeFile(wb,"Students_Upload_Template.xlsx");
+}
+let BULK_ROWS=[];
+async function bulkPreview(){
+  const f=el("bFile").files[0]; if(!f) return;
+  el("bPreview").innerHTML=""; el("bBtn").disabled=true; setMsg("bMsg","Reading file…","ok");
+  try{
+    const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
+    const out=[]; 
+    rows.forEach(r=>{
+      const get=k=>{const key=Object.keys(r).find(x=>x.trim().toLowerCase()===k); return key?String(r[key]).trim():"";};
+      const name=get("name"); if(!name) return;
+      let cls=(get("class").match(/\d+/)||[""])[0]; if(cls!=="11"&&cls!=="12")cls="11";
+      let stream=get("stream").toUpperCase(); if(stream!=="PCM"&&stream!=="PCB")stream="PCM";
+      let centre=get("centre").toUpperCase();
+      if(ME.role==="admin") centre=ME.centreId;
+      else if(!CENTRES.find(c=>c.id===centre)) centre=""; // resolve at run time to default
+      out.push({name,cls,stream,centre});
+    });
+    BULK_ROWS=out;
+    if(!out.length){ setMsg("bMsg","No student rows found. Check the column headings.","err"); return; }
+    setMsg("bMsg",`Found ${out.length} student(s) ready to create.`,"ok");
+    el("bBtn").disabled=false; el("bBtn").textContent=`Create ${out.length} login${out.length===1?"":"s"}`;
+    el("bPreview").innerHTML=`<div style="max-height:200px;overflow:auto;margin-top:12px;border:1px solid var(--line);border-radius:10px">`+
+      tableHTML(["Name","Class","Stream","Centre"],out.slice(0,50).map(r=>[esc(r.name),r.cls,r.stream,centreName(r.centre||(ME.role==="master"?val("bDefCentre"):ME.centreId))]))+`</div>`;
+  }catch(e){ setMsg("bMsg","Could not read file: "+errMsg(e),"err"); }
+}
+function genLoginId(name){ const base=(name.toLowerCase().replace(/[^a-z]/g,"")||"student").slice(0,9); return base+Math.floor(100+Math.random()*900); }
+function genPassword(){ const c="abcdefghjkmnpqrstuvwxyz23456789"; let p=""; for(let i=0;i<7;i++)p+=c[Math.floor(Math.random()*c.length)]; return p; }
+async function runBulkStudents(){
+  if(!BULK_ROWS.length) return;
+  setBtn("bBtn",true,`<span class="loader"></span> Creating…`);
+  const created=[]; const fails=[]; const defCentre=ME.role==="master"?val("bDefCentre"):ME.centreId;
+  for(let i=0;i<BULK_ROWS.length;i++){
+    const r=BULK_ROWS[i]; const centreId=r.centre||defCentre;
+    el("bProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Creating ${i+1} of ${BULK_ROWS.length}: ${esc(r.name)}…</div>`;
+    let done=false;
+    for(let attempt=0;attempt<3 && !done;attempt++){
+      const loginId=genLoginId(r.name), pass=genPassword();
+      try{
+        const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
+        await db.collection("users").doc(cred.user.uid).set({role:"student",name:r.name,loginId,email:toLoginEmail(loginId),
+          class:r.cls,stream:r.stream,centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+        await secondaryApp.auth().signOut();
+        created.push({Name:r.name,"Login ID":loginId,Password:pass,Class:r.cls,Stream:r.stream,Centre:centreName(centreId)});
+        done=true;
+      }catch(e){ if(!/email-already-in-use/.test(e.code||"")){ fails.push({name:r.name,reason:errMsg(e)}); break; } }
+    }
+    if(!done && !fails.find(x=>x.name===r.name)) fails.push({name:r.name,reason:"could not pick a unique login ID"});
+  }
+  // build the credentials Excel
+  if(created.length){
+    const ws=XLSX.utils.json_to_sheet(created,{header:["Name","Login ID","Password","Class","Stream","Centre"]});
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Logins");
+    XLSX.writeFile(wb,"Student_Logins_"+new Date().toISOString().slice(0,10)+".xlsx");
+  }
+  setMsg("bMsg",`✓ Created ${created.length} login(s)${fails.length?`, ${fails.length} failed (${fails.map(f=>esc(f.name)).join(", ")})`:""}. The credentials Excel has downloaded — share it with students.`, fails.length?"err":"ok");
+  setBtn("bBtn",false,"Create logins"); loadStudents();
+}
+
 function openAddAdmin(){
   modal(`<h2>Add centre admin</h2>
     <p class="muted">Creates a login that can manage one centre — schedule tests, add students, generate &amp; approve questions for that centre.</p>
@@ -983,9 +1090,9 @@ function pagePractice(){
     <p class="page-sub">Build your own practice test from the question bank — anytime you like.</p>
     <div class="card" style="max-width:560px">
       <div class="grid cols-2"><div><label>Exam</label><select id="pExam">${myExams.map(e=>`<option>${e}</option>`).join("")}</select></div>
-        <div><label>Difficulty</label><select id="pDiff"><option value="">Any</option><option>Easy</option><option>Easy-Moderate</option></select></div></div>
+        <div><label>Difficulty</label>${difficultySelect("pDiff",true)}</div></div>
       <div class="grid cols-2"><div><label>Subject</label><select id="pSubject"></select></div><div><label>Topic</label><select id="pTopic"></select></div></div>
-      <div class="grid cols-2"><div><label>No. of questions</label><select id="pCount"><option>5</option><option>10</option><option>15</option><option>20</option></select></div>
+      <div class="grid cols-2"><div><label>No. of questions (10–90)</label><input id="pCount" type="number" min="10" max="90" value="20"/></div>
         <div><label>Time limit (min)</label><input id="pDur" type="number" value="15"/></div></div>
       <div class="msg" id="pMsg"></div>
       <button class="btn full" id="pBtn" onclick="startPractice()">Start practice test</button></div>`);
@@ -994,7 +1101,7 @@ function pagePractice(){
   el("pSubject").onchange=()=>fillTopics("pExam",ME.class,"pSubject","pTopic",true);
 }
 async function startPractice(){
-  const exam=val("pExam"),subject=val("pSubject"),topic=val("pTopic"),diff=val("pDiff"),count=parseInt(val("pCount"));
+  const exam=val("pExam"),subject=val("pSubject"),topic=val("pTopic"),diff=val("pDiff"),count=Math.min(90,Math.max(10,parseInt(val("pCount"))||20));
   setBtn("pBtn",true,"Building…");
   try{
     let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject).where("class","==",ME.class);
@@ -1141,6 +1248,7 @@ function errMsg(e){return (e&&e.message)||String(e);}
 function modal(html,wide){el("modalBox").className="modal"+(wide?" wide":"");el("modalBox").innerHTML=html;el("modalBg").classList.add("show");}
 function closeModal(){el("modalBg").classList.remove("show");}
 function classSelect(id,withAll=true){return `<select id="${id}">${withAll?'<option value="all">All</option>':''}<option value="11">Class 11</option><option value="12">Class 12</option></select>`;}
+function difficultySelect(id,withAny=false){return `<select id="${id}">${withAny?'<option value="">Any</option>':''}${DIFFICULTIES.map(d=>`<option>${d}</option>`).join("")}</select>`;}
 function examSelect(id){return `<select id="${id}">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select>`;}
 function fillSubjects(examId,subjId,withAll,stream){
   const exam=val(examId); let subs=stream?EXAMS[exam].streams[stream]||examSubjects(exam):examSubjects(exam);
