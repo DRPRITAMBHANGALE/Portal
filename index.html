@@ -197,6 +197,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:22px 0}
     <div class="brand"><div class="mark"><span>S</span></div><div><h1>Sonam Tuitions</h1></div></div>
     <div class="spacer"></div>
     <div class="whoami"><b id="meName">—</b><span id="meRole"></span></div>
+    <button class="btn ghost sm" onclick="openChangePassword()">Password</button>
     <button class="btn ghost sm" onclick="doLogout()">Sign out</button>
   </header>
   <div class="layout"><nav class="side" id="sideNav"></nav><main class="content" id="view"></main></div>
@@ -334,6 +335,33 @@ function doLogin(){
   auth.signInWithEmailAndPassword(email,pass).catch(e=>{authMsg(prettyAuthErr(e),"err");setBtn("loginBtn",false,"Sign in");});
 }
 function doLogout(){ auth.signOut(); }
+function openChangePassword(){
+  modal(`<h2>Change password</h2>
+    <label>Current password</label><input type="password" id="cpOld"/>
+    <label>New password (min 6 characters)</label><input type="password" id="cpNew"/>
+    <label>Confirm new password</label><input type="password" id="cpNew2"/>
+    <div class="msg" id="cpMsg"></div>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="cpBtn" onclick="doChangePassword()">Update password</button></div>`);
+}
+async function doChangePassword(){
+  const oldp=val("cpOld"),np=val("cpNew"),np2=val("cpNew2");
+  if(np.length<6) return setMsg("cpMsg","New password must be at least 6 characters.","err");
+  if(np!==np2) return setMsg("cpMsg","The two new passwords don't match.","err");
+  setBtn("cpBtn",true,"Updating…");
+  try{
+    const user=auth.currentUser;
+    const cred=firebase.auth.EmailAuthProvider.credential(user.email,oldp);
+    await user.reauthenticateWithCredential(cred);
+    await user.updatePassword(np);
+    if(ME.role==="student"){ try{ await db.collection("users").doc(user.uid).update({pw:np,pwChangedAt:firebase.firestore.FieldValue.serverTimestamp()}); }catch(_){} }
+    setMsg("cpMsg","✓ Password updated. Use it next time you sign in.","ok"); setBtn("cpBtn",false,"Update password");
+    setTimeout(closeModal,1300);
+  }catch(e){
+    const m=(e.code==="auth/wrong-password"||e.code==="auth/invalid-credential")?"Your current password is incorrect.":errMsg(e);
+    setMsg("cpMsg",m,"err"); setBtn("cpBtn",false,"Update password");
+  }
+}
 auth.onAuthStateChanged(async user=>{
   if(!user){ showLogin(); return; }
   try{
@@ -482,7 +510,7 @@ function openAIGen(){
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("gExam")}</div><div><label>Class</label>${classSelect("gClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="gSubject"></select></div><div><label>Topic</label><select id="gTopic"></select></div></div>
     <div class="grid cols-2"><div><label>Difficulty</label>${difficultySelect("gDiff")}</div>
-      <div><label>How many</label><input id="gCount" type="number" min="1" max="15" value="5" placeholder="any number"/></div></div>
+      <div><label>How many</label><input id="gCount" type="number" min="1" max="50" value="10" placeholder="any number"/></div></div>
     ${AI_FUNCTION_URL.startsWith("PASTE")?`<div class="note">⚠ AI generation needs the Cloud Function deployed first (see README). Until then, use "Add manually".</div>`:""}
     <div class="msg" id="genMsg"></div>
     <div class="row end" style="margin-top:18px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -498,6 +526,18 @@ async function aiGenerate(payload){
   if(!res.ok){ let m="server returned "+res.status; try{const j=await res.json(); if(j&&(j.message||j.error)) m=j.message||j.error;}catch(_){} throw new Error(m); }
   const data=await res.json(); return data.questions||[];
 }
+// Fetch many questions in safe sub-batches so the AI reply never gets cut off.
+async function aiGenerateMany(payload,total,onProgress){
+  const CHUNK=12; let all=[];
+  for(let got=0;got<total;got+=CHUNK){
+    const n=Math.min(CHUNK,total-got);
+    const items=await aiGenerate({...payload,count:n});
+    all=all.concat(items);
+    if(onProgress) onProgress(all.length,total);
+    if(!items.length) break; // nothing came back — stop rather than loop pointlessly
+  }
+  return all;
+}
 async function saveDrafts(items,meta){
   const batch=db.batch();
   items.forEach(it=>{const ref=db.collection("questions").doc();
@@ -510,10 +550,10 @@ async function saveDrafts(items,meta){
 async function runAIGen(){
   if(AI_FUNCTION_URL.startsWith("PASTE")) return setMsg("genMsg","Deploy the Cloud Function first.","err");
   const meta={exam:val("gExam"),subject:val("gSubject"),cls:val("gClass"),topic:val("gTopic"),difficulty:val("gDiff")};
-  const count=Math.min(15,Math.max(1,parseInt(val("gCount"))||5));
-  setBtn("genBtn",true,`<span class="loader"></span> Generating…`); setMsg("genMsg","Contacting AI… ~10-20 seconds.","ok");
+  const count=Math.min(50,Math.max(1,parseInt(val("gCount"))||5));
+  setBtn("genBtn",true,`<span class="loader"></span> Generating…`); setMsg("genMsg","Contacting AI…","ok");
   try{
-    const items=await aiGenerate({...meta,count});
+    const items=await aiGenerateMany(meta,count,(done,tot)=>setMsg("genMsg",`Generating… ${done}/${tot}`,"ok"));
     if(!items.length) throw new Error("No questions returned.");
     await saveDrafts(items,meta);
     setMsg("genMsg",`✓ ${items.length} draft questions created. Approve them in the Review queue.`,"ok");
@@ -528,7 +568,7 @@ function openAIGenAll(){
     <p class="muted">Generates questions for every chapter saved in your Syllabus for this exam, class &amp; subject — all sent to the Review queue.</p>
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("gaExam")}</div><div><label>Class</label>${classSelect("gaClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="gaSubject"></select></div><div><label>Difficulty</label>${difficultySelect("gaDiff")}</div></div>
-    <label>Questions per chapter</label><input id="gaPer" type="number" min="1" max="15" value="5"/>
+    <label>Questions per chapter</label><input id="gaPer" type="number" min="1" max="50" value="10"/>
     <div id="gaChapters" class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7"></div>
     ${AI_FUNCTION_URL.startsWith("PASTE")?`<div class="note">⚠ Needs the Cloud Function deployed first.</div>`:""}
     <div id="gaProgress"></div>
@@ -549,7 +589,7 @@ function showGaChapters(){
 async function runAIGenAll(){
   if(AI_FUNCTION_URL.startsWith("PASTE")) return setMsg("gaMsg","Deploy the Cloud Function first.","err");
   const exam=val("gaExam"),cls=val("gaClass"),subject=val("gaSubject"),difficulty=val("gaDiff");
-  const per=Math.min(15,Math.max(1,parseInt(val("gaPer"))||5));
+  const per=Math.min(50,Math.max(1,parseInt(val("gaPer"))||5));
   const chapters=topicsFor(exam,cls,subject);
   if(!chapters.length) return setMsg("gaMsg","No chapters for this combination. Add them in Syllabus first.","err");
   if(!confirm(`Generate ${per} question(s) for each of ${chapters.length} chapter(s)? This can take a few minutes.`)) return;
@@ -559,7 +599,7 @@ async function runAIGenAll(){
     const ch=chapters[i];
     el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Chapter ${i+1} of ${chapters.length}: <b>${esc(ch)}</b> — generating…</div>`;
     try{
-      const items=await aiGenerate({exam,subject,cls,topic:ch,difficulty,count:per});
+      const items=await aiGenerateMany({exam,subject,cls,topic:ch,difficulty},per,(done,tot)=>{el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Chapter ${i+1} of ${chapters.length}: <b>${esc(ch)}</b> — ${done}/${tot}…</div>`;});
       if(items.length){ await saveDrafts(items,{exam,subject,cls,topic:ch,difficulty}); total+=items.length; }
       el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">✓ ${i+1}/${chapters.length} &nbsp;${esc(ch)} — ${items.length} added (running total ${total})</div>`;
     }catch(e){ fails.push(ch); el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">⚠ ${esc(ch)} failed: ${esc(e.message)}</div>`; }
@@ -822,10 +862,37 @@ async function loadTests(){
     }
     el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
       :tableHTML(["Title","Exam","Subjects","Q","Scope","Window","Status",""],
-        docs.map(d=>{const t=d.data();return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${t.class}</span>`,
+        docs.map(d=>{const t=d.data();const canEdit=ME.role==="master"||(ME.role==="admin"&&t.scope===ME.centreId);return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}</span>`,
           examTag(t.exam),subjChips(t.subjects),(t.questionIds||[]).length,centreName(t.scope),windowLabel(t),testStatusTag(t),
-          `<button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button>`];}));
+          `<button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button>`+(canEdit?` <button class="btn ghost sm" onclick="openReschedule('${d.id}')">Reschedule</button> <button class="btn ghost sm danger" onclick="deleteTest('${d.id}')">Delete</button>`:"")];}));
   }catch(e){ el("testList").innerHTML=errBox(e); }
+}
+async function openReschedule(id){
+  const t=(await db.collection("tests").doc(id).get()).data();
+  const toLocal=ts=>{ if(!ts)return""; const d=ts.toDate(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
+  modal(`<h2>Reschedule test</h2><p class="muted">${esc(t.title)}</p>
+    <label>Title</label><input id="rsTitle" value="${esc(t.title)}"/>
+    <div class="grid cols-2"><div><label>Opens</label><input id="rsStart" type="datetime-local" value="${toLocal(t.startAt)}"/></div>
+      <div><label>Closes</label><input id="rsEnd" type="datetime-local" value="${toLocal(t.endAt)}"/></div></div>
+    <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
+    <div class="msg" id="rsMsg"></div>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="rsBtn" onclick="saveReschedule('${id}')">Save changes</button></div>`);
+}
+async function saveReschedule(id){
+  setBtn("rsBtn",true,"Saving…");
+  try{
+    await db.collection("tests").doc(id).update({title:val("rsTitle").trim()||"Test",
+      startAt:val("rsStart")?firebase.firestore.Timestamp.fromDate(new Date(val("rsStart"))):null,
+      endAt:val("rsEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("rsEnd"))):null,
+      duration:parseInt(val("rsDur"))||30});
+    closeModal(); loadTests();
+  }catch(e){ setMsg("rsMsg",errMsg(e),"err"); setBtn("rsBtn",false,"Save changes"); }
+}
+async function deleteTest(id){
+  if(!confirm("Delete this test? Students will no longer see it. (Past attempts are kept.)")) return;
+  try{ await db.collection("tests").doc(id).delete(); loadTests(); }
+  catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 function openCreateTest(){
   modal(`<h2>New test</h2>
@@ -932,9 +999,9 @@ async function loadStudents(){
   try{
     const snap=await q.limit(300).get();
     el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
-      :tableHTML(["Name","Login ID","Class","Stream","Targets","Centre"],
-        snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.loginId||s.email||"—"),"Class "+s.class,s.stream||"—",
-          (examsForStream(s.stream||"PCM")).map(examTag).join(" "),centreName(s.centreId)];}));
+      :tableHTML(["Name","Login ID","Password","Class","Stream","Centre",""],
+        snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.loginId||s.email||"—"),esc(s.pw||"—"),"Class "+s.class,s.stream||"—",centreName(s.centreId),
+          `<button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
   }catch(e){ el("stuList").innerHTML=errBox(e); }
 }
 function openAddStudent(){
@@ -961,11 +1028,16 @@ async function addStudent(){
   setBtn("sBtn",true,"Creating…");
   try{
     const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
-    await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),class:val("sClass"),stream:val("sStream"),
+    await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),pw:pass,class:val("sClass"),stream:val("sStream"),
       centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await secondaryApp.auth().signOut();
     closeModal(); loadStudents();
   }catch(e){ setMsg("sMsg",errMsg(e),"err"); setBtn("sBtn",false,"Create login"); }
+}
+async function delStudent(uid){
+  if(!confirm("Delete this student? They lose access and disappear from the list. (Their past results are kept unless removed separately.)")) return;
+  try{ await db.collection("users").doc(uid).delete(); loadStudents(); }
+  catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 
 /* ---- Bulk add students from an Excel file → credentials Excel out ---- */
@@ -1034,7 +1106,7 @@ async function runBulkStudents(){
       const loginId=genLoginId(r.name), pass=genPassword();
       try{
         const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
-        await db.collection("users").doc(cred.user.uid).set({role:"student",name:r.name,loginId,email:toLoginEmail(loginId),
+        await db.collection("users").doc(cred.user.uid).set({role:"student",name:r.name,loginId,email:toLoginEmail(loginId),pw:pass,
           class:r.cls,stream:r.stream,centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
         await secondaryApp.auth().signOut();
         created.push({Name:r.name,"Login ID":loginId,Password:pass,Class:r.cls,Stream:r.stream,Centre:centreName(centreId)});
