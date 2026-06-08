@@ -117,7 +117,7 @@ tr:last-child td{border-bottom:none}
 .tag.scheduled{background:#e7ecf5;color:#2c4470}.tag.open{background:var(--accent-soft);color:var(--accent-ink)}
 .tag.closed{background:#ece9e0;color:var(--ink-soft)}
 
-.modal-bg{position:fixed;inset:0;background:rgba(35,33,28,.46);display:none;place-items:center;z-index:60;padding:20px;overflow:auto}
+.modal-bg{position:fixed;inset:0;background:rgba(35,33,28,.46);display:none;place-items:center;z-index:90;padding:20px;overflow:auto}
 .modal-bg.show{display:grid}
 .modal{background:var(--paper-2);border-radius:16px;max-width:560px;width:100%;padding:26px;box-shadow:0 20px 60px rgba(0,0,0,.25);max-height:90vh;overflow:auto}
 .modal.wide{max-width:760px}
@@ -253,16 +253,19 @@ const EXAMS = {
   "MHT-CET": {
     streams:{ PCM:["Physics","Chemistry","Mathematics"], PCB:["Physics","Chemistry","Biology"] },
     marks:{Physics:1,Chemistry:1,Mathematics:2,Biology:1}, negative:0,
+    full:{Physics:50,Chemistry:50,Mathematics:50,Biology:50}, fullDuration:180,
     note:"No negative marking · Maths 2 marks, Physics/Chemistry/Biology 1 mark each"
   },
   "JEE Main": {
     streams:{ PCM:["Physics","Chemistry","Mathematics"] },
     marks:{Physics:4,Chemistry:4,Mathematics:4}, negative:1,
+    full:{Physics:25,Chemistry:25,Mathematics:25}, fullDuration:180,
     note:"+4 for correct, −1 for wrong, 0 if skipped"
   },
   "NEET": {
     streams:{ PCB:["Physics","Chemistry","Botany","Zoology"] },
     marks:{Physics:4,Chemistry:4,Botany:4,Zoology:4}, negative:1,
+    full:{Physics:45,Chemistry:45,Botany:45,Zoology:45}, fullDuration:200,
     note:"+4 for correct, −1 for wrong, 0 if skipped"
   }
 };
@@ -272,6 +275,27 @@ function examMarks(exam,subject){return (EXAMS[exam]&&EXAMS[exam].marks[subject]
 function examNeg(exam){return (EXAMS[exam]&&EXAMS[exam].negative)||0;}
 function streamsFor(exam){return Object.keys(EXAMS[exam].streams);}
 function examsForStream(stream){return EXAM_KEYS.filter(k=>EXAMS[k].streams[stream]);}
+function qLabel(q){return esc(q.text)+(q.year?` <b style="color:var(--gold)">(${q.year})</b>`:"");}
+function confirmModal(message,onYes,yesLabel){
+  modal(`<h2 style="font-size:20px">${esc(message)}</h2>
+    <div class="row end" style="margin-top:20px;gap:12px">
+      <button class="btn ghost" onclick="closeModal()">No</button>
+      <button class="btn" id="cfYes">${esc(yesLabel||"Yes")}</button></div>`);
+  el("cfYes").onclick=()=>{closeModal();onYes();};
+}
+function scopeClasses(v){return v==="both"?["11","12"]:[v];}
+// Pull live question IDs for one subject across given classes & chapters.
+async function pullQuestions({exam,subject,classes,chapters,count,diff}){
+  let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject);
+  if(classes.length===1) q=q.where("class","==",classes[0]);
+  const snap=await q.get();
+  let docs=snap.docs.filter(d=>{const x=d.data();
+    if(classes.length>1 && !classes.includes(x.class)) return false;
+    if(chapters && chapters.length && !chapters.includes(x.topic)) return false;
+    if(diff && x.difficulty!==diff) return false;
+    return true;});
+  return shuffle(docs.map(d=>d.id)).slice(0,count);
+}
 
 const CENTRES = [
   {id:"AMB", name:"Ambernath"}, {id:"UNR3", name:"Ulhasnagar 3"},
@@ -426,16 +450,15 @@ async function pageQuestions(){
 }
 async function loadBankCounts(){
   const exam=val("qfExam"),cls=val("qfClass");
-  const subs=examSubjects(exam);
   el("bankCounts").innerHTML=`<h3 style="margin-bottom:10px">Live questions in the bank — ${esc(exam)}${cls!=="all"?" · Class "+cls:""}</h3><div class="muted">Counting…</div>`;
   try{
-    let total=0; const parts=[];
-    for(const s of subs){
-      let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",s);
-      if(cls!=="all") q=q.where("class","==",cls);
-      let n; try{ n=(await q.count().get()).data().count; }catch(_){ n=(await q.get()).size; }
-      total+=n; parts.push(`<div class="kpi"><div class="n">${n}</div><div class="l">${esc(s)}</div></div>`);
-    }
+    let q=db.collection("questions").where("status","==","live").where("exam","==",exam);
+    if(cls!=="all") q=q.where("class","==",cls);
+    const snap=await q.get();
+    const tally={}; examSubjects(exam).forEach(s=>tally[s]=0);
+    snap.forEach(d=>{const s=d.data().subject; if(s in tally) tally[s]++; else tally[s]=(tally[s]||0)+1;});
+    const total=snap.size;
+    const parts=Object.keys(tally).map(s=>`<div class="kpi"><div class="n">${tally[s]}</div><div class="l">${esc(s)}</div></div>`);
     el("bankCounts").innerHTML=`<h3 style="margin-bottom:4px">Live questions in the bank — ${esc(exam)}${cls!=="all"?" · Class "+cls:""}</h3>
       <p class="muted" style="margin:0 0 12px">${total} total approved question${total===1?"":"s"} available for tests &amp; practice.</p>
       <div class="skpis" style="margin-bottom:0">${parts.join("")}</div>`;
@@ -450,7 +473,7 @@ async function loadQuestions(){
     const snap=await q.limit(100).get();
     el("qList").innerHTML=snap.empty?emptyState("No live questions yet","Generate or add some, then approve them in the Review queue.")
       :tableHTML(["Question","Subject","Topic","Class","Diff."],
-        snap.docs.map(d=>{const x=d.data();return [esc(truncate(x.text,90)),subjTag(x.subject),esc(x.topic||"—"),x.class,x.difficulty];}));
+        snap.docs.map(d=>{const x=d.data();return [esc(truncate(x.text,90))+(x.year?` <b style="color:var(--gold)">(${x.year})</b>`:""),subjTag(x.subject),esc(x.topic||"—"),x.class,x.difficulty];}));
   }catch(e){ el("qList").innerHTML=errBox(e); }
 }
 function openAIGen(){
@@ -479,7 +502,7 @@ async function saveDrafts(items,meta){
   const batch=db.batch();
   items.forEach(it=>{const ref=db.collection("questions").doc();
     batch.set(ref,{exam:meta.exam,subject:meta.subject,topic:meta.topic,class:meta.cls,difficulty:meta.difficulty,
-      text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,
+      text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,year:it.year||null,
       status:"pending",source:"ai",createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
       createdAt:firebase.firestore.FieldValue.serverTimestamp()});});
   await batch.commit();
@@ -555,6 +578,7 @@ function openManualQ(){
       <label style="margin:0;display:flex;align-items:center;gap:5px"><input type="radio" name="mCorrect" value="${i}" style="width:auto" ${i===0?"checked":""}/> correct</label></div>`).join("")}
     <label>Solution / explanation</label><textarea id="mSol" rows="3" placeholder="Step-by-step solution shown after the test…"></textarea>
     <label>Difficulty</label>${difficultySelect("mDiff")}
+    <label>Year (only for Previous Year questions — optional)</label><input id="mYear" type="number" placeholder="e.g. 2019"/>
     <div class="msg" id="mMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="mSaveBtn" onclick="saveManualQ()">Save to bank (live)</button></div>`);
@@ -570,7 +594,7 @@ async function saveManualQ(){
   setBtn("mSaveBtn",true,"Saving…");
   try{
     await db.collection("questions").add({exam:val("mExam"),subject:val("mSubject"),topic:val("mTopic"),class:val("mClass"),
-      difficulty:val("mDiff"),text,options:opts,correct,solution:val("mSol").trim(),status:"live",source:"manual",
+      difficulty:val("mDiff"),year:val("mYear")?parseInt(val("mYear")):null,text,options:opts,correct,solution:val("mSol").trim(),status:"live",source:"manual",
       createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     closeModal(); if(CURRENT_PAGE==="questions") loadQuestions();
   }catch(e){ setMsg("mMsg",errMsg(e),"err"); setBtn("mSaveBtn",false,"Save to bank (live)"); }
@@ -609,9 +633,10 @@ SOLUTION: explanation shown after the test</code>
     <div class="msg" id="uMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="uImportBtn" onclick="doImport()" disabled>Import questions</button></div>`);
-  fillSubjects("uExam","uSubject",false); syncTopics("uSubject","uTopic");
-  el("uExam").onchange=()=>{fillSubjects("uExam","uSubject",false);syncTopics("uSubject","uTopic");};
-  el("uSubject").onchange=()=>syncTopics("uSubject","uTopic");
+  fillSubjects("uExam","uSubject",false); fillTopics("uExam",val("uClass"),"uSubject","uTopic");
+  el("uExam").onchange=()=>{fillSubjects("uExam","uSubject",false);fillTopics("uExam",val("uClass"),"uSubject","uTopic");};
+  el("uClass").onchange=()=>fillTopics("uExam",val("uClass"),"uSubject","uTopic");
+  el("uSubject").onchange=()=>fillTopics("uExam",val("uClass"),"uSubject","uTopic");
 }
 async function handleUploadFile(){
   const f=el("uFile").files[0]; if(!f) return;
@@ -640,7 +665,7 @@ function parseQuestionsFromText(raw,defaults){
   const out=[]; let ctx={...defaults}; let cur=null, mode=null;
   const headerRe=/^(EXAM|SUBJECT|CLASS|TOPIC|DIFFICULTY)\s*[:\-]\s*(.+)$/i;
   const qRe=/^Q\s*[:.)]\s*(.*)$/i, optRe=/^([A-D])\s*[).]\s*(.*)$/i;
-  const ansRe=/^ANS(?:WER)?\s*[:\-]\s*([A-D1-4])/i, solRe=/^SOL(?:UTION)?\s*[:\-]\s*(.*)$/i;
+  const ansRe=/^ANS(?:WER)?\s*[:\-]\s*([A-D1-4])/i, solRe=/^SOL(?:UTION)?\s*[:\-]\s*(.*)$/i, yearRe=/^YEAR\s*[:\-]\s*(\d{4})/i;
   const push=()=>{ if(!cur)return; const p=[];
     if(!cur.text)p.push("no question text");
     if(cur.options.filter(o=>o&&o.trim()).length<4)p.push("needs 4 options");
@@ -652,9 +677,10 @@ function parseQuestionsFromText(raw,defaults){
       if(k==="EXAM")ctx.exam=v; else if(k==="SUBJECT")ctx.subject=v;
       else if(k==="CLASS")ctx.cls=(v.match(/\d+/)||[v])[0]; else if(k==="TOPIC")ctx.topic=v; else if(k==="DIFFICULTY")ctx.difficulty=v; continue; }
     if(m=line.match(qRe)){ push();
-      cur={exam:ctx.exam,subject:ctx.subject,class:ctx.cls,topic:ctx.topic,difficulty:ctx.difficulty,text:m[1]||"",options:["","","",""],correct:null,solution:""}; mode="q"; continue; }
+      cur={exam:ctx.exam,subject:ctx.subject,class:ctx.cls,topic:ctx.topic,difficulty:ctx.difficulty,year:null,text:m[1]||"",options:["","","",""],correct:null,solution:""}; mode="q"; continue; }
     if(cur&&(m=line.match(optRe))){ const i="ABCD".indexOf(m[1].toUpperCase()); if(i>=0)cur.options[i]=m[2]; mode="opt"; continue; }
     if(cur&&(m=line.match(ansRe))){ const a=m[1].toUpperCase(); cur.correct="ABCD".includes(a)?"ABCD".indexOf(a):(parseInt(a)-1); if(cur.correct<0||cur.correct>3)cur.correct=null; mode="ans"; continue; }
+    if(cur&&(m=line.match(yearRe))){ cur.year=parseInt(m[1]); mode="year"; continue; }
     if(cur&&(m=line.match(solRe))){ cur.solution=m[1]||""; mode="sol"; continue; }
     if(cur){ if(mode==="sol")cur.solution+=(cur.solution?" ":"")+line; else if(mode==="q")cur.text+=(cur.text?" ":"")+line; }
   }
@@ -668,7 +694,7 @@ async function doImport(){
       const chunk=ok.slice(i,i+400), batch=db.batch();
       chunk.forEach(q=>{ const ref=db.collection("questions").doc();
         batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.class,difficulty:q.difficulty,
-          text:q.text,options:q.options,correct:q.correct,solution:q.solution,status:"live",source:"upload",
+          text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:q.year||null,status:"live",source:"upload",
           createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
       await batch.commit();
     }
@@ -710,7 +736,7 @@ async function approveAll(){
 }
 function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
-    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''}</div>
+    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''}</div>
     <p class="q-text" style="font-size:16px;margin:12px 0">${esc(x.text)}</p>
     <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${esc(o)}</div></div>`).join("")}</div>
     ${x.solution?`<div class="solution"><b>Solution:</b> ${esc(x.solution)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
@@ -804,11 +830,14 @@ async function loadTests(){
 function openCreateTest(){
   modal(`<h2>New test</h2>
     <label>Title</label><input id="tTitle" placeholder="e.g. Weekly Mock — Mechanics"/>
-    <div class="grid cols-2"><div><label>Exam</label>${examSelect("tExam")}</div>
-      <div><label>Stream</label><select id="tStream"></select></div></div>
-    <label>Subjects to include</label><div class="row" id="tSubjects"></div>
-    <div class="grid cols-2"><div><label>Class</label>${classSelect("tClass",false)}</div>
-      <div><label>Questions per subject</label><input id="tPer" type="number" min="1" value="10" placeholder="any number"/></div></div>
+    <div class="grid cols-2">
+      <div><label>Test type</label><select id="tType" onchange="tRebuild()">
+        <option value="chapter">Chapter test (pick &amp; merge chapters)</option>
+        <option value="subject">Subject full test (all chapters)</option>
+        <option value="mock">Full mock test (full paper)</option></select></div>
+      <div><label>Exam</label><select id="tExam" onchange="tRebuild()">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
+    </div>
+    <div id="tDyn"></div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="tDur" type="number" value="30"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="tScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="tStart" type="datetime-local"/></div><div><label>Closes</label><input id="tEnd" type="datetime-local"/></div></div>
@@ -816,34 +845,71 @@ function openCreateTest(){
     <div class="msg" id="tMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="tSaveBtn" onclick="createTest()">Create &amp; schedule</button></div>`);
-  fillStreams("tExam","tStream"); tBuildSubjects();
-  el("tExam").onchange=()=>{fillStreams("tExam","tStream");tBuildSubjects();};
-  el("tStream").onchange=tBuildSubjects;
+  tRebuild();
 }
-function tBuildSubjects(){
-  const exam=val("tExam"),stream=val("tStream"); const subs=EXAMS[exam].streams[stream]||[];
-  el("tSubjects").innerHTML=subs.map(s=>`<label style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" class="tsub" value="${s}" checked style="width:auto"/> ${s}</label>`).join("");
+function clsScopeSelect(id){return `<select id="${id}"><option value="11">Class 11</option><option value="12">Class 12</option><option value="both">Both 11 &amp; 12</option></select>`;}
+function tRebuild(){
+  const type=val("tType"),exam=val("tExam");
   el("tMark").textContent="Marking: "+EXAMS[exam].note;
+  let html="";
+  if(type==="chapter"){
+    html=`<div class="grid cols-2"><div><label>Class</label>${classSelect("tCls",false)}</div><div><label>Subject</label><select id="tSubj"></select></div></div>
+      <label>Chapters — tick one or more to merge</label><div class="row" id="tChaps" style="max-height:150px;overflow:auto"></div>
+      <label>Number of questions</label><input id="tQcount" type="number" min="1" value="20"/>`;
+  } else if(type==="subject"){
+    html=`<div class="grid cols-2"><div><label>Subject</label><select id="tSubj"></select></div><div><label>Class scope</label>${clsScopeSelect("tScopeCls")}</div></div>
+      <label>Number of questions (across all chapters)</label><input id="tQcount" type="number" min="1" value="30"/>`;
+  } else {
+    const full=EXAMS[exam].full;
+    html=`<div><label>Class scope</label>${clsScopeSelect("tScopeCls")}</div>
+      <div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Full ${esc(exam)} paper: ${Object.entries(full).map(([s,n])=>`${s} ${n}`).join(" · ")} — total <b>${Object.values(full).reduce((a,b)=>a+b,0)}</b> questions, drawn from all your saved chapters.</div>`;
+  }
+  el("tDyn").innerHTML=html;
+  if(type==="chapter"){ fillSubjects("tExam","tSubj",false); tFillChaps(); el("tSubj").onchange=tFillChaps; el("tCls").onchange=tFillChaps; }
+  else if(type==="subject"){ fillSubjects("tExam","tSubj",false); }
+  else { el("tDur").value=EXAMS[exam].fullDuration; }
+}
+function tFillChaps(){
+  const list=topicsFor(val("tExam"),val("tCls"),val("tSubj"));
+  el("tChaps").innerHTML=list.length
+    ? list.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="tchap" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+    : `<span class="muted">No chapters saved — add them in Syllabus first.</span>`;
 }
 async function createTest(){
-  const title=val("tTitle").trim(),exam=val("tExam"),stream=val("tStream");
-  const subjects=[...document.querySelectorAll(".tsub:checked")].map(c=>c.value);
-  const per=parseInt(val("tPer")),cls=val("tClass"),scope=ME.role==="master"?val("tScope"):ME.centreId;
-  if(!title||!subjects.length) return setMsg("tMsg","Add a title and at least one subject.","err");
+  const title=val("tTitle").trim(),exam=val("tExam"),type=val("tType");
+  const scope=ME.role==="master"?val("tScope"):ME.centreId;
+  if(!title) return setMsg("tMsg","Add a title.","err");
   setBtn("tSaveBtn",true,"Building…");
   try{
-    let questionIds=[];
-    for(const s of subjects){
-      const snap=await db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",s).where("class","==",cls).limit(per*2).get();
-      const ids=shuffle(snap.docs.map(d=>d.id)).slice(0,per);
-      if(ids.length<per){ setMsg("tMsg",`Only ${ids.length} live ${exam} ${s} (Class ${cls}) questions available — need ${per}. Generate/approve more.`,"err"); setBtn("tSaveBtn",false,"Create & schedule"); return; }
-      questionIds.push(...ids);
+    let questionIds=[],subjects=[],cls="",short=[];
+    if(type==="chapter"){
+      const subject=val("tSubj"),chapters=[...document.querySelectorAll(".tchap:checked")].map(c=>c.value);
+      const count=Math.max(1,parseInt(val("tQcount"))||20);
+      if(!chapters.length) throw new Error("Tick at least one chapter.");
+      questionIds=await pullQuestions({exam,subject,classes:[val("tCls")],chapters,count});
+      if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
+      subjects=[subject]; cls=val("tCls");
+    } else if(type==="subject"){
+      const subject=val("tSubj"),classes=scopeClasses(val("tScopeCls")),count=Math.max(1,parseInt(val("tQcount"))||30);
+      questionIds=await pullQuestions({exam,subject,classes,count});
+      if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
+      subjects=[subject]; cls=val("tScopeCls");
+    } else {
+      const classes=scopeClasses(val("tScopeCls")),full=EXAMS[exam].full;
+      for(const s of Object.keys(full)){
+        const ids=await pullQuestions({exam,subject:s,classes,count:full[s]});
+        if(ids.length<full[s]) short.push(`${s}: ${ids.length}/${full[s]}`);
+        questionIds.push(...ids); subjects.push(s);
+      }
+      cls=val("tScopeCls");
     }
-    await db.collection("tests").add({title,exam,stream,subjects,class:cls,questionIds,duration:parseInt(val("tDur"))||30,scope,isPractice:false,
+    if(!questionIds.length) throw new Error("No matching questions in the bank yet. Generate/approve more first.");
+    await db.collection("tests").add({title,exam,type,subjects,class:cls,questionIds,duration:parseInt(val("tDur"))||30,scope,isPractice:false,
       startAt:val("tStart")?firebase.firestore.Timestamp.fromDate(new Date(val("tStart"))):null,
       endAt:val("tEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("tEnd"))):null,
       createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     closeModal(); loadTests();
+    if(short.length) setTimeout(()=>alert("Test created. Some parts had fewer questions than requested:\n"+short.join("\n")+"\nGenerate more to fill them next time."),200);
   }catch(e){ setMsg("tMsg",errMsg(e),"err"); setBtn("tSaveBtn",false,"Create & schedule"); }
 }
 
@@ -1030,8 +1096,9 @@ async function loadStudentResults(uid){
   const [stuDoc,attempts]=await Promise.all([db.collection("users").doc(uid).get(),
     db.collection("attempts").where("studentUid","==",uid).orderBy("submittedAt","desc").get()]);
   const stu=stuDoc.data();
-  if(attempts.empty){ el("rResults").innerHTML=`<div class="card">${emptyState("No attempts yet",esc(stu.name)+" hasn't taken any tests.")}</div>`; return; }
-  const rows=attempts.docs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+  const adocs=attempts.docs.filter(d=>!d.data().isPractice);
+  if(!adocs.length){ el("rResults").innerHTML=`<div class="card">${emptyState("No attempts yet",esc(stu.name)+" hasn't taken any scheduled tests.")}</div>`; return; }
+  const rows=adocs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
     `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>`];});
   el("rResults").innerHTML=`<div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -1049,12 +1116,13 @@ async function downloadReportCard(uid){
   doc.setTextColor(35,33,28); doc.setFontSize(12); doc.setFont("helvetica","bold"); doc.text(`${stu.name}`,14,42);
   doc.setFont("helvetica","normal"); doc.setFontSize(10);
   doc.text(`Class ${stu.class} ${stu.stream||""}   |   Centre: ${centreName(stu.centreId)}   |   Generated: ${new Date().toLocaleDateString()}`,14,49);
-  const rows=attempts.docs.map(d=>{const a=d.data();return [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",`${a.correct}`,`${a.wrong}`,`${a.unattempted}`];});
-  const totS=attempts.docs.reduce((s,d)=>s+d.data().score,0), totT=attempts.docs.reduce((s,d)=>s+d.data().total,0);
+  const rows=attempts.docs.filter(d=>!d.data().isPractice).map(d=>{const a=d.data();return [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",`${a.correct}`,`${a.wrong}`,`${a.unattempted}`];});
+  const real=attempts.docs.filter(d=>!d.data().isPractice);
+  const totS=real.reduce((s,d)=>s+d.data().score,0), totT=real.reduce((s,d)=>s+d.data().total,0);
   doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Correct","Wrong","Skipped"]],body:rows,
     headStyles:{fillColor:[31,92,82]},styles:{fontSize:8.5,cellPadding:2.5},alternateRowStyles:{fillColor:[246,243,236]}});
   let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(11);
-  doc.text(`Overall: ${totS}/${totT}  (${pct(totS,totT)}%)   ·   Tests taken: ${attempts.size}`,14,y);
+  doc.text(`Overall: ${totS}/${totT}  (${pct(totS,totT)}%)   ·   Tests taken: ${real.length}`,14,y);
   doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(120);
   doc.text("Computer-generated by the Sonam Tuitions test portal.",14,285);
   doc.save(`ReportCard_${stu.name.replace(/\s+/g,"_")}.pdf`);
@@ -1067,52 +1135,143 @@ async function pageStudentHome(){
   setView(`<h1 class="page-title">My tests</h1>
     <p class="page-sub">Tests scheduled for you by ${centreName(ME.centreId)}.</p><div id="myTests" class="muted">Loading…</div>`);
   try{
-    const [own,all]=await Promise.all([
+    const [own,all,att,prac]=await Promise.all([
       db.collection("tests").where("scope","==",ME.centreId).where("isPractice","==",false).get(),
-      db.collection("tests").where("scope","==","all").where("isPractice","==",false).get()]);
-    let docs=[...own.docs,...all.docs].filter(d=>d.data().class===ME.class && examsForStream(ME.stream||"PCM").includes(d.data().exam));
-    const att=await db.collection("attempts").where("studentUid","==",ME.uid).get();
+      db.collection("tests").where("scope","==","all").where("isPractice","==",false).get(),
+      db.collection("attempts").where("studentUid","==",ME.uid).get(),
+      db.collection("practiceTests").where("ownerUid","==",ME.uid).get()]);
+    const myExams=examsForStream(ME.stream||"PCM");
+    const docs=[...own.docs,...all.docs].filter(d=>testClassMatches(d.data(),ME.class)&&myExams.includes(d.data().exam));
     const done=new Set(att.docs.map(d=>d.data().testId));
-    if(!docs.length){ el("myTests").innerHTML=`<div class="card">${emptyState("No tests scheduled","Check the Practice tab to build your own.")}</div>`; return; }
-    el("myTests").innerHTML=`<div class="grid cols-2">`+docs.map(d=>{const t=d.data();const st=testStatus(t);const taken=done.has(d.id);
-      return `<div class="card"><div class="row" style="justify-content:space-between"><h3>${esc(t.title)}</h3>${testStatusTag(t)}</div>
-        <p class="muted">${examTag(t.exam)} ${subjChips(t.subjects)} · ${(t.questionIds||[]).length} Q · ${t.duration} min</p>
-        <p class="muted" style="font-size:12.5px">${windowLabel(t)} · ${EXAMS[t.exam]?.note||""}</p>
-        ${taken?`<button class="btn ghost full" disabled>✓ Completed</button>`
-          :st==="open"?`<button class="btn full" onclick="startTest('${d.id}')">Start test</button>`
-          :st==="scheduled"?`<button class="btn ghost full" disabled>Opens ${fmtDate(t.startAt)}</button>`
-          :`<button class="btn ghost full" disabled>Closed</button>`}</div>`;}).join("")+`</div>`;
+    let html="";
+    if(docs.length){
+      html+=`<div class="grid cols-2">`+docs.map(d=>{const t=d.data();const st=testStatus(t);const taken=done.has(d.id);
+        return `<div class="card"><div class="row" style="justify-content:space-between"><h3>${esc(t.title)}</h3>${testStatusTag(t)}</div>
+          <p class="muted">${examTag(t.exam)} ${subjChips(t.subjects)} · ${(t.questionIds||[]).length} Q · ${t.duration} min · Class ${clsLabel(t.class)}</p>
+          <p class="muted" style="font-size:12.5px">${windowLabel(t)} · ${EXAMS[t.exam]?.note||""}</p>
+          ${taken?`<button class="btn ghost full" disabled>✓ Completed</button>`
+            :st==="open"?`<button class="btn full" onclick="startTest('${d.id}')">Start test</button>`
+            :st==="scheduled"?`<button class="btn ghost full" disabled>Opens ${fmtDate(t.startAt)}</button>`
+            :`<button class="btn ghost full" disabled>Closed</button>`}</div>`;}).join("")+`</div>`;
+    }
+    const pdocs=prac.docs.sort((a,b)=>(a.data().startAt?.seconds||0)-(b.data().startAt?.seconds||0));
+    if(pdocs.length){
+      html+=`<h3 class="serif" style="font-size:18px;margin:22px 0 8px">Your scheduled practice</h3><div class="grid cols-2">`+
+        pdocs.map(d=>{const t=d.data();const open=!t.startAt||t.startAt.toDate().getTime()<=Date.now();const taken=done.has(d.id);
+          return `<div class="card"><h3>${esc(t.title)}</h3>
+            <p class="muted">${examTag(t.exam)} · ${(t.questionIds||[]).length} Q · ${t.duration} min</p>
+            <p class="muted" style="font-size:12.5px">${t.startAt?fmtDate(t.startAt):"anytime"}</p>
+            ${taken?`<button class="btn ghost full" disabled>✓ Done</button>`
+              :open?`<button class="btn full" onclick="startScheduledPractice('${d.id}')">Start</button>`
+              :`<button class="btn ghost full" disabled>Opens ${fmtDate(t.startAt)}</button>`}</div>`;}).join("")+`</div>`;
+    }
+    el("myTests").innerHTML=html||`<div class="card">${emptyState("No tests scheduled","Use the Practice tab to build your own.")}</div>`;
   }catch(e){ el("myTests").innerHTML=errBox(e); }
 }
 function pagePractice(){
   const myExams=examsForStream(ME.stream||"PCM");
   setView(`<h1 class="page-title">Practice</h1>
-    <p class="page-sub">Build your own practice test from the question bank — anytime you like.</p>
-    <div class="card" style="max-width:560px">
-      <div class="grid cols-2"><div><label>Exam</label><select id="pExam">${myExams.map(e=>`<option>${e}</option>`).join("")}</select></div>
-        <div><label>Difficulty</label>${difficultySelect("pDiff",true)}</div></div>
-      <div class="grid cols-2"><div><label>Subject</label><select id="pSubject"></select></div><div><label>Topic</label><select id="pTopic"></select></div></div>
-      <div class="grid cols-2"><div><label>No. of questions (10–90)</label><input id="pCount" type="number" min="10" max="90" value="20"/></div>
-        <div><label>Time limit (min)</label><input id="pDur" type="number" value="15"/></div></div>
+    <p class="page-sub">Build your own practice test — by chapters, a full subject, or a full mock paper. Start now or schedule it for later.</p>
+    <div class="card" style="max-width:600px">
+      <div class="grid cols-2">
+        <div><label>Type</label><select id="pType" onchange="pRebuild()">
+          <option value="chapter">By chapters</option>
+          <option value="subject">Full subject (all chapters)</option>
+          <option value="mock">Full mock paper</option></select></div>
+        <div><label>Exam</label><select id="pExam" onchange="pRebuild()">${myExams.map(e=>`<option>${e}</option>`).join("")}</select></div>
+      </div>
+      <div id="pDyn"></div>
+      <div class="grid cols-2">
+        <div><label>Difficulty</label>${difficultySelect("pDiff",true)}</div>
+        <div><label>Time limit (min)</label><input id="pDur" type="number" value="20"/></div>
+      </div>
+      <label>When</label>
+      <select id="pWhen" onchange="el('pSchedRow').style.display=this.value==='later'?'block':'none'">
+        <option value="now">Start now</option><option value="later">Schedule for later</option></select>
+      <div id="pSchedRow" style="display:none"><label>Date &amp; time</label><input id="pAt" type="datetime-local"/></div>
       <div class="msg" id="pMsg"></div>
-      <button class="btn full" id="pBtn" onclick="startPractice()">Start practice test</button></div>`);
-  fillSubjects("pExam","pSubject",false,ME.stream); fillTopics("pExam",ME.class,"pSubject","pTopic",true);
-  el("pExam").onchange=()=>{fillSubjects("pExam","pSubject",false,ME.stream);fillTopics("pExam",ME.class,"pSubject","pTopic",true);};
-  el("pSubject").onchange=()=>fillTopics("pExam",ME.class,"pSubject","pTopic",true);
+      <button class="btn full" id="pBtn" onclick="startPractice()">Start practice test</button>
+    </div>
+    <div style="max-width:600px;margin-top:22px"><h3 class="serif" style="font-size:18px">Your scheduled practice</h3><div id="pSched" class="muted">Loading…</div></div>`);
+  pRebuild(); loadScheduledPractice();
+}
+function pRebuild(){
+  const type=val("pType"),exam=val("pExam");
+  let html="";
+  if(type==="chapter"){
+    html=`<div><label>Subject</label><select id="pSubj"></select></div>
+      <label>Chapters — tick one or more to merge</label><div class="row" id="pChaps" style="max-height:140px;overflow:auto"></div>
+      <label>Number of questions (10–90)</label><input id="pCount" type="number" min="10" max="90" value="20"/>`;
+  } else if(type==="subject"){
+    html=`<div class="grid cols-2"><div><label>Subject</label><select id="pSubj"></select></div>
+      <div><label>Number of questions (10–90)</label><input id="pCount" type="number" min="10" max="90" value="30"/></div></div>`;
+  } else {
+    const full=EXAMS[exam].full;
+    html=`<div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Full ${esc(exam)} mock: ${Object.entries(full).map(([s,n])=>`${s} ${n}`).join(" · ")} — total <b>${Object.values(full).reduce((a,b)=>a+b,0)}</b> questions from all chapters of Class 11 &amp; 12.</div>`;
+  }
+  el("pDyn").innerHTML=html;
+  if(type==="chapter"){ fillSubjects("pExam","pSubj",false,ME.stream); pFillChaps(); el("pSubj").onchange=pFillChaps; }
+  else if(type==="subject"){ fillSubjects("pExam","pSubj",false,ME.stream); }
+  else { el("pDur").value=EXAMS[exam].fullDuration; }
+}
+function pFillChaps(){
+  const list=topicsFor(val("pExam"),ME.class,val("pSubj"));
+  el("pChaps").innerHTML=list.length
+    ? list.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="pchap" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+    : `<span class="muted">No chapters available yet for this subject.</span>`;
 }
 async function startPractice(){
-  const exam=val("pExam"),subject=val("pSubject"),topic=val("pTopic"),diff=val("pDiff"),count=Math.min(90,Math.max(10,parseInt(val("pCount"))||20));
+  const type=val("pType"),exam=val("pExam"),diff=val("pDiff");
   setBtn("pBtn",true,"Building…");
   try{
-    let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject).where("class","==",ME.class);
-    if(topic!=="any") q=q.where("topic","==",topic);
-    const snap=await q.limit(count*3).get();
-    let docs=snap.docs.filter(d=>!diff||d.data().difficulty===diff);
-    let ids=shuffle(docs.map(d=>d.id)).slice(0,count);
-    if(!ids.length){ setMsg("pMsg","No matching live questions yet. Try another subject/topic.","err"); setBtn("pBtn",false,"Start practice test"); return; }
-    launchExam({id:"practice_"+Date.now(),title:`Practice · ${exam} · ${subject}${topic!=="any"?" · "+topic:""}`,exam,subjects:[subject],questionIds:ids,duration:parseInt(val("pDur"))||15,isPractice:true},true);
+    let questionIds=[],title="",dur=parseInt(val("pDur"))||20;
+    if(type==="chapter"){
+      const subject=val("pSubj"),chapters=[...document.querySelectorAll(".pchap:checked")].map(c=>c.value);
+      const count=Math.min(90,Math.max(10,parseInt(val("pCount"))||20));
+      if(!chapters.length) throw new Error("Tick at least one chapter.");
+      questionIds=await pullQuestions({exam,subject,classes:[ME.class],chapters,count,diff});
+      title=`Practice · ${exam} · ${subject}`;
+    } else if(type==="subject"){
+      const subject=val("pSubj"),count=Math.min(90,Math.max(10,parseInt(val("pCount"))||30));
+      questionIds=await pullQuestions({exam,subject,classes:[ME.class],count,diff});
+      title=`Practice · ${exam} · ${subject} (full)`;
+    } else {
+      const full=EXAMS[exam].full;
+      for(const s of Object.keys(full)){ questionIds.push(...await pullQuestions({exam,subject:s,classes:["11","12"],count:full[s],diff})); }
+      title=`Practice · ${exam} full mock`; dur=EXAMS[exam].fullDuration;
+    }
+    if(!questionIds.length){ setMsg("pMsg","No matching questions in the bank yet for this selection.","err"); setBtn("pBtn",false,"Start practice test"); return; }
+
+    if(val("pWhen")==="later"){
+      if(!val("pAt")){ setMsg("pMsg","Pick a date & time to schedule.","err"); setBtn("pBtn",false,"Start practice test"); return; }
+      await db.collection("practiceTests").add({ownerUid:ME.uid,title,exam,questionIds,duration:dur,
+        startAt:firebase.firestore.Timestamp.fromDate(new Date(val("pAt"))),createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+      setMsg("pMsg",`✓ Scheduled for ${new Date(val("pAt")).toLocaleString()}. It'll appear below and in My tests.`,"ok");
+      setBtn("pBtn",false,"Start practice test"); loadScheduledPractice(); return;
+    }
+    launchExam({id:"practice_"+Date.now(),title,exam,subjects:[],questionIds,duration:dur,isPractice:true},true);
   }catch(e){ setMsg("pMsg",errMsg(e),"err"); setBtn("pBtn",false,"Start practice test"); }
 }
+async function loadScheduledPractice(){
+  try{
+    const snap=await db.collection("practiceTests").where("ownerUid","==",ME.uid).get();
+    const done=new Set((await db.collection("attempts").where("studentUid","==",ME.uid).get()).docs.map(d=>d.data().testId));
+    const docs=snap.docs.sort((a,b)=>(a.data().startAt?.seconds||0)-(b.data().startAt?.seconds||0));
+    if(!docs.length){ el("pSched").innerHTML=`<p class="muted">Nothing scheduled. Use “Schedule for later” above.</p>`; return; }
+    el("pSched").innerHTML=docs.map(d=>{const t=d.data();const now=Date.now();const open=!t.startAt||t.startAt.toDate().getTime()<=now;const taken=done.has(d.id);
+      return `<div class="card" style="margin-bottom:10px"><div class="row" style="justify-content:space-between">
+        <div><b>${esc(t.title)}</b><br><span class="muted" style="font-size:12.5px">${(t.questionIds||[]).length} Q · ${t.duration} min · ${t.startAt?fmtDate(t.startAt):"anytime"}</span></div>
+        ${taken?`<button class="btn ghost sm" disabled>✓ Done</button>`
+          :open?`<button class="btn sm" onclick="startScheduledPractice('${d.id}')">Start</button>`
+          :`<button class="btn ghost sm" disabled>Opens ${fmtDate(t.startAt)}</button>`}
+        <button class="btn ghost sm danger" onclick="delScheduledPractice('${d.id}')">✕</button></div></div>`;}).join("");
+  }catch(e){ el("pSched").innerHTML=errBox(e); }
+}
+async function startScheduledPractice(id){
+  const t=(await db.collection("practiceTests").doc(id).get()).data();
+  launchExam({id,title:t.title,exam:t.exam,subjects:[],questionIds:t.questionIds,duration:t.duration,isPractice:true},true);
+}
+async function delScheduledPractice(id){ if(!confirm("Remove this scheduled practice?"))return; await db.collection("practiceTests").doc(id).delete(); loadScheduledPractice(); }
 async function pageHistory(){
   setView(`<h1 class="page-title">My results</h1><p class="page-sub">Every test you've completed.</p>
     <div class="card"><div id="histList" class="muted">Loading…</div></div>`);
@@ -1120,8 +1279,8 @@ async function pageHistory(){
     const snap=await db.collection("attempts").where("studentUid","==",ME.uid).orderBy("submittedAt","desc").get();
     el("histList").innerHTML=snap.empty?emptyState("No attempts yet","Take a test or practice to see results here.")
       :tableHTML(["Test","Exam","Date","Score","%","Breakdown",""],
-        snap.docs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
-          `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn ghost sm" onclick='reviewAttempt("${d.id}")'>Review</button>`];}));
+        snap.docs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>${a.isPractice?' <span class="tag pending">practice</span>':''}`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+          `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn ghost sm" onclick='reviewAttempt("${d.id}")'>Check answers</button>`];}));
   }catch(e){ el("histList").innerHTML=errBox(e); }
 }
 
@@ -1132,7 +1291,8 @@ let EXAM=null;
 async function startTest(testId){ const doc=await db.collection("tests").doc(testId).get(); launchExam({id:testId,...doc.data()},false); }
 async function launchExam(test,isPractice){
   const qDocs=await Promise.all(test.questionIds.map(id=>db.collection("questions").doc(id).get()));
-  const questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
+  let questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
+  questions=shuffle(questions); // randomised per attempt — no two students see the same order
   if(!questions.length){ alert("This test has no available questions."); return; }
   EXAM={test,questions,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000};
   el("examTitle").textContent=test.title;
@@ -1151,7 +1311,7 @@ function startTimer(){
 function renderQ(){
   const i=EXAM.cur,q=EXAM.questions[i],sel=EXAM.answers[i],m=examMarks(EXAM.test.exam,q.subject);
   el("qCard").innerHTML=`<div class="q-meta">Question ${i+1} of ${EXAM.questions.length} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
-    <p class="q-text">${esc(q.text)}</p>
+    <p class="q-text">${qLabel(q)}</p>
     <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${esc(o)}</div></div>`).join("")}</div>`;
   el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review"; renderPalette();
 }
@@ -1162,23 +1322,28 @@ function renderPalette(){
   el("palette").innerHTML=EXAM.questions.map((_,i)=>{let cls="";if(EXAM.review.has(i))cls="review";else if(EXAM.answers[i]!==undefined)cls="answered";if(i===EXAM.cur)cls+=" cur";
     return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()">${i+1}</button>`;}).join("");
 }
-function confirmSubmit(){ const ans=Object.keys(EXAM.answers).length,tot=EXAM.questions.length; if(confirm(`You've answered ${ans} of ${tot} questions. Submit now?`)) submitExam(false); }
+function confirmSubmit(){
+  const ans=Object.keys(EXAM.answers).length,tot=EXAM.questions.length;
+  confirmModal(`Do you want to submit the test? (${ans} of ${tot} answered)`, ()=>submitExam(false), "Yes, submit");
+}
 async function submitExam(auto){
   clearInterval(EXAM.timerInt);
   const exam=EXAM.test.exam,neg=examNeg(exam);
   let score=0,correct=0,wrong=0,unattempted=0;
+  const order=EXAM.questions.map(q=>q.id);
+  const answers=EXAM.questions.map((q,i)=>EXAM.answers[i]===undefined?null:EXAM.answers[i]);
   EXAM.questions.forEach((q,i)=>{const sel=EXAM.answers[i],m=examMarks(exam,q.subject);
     if(sel===undefined){unattempted++;}
     else if(sel===q.correct){score+=m;correct++;}
     else{score-=neg;wrong++;}});
   const total=EXAM.questions.reduce((s,q)=>s+examMarks(exam,q.subject),0);
-  if(!EXAM.isPractice){
-    try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,studentUid:ME.uid,studentName:ME.name,
-      centreId:ME.centreId,score,total,correct,wrong,unattempted,
+  // every attempt is saved (practice too) so answers can be reviewed later
+  try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,isPractice:!!EXAM.isPractice,
+      studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
+      questionOrder:order,answers,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
-    catch(e){ console.error("attempt save failed",e); }
-  }
+  catch(e){ console.error("attempt save failed",e); }
   showResult({score,total,correct,wrong,unattempted});
 }
 function showResult(r){
@@ -1196,18 +1361,23 @@ function showResult(r){
     <h2 class="serif" style="font-size:22px;margin:8px 0 14px">Detailed solutions</h2><div id="solList"></div>`);
   el("solList").innerHTML=EXAM.questions.map((q,i)=>{const sel=EXAM.answers[i];
     return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${q.subject}${q.topic?" · "+q.topic:""}</div>
-      <p class="q-text" style="font-size:16px;margin:6px 0 14px">${esc(q.text)}</p>
+      <p class="q-text" style="font-size:16px;margin:6px 0 14px">${qLabel(q)}</p>
       ${q.options.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
         return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${esc(o)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
       ${q.solution?`<div class="solution"><b>Solution:</b> ${esc(q.solution)}</div>`:""}</div>`;}).join("");
 }
 async function reviewAttempt(attemptId){
   const a=(await db.collection("attempts").doc(attemptId).get()).data();
-  const t=await db.collection("tests").doc(a.testId).get();
-  if(!t.exists){ alert("Original test not found."); return; }
-  const test={id:a.testId,...t.data()};
-  const qDocs=await Promise.all(test.questionIds.map(id=>db.collection("questions").doc(id).get()));
-  EXAM={test,questions:qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()})),answers:{},isPractice:false};
+  let order=a.questionOrder, answersArr=a.answers;
+  if(!order){ // older attempt without saved order — fall back to the test's question list
+    const t=await db.collection("tests").doc(a.testId).get();
+    if(!t.exists){ alert("Saved answers aren't available for this older attempt."); return; }
+    order=t.data().questionIds;
+  }
+  const qDocs=await Promise.all(order.map(id=>db.collection("questions").doc(id).get()));
+  const questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
+  const answers={}; if(answersArr) answersArr.forEach((v,i)=>{ if(v!==null&&v!==undefined) answers[i]=v; });
+  EXAM={test:{title:a.testTitle,exam:a.exam},questions,answers,isPractice:!!a.isPractice};
   showResult({score:a.score,total:a.total,correct:a.correct,wrong:a.wrong,unattempted:a.unattempted});
 }
 
@@ -1249,6 +1419,8 @@ function modal(html,wide){el("modalBox").className="modal"+(wide?" wide":"");el(
 function closeModal(){el("modalBg").classList.remove("show");}
 function classSelect(id,withAll=true){return `<select id="${id}">${withAll?'<option value="all">All</option>':''}<option value="11">Class 11</option><option value="12">Class 12</option></select>`;}
 function difficultySelect(id,withAny=false){return `<select id="${id}">${withAny?'<option value="">Any</option>':''}${DIFFICULTIES.map(d=>`<option>${d}</option>`).join("")}</select>`;}
+function clsLabel(c){return c==="both"?"11 & 12":c;}
+function testClassMatches(t,cls){return t.class===cls||t.class==="both";}
 function examSelect(id){return `<select id="${id}">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select>`;}
 function fillSubjects(examId,subjId,withAll,stream){
   const exam=val(examId); let subs=stream?EXAMS[exam].streams[stream]||examSubjects(exam):examSubjects(exam);
