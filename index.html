@@ -16,6 +16,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
 
 <style>
 :root{
@@ -171,6 +173,36 @@ tr:last-child td{border-bottom:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 .note{font-size:12.5px;color:var(--warn);background:#f8f1df;border:1px solid #ecdcb4;padding:9px 12px;border-radius:9px;margin-top:10px}
 hr.sep{border:none;border-top:1px solid var(--line);margin:22px 0}
+sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vertical-align:sub;line-height:0}
+.frac{display:inline-flex;flex-direction:column;text-align:center;vertical-align:middle;font-size:.82em;line-height:1.05;margin:0 2px}
+.frac .fnum{border-bottom:1.5px solid currentColor;padding:0 3px}
+.frac .fden{padding:0 3px}
+
+/* ---------- Mobile ---------- */
+@media(max-width:760px){
+  header.top{padding:0 12px;gap:8px;height:auto;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+  header .brand h1{font-size:15px}
+  .whoami{font-size:12px}
+  main.content{padding:16px 14px}
+  .page-title{font-size:22px}
+  .card{padding:16px;overflow-x:auto}
+  table{font-size:13px} th,td{padding:8px 8px}
+  .modal{padding:18px}
+  .exam .ebar{padding:0 12px;gap:10px;height:54px}
+  .exam .ebar h2{font-size:14px}
+  .timer{font-size:18px;padding:4px 10px}
+  .exam-body{flex-direction:column;gap:16px;padding:14px 12px}
+  .q-side{width:100%}
+  .palette{position:static}
+  .pgrid{grid-template-columns:repeat(6,1fr)}
+  .q-card{padding:18px}
+  .q-text{font-size:16px}
+  .opt{padding:12px 13px}
+  .skpis{grid-template-columns:repeat(2,1fr)}
+  .score-hero .big{font-size:48px}
+  .btn{padding:10px 14px}
+  nav.side a{font-size:13.5px;padding:9px 11px}
+}
 </style>
 </head>
 <body>
@@ -276,7 +308,7 @@ function examMarks(exam,subject){return (EXAMS[exam]&&EXAMS[exam].marks[subject]
 function examNeg(exam){return (EXAMS[exam]&&EXAMS[exam].negative)||0;}
 function streamsFor(exam){return Object.keys(EXAMS[exam].streams);}
 function examsForStream(stream){return EXAM_KEYS.filter(k=>EXAMS[k].streams[stream]);}
-function qLabel(q){return esc(q.text)+(q.year?` <b style="color:var(--gold)">(${q.year})</b>`:"");}
+function qLabel(q){return fmtMath(q.text)+(q.year?` <b style="color:var(--gold)">(${q.year})</b>`:"");}
 function confirmModal(message,onYes,yesLabel){
   modal(`<h2 style="font-size:20px">${esc(message)}</h2>
     <div class="row end" style="margin-top:20px;gap:12px">
@@ -286,7 +318,7 @@ function confirmModal(message,onYes,yesLabel){
 }
 function scopeClasses(v){return v==="both"?["11","12"]:[v];}
 // Pull live question IDs for one subject across given classes & chapters.
-async function pullQuestions({exam,subject,classes,chapters,count,diffs}){
+async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerical}){
   let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject);
   if(classes.length===1) q=q.where("class","==",classes[0]);
   const snap=await q.get();
@@ -294,8 +326,65 @@ async function pullQuestions({exam,subject,classes,chapters,count,diffs}){
     if(classes.length>1 && !classes.includes(x.class)) return false;
     if(chapters && chapters.length && !chapters.includes(x.topic)) return false;
     if(diffs && diffs.length && !diffs.includes(x.difficulty)) return false;
+    if(numerical==="only" && !x.numerical) return false;
+    if(numerical==="none" && x.numerical) return false;
     return true;});
   return shuffle(docs.map(d=>d.id)).slice(0,count);
+}
+// distribute a count across difficulty levels by their % weights
+async function pullWeighted(base,count,weights){
+  const levels=Object.keys(weights||{}).filter(l=>weights[l]>0);
+  if(!levels.length||count<=0) return pullQuestions({...base,count});
+  const tot=levels.reduce((a,l)=>a+weights[l],0);
+  let ids=[];
+  for(const l of levels){ const n=Math.round(count*weights[l]/tot); if(n>0) ids=ids.concat(await pullQuestions({...base,count:n,diffs:[l]})); }
+  return shuffle(ids).slice(0,count);
+}
+// handle numerical include/exclude/only/% for Physics & Chemistry, with difficulty weights
+async function pullForSubject({exam,subject,classes,chapters,count,weights,numMode,numPct}){
+  const base={exam,subject,classes,chapters};
+  const isPC=subject==="Physics"||subject==="Chemistry";
+  if(!isPC||!numMode||numMode==="any") return pullWeighted({...base,numerical:"any"},count,weights);
+  if(numMode==="exclude") return pullWeighted({...base,numerical:"none"},count,weights);
+  if(numMode==="only") return pullWeighted({...base,numerical:"only"},count,weights);
+  const numN=Math.round(count*(numPct||0)/100), theoryN=count-numN;
+  const a=await pullWeighted({...base,numerical:"only"},numN,weights);
+  const b=await pullWeighted({...base,numerical:"none"},theoryN,weights);
+  return shuffle(a.concat(b)).slice(0,count);
+}
+function gatherWeights(sel){const w={};document.querySelectorAll(sel).forEach(i=>{const v=parseFloat(i.value)||0; if(v>0) w[i.dataset.level]=v;});return w;}
+function difficultyPctRows(cls){return DIFFICULTIES.map(d=>`<div class="row" style="gap:8px;margin-bottom:4px"><span style="flex:1;font-size:13.5px">${esc(d)}</span><input class="${cls}" data-level="${esc(d)}" type="number" min="0" max="100" value="0" style="width:84px"/><span class="muted" style="font-size:12px">%</span></div>`).join("");}
+function numericalControl(p){return `<label>Numerical questions (Physics &amp; Chemistry only)</label>
+  <select id="${p}Mode" onchange="el('${p}PctRow').style.display=this.value==='include'?'flex':'none'">
+    <option value="any">Include — any mix</option><option value="include">Include — set %</option>
+    <option value="exclude">Exclude numericals</option><option value="only">Only numericals</option></select>
+  <div id="${p}PctRow" class="row" style="display:none;gap:8px;margin-top:6px"><span class="muted" style="font-size:13px">Numerical %</span><input id="${p}Pct" type="number" min="0" max="100" value="30" style="width:84px"/></div>`;}
+// Legacy plain-text math: ^superscripts, _subscripts, simple numeric fractions
+function legacyFmt(s){
+  s=esc(s??"");
+  s=s.replace(/\^\{([^}]+)\}/g,'<sup>$1</sup>').replace(/\^\(([^)]+)\)/g,'<sup>$1</sup>').replace(/\^(-?[0-9]+|-?[A-Za-z])/g,'<sup>$1</sup>');
+  s=s.replace(/_\{([^}]+)\}/g,'<sub>$1</sub>').replace(/_\(([^)]+)\)/g,'<sub>$1</sub>').replace(/_([0-9]+|[A-Za-z])/g,'<sub>$1</sub>');
+  s=s.replace(/(\d+)\s*\/\s*(\d+)/g,'<span class="frac"><span class="fnum">$1</span><span class="fden">$2</span></span>');
+  return s;
+}
+// Full math: renders LaTeX in \(...\), \[...\], $$...$$, $...$ with KaTeX; plain text via legacyFmt
+function fmtMath(s){
+  if(s==null) return "";
+  s=String(s);
+  const parts=s.split(/(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g);
+  return parts.map(p=>{
+    if(!p) return "";
+    let tex=null,display=false;
+    if(p.startsWith("\\[")&&p.endsWith("\\]")){tex=p.slice(2,-2);display=true;}
+    else if(p.startsWith("\\(")&&p.endsWith("\\)")){tex=p.slice(2,-2);}
+    else if(p.startsWith("$$")&&p.endsWith("$$")&&p.length>=4){tex=p.slice(2,-2);display=true;}
+    else if(p.startsWith("$")&&p.endsWith("$")&&p.length>=2){tex=p.slice(1,-1);}
+    if(tex!=null){
+      if(window.katex){ try{ return katex.renderToString(tex,{throwOnError:false,displayMode:display}); }catch(e){ return legacyFmt(p); } }
+      return legacyFmt(tex);
+    }
+    return legacyFmt(p);
+  }).join("");
 }
 
 const CENTRES = [
@@ -542,7 +631,7 @@ async function saveDrafts(items,meta){
   const batch=db.batch();
   items.forEach(it=>{const ref=db.collection("questions").doc();
     batch.set(ref,{exam:meta.exam,subject:meta.subject,topic:meta.topic,class:meta.cls,difficulty:meta.difficulty,
-      text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,year:it.year||null,
+      text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,year:it.year||null,numerical:!!it.isNumerical,
       status:"pending",source:"ai",createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
       createdAt:firebase.firestore.FieldValue.serverTimestamp()});});
   await batch.commit();
@@ -619,6 +708,7 @@ function openManualQ(){
     <label>Solution / explanation</label><textarea id="mSol" rows="3" placeholder="Step-by-step solution shown after the test…"></textarea>
     <label>Difficulty</label>${difficultySelect("mDiff")}
     <label>Year (only for Previous Year questions — optional)</label><input id="mYear" type="number" placeholder="e.g. 2019"/>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" id="mNum" style="width:auto"/> This is a numerical (calculation) question</label>
     <div class="msg" id="mMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="mSaveBtn" onclick="saveManualQ()">Save to bank (live)</button></div>`);
@@ -634,7 +724,7 @@ async function saveManualQ(){
   setBtn("mSaveBtn",true,"Saving…");
   try{
     await db.collection("questions").add({exam:val("mExam"),subject:val("mSubject"),topic:val("mTopic"),class:val("mClass"),
-      difficulty:val("mDiff"),year:val("mYear")?parseInt(val("mYear")):null,text,options:opts,correct,solution:val("mSol").trim(),status:"live",source:"manual",
+      difficulty:val("mDiff"),year:val("mYear")?parseInt(val("mYear")):null,numerical:el("mNum").checked,text,options:opts,correct,solution:val("mSol").trim(),status:"live",source:"manual",
       createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     closeModal(); if(CURRENT_PAGE==="questions") loadQuestions();
   }catch(e){ setMsg("mMsg",errMsg(e),"err"); setBtn("mSaveBtn",false,"Save to bank (live)"); }
@@ -717,10 +807,11 @@ function parseQuestionsFromText(raw,defaults){
       if(k==="EXAM")ctx.exam=v; else if(k==="SUBJECT")ctx.subject=v;
       else if(k==="CLASS")ctx.cls=(v.match(/\d+/)||[v])[0]; else if(k==="TOPIC")ctx.topic=v; else if(k==="DIFFICULTY")ctx.difficulty=v; continue; }
     if(m=line.match(qRe)){ push();
-      cur={exam:ctx.exam,subject:ctx.subject,class:ctx.cls,topic:ctx.topic,difficulty:ctx.difficulty,year:null,text:m[1]||"",options:["","","",""],correct:null,solution:""}; mode="q"; continue; }
+      cur={exam:ctx.exam,subject:ctx.subject,class:ctx.cls,topic:ctx.topic,difficulty:ctx.difficulty,year:null,numerical:false,text:m[1]||"",options:["","","",""],correct:null,solution:""}; mode="q"; continue; }
     if(cur&&(m=line.match(optRe))){ const i="ABCD".indexOf(m[1].toUpperCase()); if(i>=0)cur.options[i]=m[2]; mode="opt"; continue; }
     if(cur&&(m=line.match(ansRe))){ const a=m[1].toUpperCase(); cur.correct="ABCD".includes(a)?"ABCD".indexOf(a):(parseInt(a)-1); if(cur.correct<0||cur.correct>3)cur.correct=null; mode="ans"; continue; }
     if(cur&&(m=line.match(yearRe))){ cur.year=parseInt(m[1]); mode="year"; continue; }
+    if(cur&&/^NUMERICAL\s*[:\-]/i.test(line)){ cur.numerical=/\b(yes|true|y|1)\b/i.test(line); mode="num"; continue; }
     if(cur&&(m=line.match(solRe))){ cur.solution=m[1]||""; mode="sol"; continue; }
     if(cur){ if(mode==="sol")cur.solution+=(cur.solution?" ":"")+line; else if(mode==="q")cur.text+=(cur.text?" ":"")+line; }
   }
@@ -734,7 +825,7 @@ async function doImport(){
       const chunk=ok.slice(i,i+400), batch=db.batch();
       chunk.forEach(q=>{ const ref=db.collection("questions").doc();
         batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.class,difficulty:q.difficulty,
-          text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:q.year||null,status:"live",source:"upload",
+          text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:q.year||null,numerical:!!q.numerical,status:"live",source:"upload",
           createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
       await batch.commit();
     }
@@ -776,10 +867,10 @@ async function approveAll(){
 }
 function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
-    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''}</div>
-    <p class="q-text" style="font-size:16px;margin:12px 0">${esc(x.text)}</p>
-    <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${esc(o)}</div></div>`).join("")}</div>
-    ${x.solution?`<div class="solution"><b>Solution:</b> ${esc(x.solution)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
+    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''}</div>
+    <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text)}</p>
+    <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o)}</div></div>`).join("")}</div>
+    ${x.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(x.solution)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
     <div class="row end" style="margin-top:14px"><button class="btn danger sm" onclick="rejectQ('${id}')">Reject</button>
       <button class="btn ghost sm" onclick="editReviewQ('${id}')">Edit</button>
       <button class="btn sm" onclick="approveQ('${id}')">✓ Approve &amp; go live</button></div></div>`;
@@ -905,8 +996,9 @@ function openCreateTest(){
       <div><label>Exam</label><select id="tExam" onchange="tRebuild()">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
     </div>
     <div id="tDyn"></div>
-    <label>Difficulty levels — tick any to include (leave all blank for any level)</label>
-    <div class="row" id="tDiffs" style="margin-bottom:6px">${difficultyChecks("tdiff")}</div>
+    <label>Difficulty mix — set % per level (leave all 0 for any mix)</label>
+    <div id="tDiffs" style="margin-bottom:6px">${difficultyPctRows("tdiffpct")}</div>
+    ${numericalControl("tNum")}
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="tDur" type="number" value="30"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="tScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="tStart" type="datetime-local"/></div><div><label>Closes</label><input id="tEnd" type="datetime-local"/></div></div>
@@ -950,24 +1042,24 @@ async function createTest(){
   if(!title) return setMsg("tMsg","Add a title.","err");
   setBtn("tSaveBtn",true,"Building…");
   try{
-    const diffs=[...document.querySelectorAll(".tdiff:checked")].map(c=>c.value);
+    const weights=gatherWeights(".tdiffpct"), numMode=val("tNumMode"), numPct=parseFloat(val("tNumPct"))||0;
     let questionIds=[],subjects=[],cls="",short=[];
     if(type==="chapter"){
       const subject=val("tSubj"),chapters=[...document.querySelectorAll(".tchap:checked")].map(c=>c.value);
       const count=Math.max(1,parseInt(val("tQcount"))||20);
       if(!chapters.length) throw new Error("Tick at least one chapter.");
-      questionIds=await pullQuestions({exam,subject,classes:[val("tCls")],chapters,count,diffs});
+      questionIds=await pullForSubject({exam,subject,classes:[val("tCls")],chapters,count,weights,numMode,numPct});
       if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
       subjects=[subject]; cls=val("tCls");
     } else if(type==="subject"){
       const subject=val("tSubj"),classes=scopeClasses(val("tScopeCls")),count=Math.max(1,parseInt(val("tQcount"))||30);
-      questionIds=await pullQuestions({exam,subject,classes,count,diffs});
+      questionIds=await pullForSubject({exam,subject,classes,count,weights,numMode,numPct});
       if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
       subjects=[subject]; cls=val("tScopeCls");
     } else {
       const classes=scopeClasses(val("tScopeCls")),full=EXAMS[exam].full;
       for(const s of Object.keys(full)){
-        const ids=await pullQuestions({exam,subject:s,classes,count:full[s],diffs});
+        const ids=await pullForSubject({exam,subject:s,classes,count:full[s],weights,numMode,numPct});
         if(ids.length<full[s]) short.push(`${s}: ${ids.length}/${full[s]}`);
         questionIds.push(...ids); subjects.push(s);
       }
@@ -1256,8 +1348,9 @@ function pagePractice(){
         <div><label>Exam</label><select id="pExam" onchange="pRebuild()">${myExams.map(e=>`<option>${e}</option>`).join("")}</select></div>
       </div>
       <div id="pDyn"></div>
-      <label>Difficulty levels — tick any to include (leave all blank for any level)</label>
-      <div class="row" id="pDiffs" style="margin-bottom:6px">${difficultyChecks("pdiff")}</div>
+      <label>Difficulty mix — set % per level (leave all 0 for any mix)</label>
+      <div id="pDiffs" style="margin-bottom:6px">${difficultyPctRows("pdiffpct")}</div>
+      ${numericalControl("pNum")}
       <label>Time limit (min)</label><input id="pDur" type="number" value="20"/>
       <label>When</label>
       <select id="pWhen" onchange="el('pSchedRow').style.display=this.value==='later'?'block':'none'">
@@ -1295,7 +1388,7 @@ function pFillChaps(){
     : `<span class="muted">No chapters available yet for this subject.</span>`;
 }
 async function startPractice(){
-  const type=val("pType"),exam=val("pExam"),diffs=[...document.querySelectorAll(".pdiff:checked")].map(c=>c.value);
+  const type=val("pType"),exam=val("pExam"),weights=gatherWeights(".pdiffpct"),numMode=val("pNumMode"),numPct=parseFloat(val("pNumPct"))||0;
   setBtn("pBtn",true,"Building…");
   try{
     let questionIds=[],title="",dur=parseInt(val("pDur"))||20;
@@ -1303,15 +1396,15 @@ async function startPractice(){
       const subject=val("pSubj"),chapters=[...document.querySelectorAll(".pchap:checked")].map(c=>c.value);
       const count=Math.min(90,Math.max(10,parseInt(val("pCount"))||20));
       if(!chapters.length) throw new Error("Tick at least one chapter.");
-      questionIds=await pullQuestions({exam,subject,classes:[ME.class],chapters,count,diffs});
+      questionIds=await pullForSubject({exam,subject,classes:[ME.class],chapters,count,weights,numMode,numPct});
       title=`Practice · ${exam} · ${subject}`;
     } else if(type==="subject"){
       const subject=val("pSubj"),count=Math.min(90,Math.max(10,parseInt(val("pCount"))||30));
-      questionIds=await pullQuestions({exam,subject,classes:[ME.class],count,diffs});
+      questionIds=await pullForSubject({exam,subject,classes:[ME.class],count,weights,numMode,numPct});
       title=`Practice · ${exam} · ${subject} (full)`;
     } else {
       const full=EXAMS[exam].full;
-      for(const s of Object.keys(full)){ questionIds.push(...await pullQuestions({exam,subject:s,classes:["11","12"],count:full[s],diffs})); }
+      for(const s of Object.keys(full)){ questionIds.push(...await pullForSubject({exam,subject:s,classes:["11","12"],count:full[s],weights,numMode,numPct})); }
       title=`Practice · ${exam} full mock`; dur=EXAMS[exam].fullDuration;
     }
     if(!questionIds.length){ setMsg("pMsg","No matching questions in the bank yet for this selection.","err"); setBtn("pBtn",false,"Start practice test"); return; }
@@ -1386,7 +1479,7 @@ function renderQ(){
   const i=EXAM.cur,q=EXAM.questions[i],sel=EXAM.answers[i],m=examMarks(EXAM.test.exam,q.subject);
   el("qCard").innerHTML=`<div class="q-meta">Question ${i+1} of ${EXAM.questions.length} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
     <p class="q-text">${qLabel(q)}</p>
-    <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${esc(o)}</div></div>`).join("")}</div>`;
+    <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o)}</div></div>`).join("")}</div>`;
   el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review"; renderPalette();
 }
 function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
@@ -1437,8 +1530,8 @@ function showResult(r){
     return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${q.subject}${q.topic?" · "+q.topic:""}</div>
       <p class="q-text" style="font-size:16px;margin:6px 0 14px">${qLabel(q)}</p>
       ${q.options.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
-        return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${esc(o)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
-      ${q.solution?`<div class="solution"><b>Solution:</b> ${esc(q.solution)}</div>`:""}</div>`;}).join("");
+        return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
+      ${q.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(q.solution)}</div>`:""}</div>`;}).join("");
 }
 async function reviewAttempt(attemptId){
   const a=(await db.collection("attempts").doc(attemptId).get()).data();
