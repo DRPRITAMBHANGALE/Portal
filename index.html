@@ -286,14 +286,14 @@ function confirmModal(message,onYes,yesLabel){
 }
 function scopeClasses(v){return v==="both"?["11","12"]:[v];}
 // Pull live question IDs for one subject across given classes & chapters.
-async function pullQuestions({exam,subject,classes,chapters,count,diff}){
+async function pullQuestions({exam,subject,classes,chapters,count,diffs}){
   let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject);
   if(classes.length===1) q=q.where("class","==",classes[0]);
   const snap=await q.get();
   let docs=snap.docs.filter(d=>{const x=d.data();
     if(classes.length>1 && !classes.includes(x.class)) return false;
     if(chapters && chapters.length && !chapters.includes(x.topic)) return false;
-    if(diff && x.difficulty!==diff) return false;
+    if(diffs && diffs.length && !diffs.includes(x.difficulty)) return false;
     return true;});
   return shuffle(docs.map(d=>d.id)).slice(0,count);
 }
@@ -905,6 +905,8 @@ function openCreateTest(){
       <div><label>Exam</label><select id="tExam" onchange="tRebuild()">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
     </div>
     <div id="tDyn"></div>
+    <label>Difficulty levels — tick any to include (leave all blank for any level)</label>
+    <div class="row" id="tDiffs" style="margin-bottom:6px">${difficultyChecks("tdiff")}</div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="tDur" type="number" value="30"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="tScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="tStart" type="datetime-local"/></div><div><label>Closes</label><input id="tEnd" type="datetime-local"/></div></div>
@@ -948,23 +950,24 @@ async function createTest(){
   if(!title) return setMsg("tMsg","Add a title.","err");
   setBtn("tSaveBtn",true,"Building…");
   try{
+    const diffs=[...document.querySelectorAll(".tdiff:checked")].map(c=>c.value);
     let questionIds=[],subjects=[],cls="",short=[];
     if(type==="chapter"){
       const subject=val("tSubj"),chapters=[...document.querySelectorAll(".tchap:checked")].map(c=>c.value);
       const count=Math.max(1,parseInt(val("tQcount"))||20);
       if(!chapters.length) throw new Error("Tick at least one chapter.");
-      questionIds=await pullQuestions({exam,subject,classes:[val("tCls")],chapters,count});
+      questionIds=await pullQuestions({exam,subject,classes:[val("tCls")],chapters,count,diffs});
       if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
       subjects=[subject]; cls=val("tCls");
     } else if(type==="subject"){
       const subject=val("tSubj"),classes=scopeClasses(val("tScopeCls")),count=Math.max(1,parseInt(val("tQcount"))||30);
-      questionIds=await pullQuestions({exam,subject,classes,count});
+      questionIds=await pullQuestions({exam,subject,classes,count,diffs});
       if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
       subjects=[subject]; cls=val("tScopeCls");
     } else {
       const classes=scopeClasses(val("tScopeCls")),full=EXAMS[exam].full;
       for(const s of Object.keys(full)){
-        const ids=await pullQuestions({exam,subject:s,classes,count:full[s]});
+        const ids=await pullQuestions({exam,subject:s,classes,count:full[s],diffs});
         if(ids.length<full[s]) short.push(`${s}: ${ids.length}/${full[s]}`);
         questionIds.push(...ids); subjects.push(s);
       }
@@ -1253,10 +1256,9 @@ function pagePractice(){
         <div><label>Exam</label><select id="pExam" onchange="pRebuild()">${myExams.map(e=>`<option>${e}</option>`).join("")}</select></div>
       </div>
       <div id="pDyn"></div>
-      <div class="grid cols-2">
-        <div><label>Difficulty</label>${difficultySelect("pDiff",true)}</div>
-        <div><label>Time limit (min)</label><input id="pDur" type="number" value="20"/></div>
-      </div>
+      <label>Difficulty levels — tick any to include (leave all blank for any level)</label>
+      <div class="row" id="pDiffs" style="margin-bottom:6px">${difficultyChecks("pdiff")}</div>
+      <label>Time limit (min)</label><input id="pDur" type="number" value="20"/>
       <label>When</label>
       <select id="pWhen" onchange="el('pSchedRow').style.display=this.value==='later'?'block':'none'">
         <option value="now">Start now</option><option value="later">Schedule for later</option></select>
@@ -1293,7 +1295,7 @@ function pFillChaps(){
     : `<span class="muted">No chapters available yet for this subject.</span>`;
 }
 async function startPractice(){
-  const type=val("pType"),exam=val("pExam"),diff=val("pDiff");
+  const type=val("pType"),exam=val("pExam"),diffs=[...document.querySelectorAll(".pdiff:checked")].map(c=>c.value);
   setBtn("pBtn",true,"Building…");
   try{
     let questionIds=[],title="",dur=parseInt(val("pDur"))||20;
@@ -1301,15 +1303,15 @@ async function startPractice(){
       const subject=val("pSubj"),chapters=[...document.querySelectorAll(".pchap:checked")].map(c=>c.value);
       const count=Math.min(90,Math.max(10,parseInt(val("pCount"))||20));
       if(!chapters.length) throw new Error("Tick at least one chapter.");
-      questionIds=await pullQuestions({exam,subject,classes:[ME.class],chapters,count,diff});
+      questionIds=await pullQuestions({exam,subject,classes:[ME.class],chapters,count,diffs});
       title=`Practice · ${exam} · ${subject}`;
     } else if(type==="subject"){
       const subject=val("pSubj"),count=Math.min(90,Math.max(10,parseInt(val("pCount"))||30));
-      questionIds=await pullQuestions({exam,subject,classes:[ME.class],count,diff});
+      questionIds=await pullQuestions({exam,subject,classes:[ME.class],count,diffs});
       title=`Practice · ${exam} · ${subject} (full)`;
     } else {
       const full=EXAMS[exam].full;
-      for(const s of Object.keys(full)){ questionIds.push(...await pullQuestions({exam,subject:s,classes:["11","12"],count:full[s],diff})); }
+      for(const s of Object.keys(full)){ questionIds.push(...await pullQuestions({exam,subject:s,classes:["11","12"],count:full[s],diffs})); }
       title=`Practice · ${exam} full mock`; dur=EXAMS[exam].fullDuration;
     }
     if(!questionIds.length){ setMsg("pMsg","No matching questions in the bank yet for this selection.","err"); setBtn("pBtn",false,"Start practice test"); return; }
@@ -1491,6 +1493,7 @@ function modal(html,wide){el("modalBox").className="modal"+(wide?" wide":"");el(
 function closeModal(){el("modalBg").classList.remove("show");}
 function classSelect(id,withAll=true){return `<select id="${id}">${withAll?'<option value="all">All</option>':''}<option value="11">Class 11</option><option value="12">Class 12</option></select>`;}
 function difficultySelect(id,withAny=false){return `<select id="${id}">${withAny?'<option value="">Any</option>':''}${DIFFICULTIES.map(d=>`<option>${d}</option>`).join("")}</select>`;}
+function difficultyChecks(cls){return DIFFICULTIES.map(d=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="${cls}" value="${esc(d)}" style="width:auto"/> ${esc(d)}</label>`).join("");}
 function clsLabel(c){return c==="both"?"11 & 12":c;}
 function testClassMatches(t,cls){return t.class===cls||t.class==="both";}
 function examSelect(id){return `<select id="${id}">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select>`;}
