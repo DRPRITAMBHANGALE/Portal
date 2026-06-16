@@ -177,6 +177,7 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
 .frac{display:inline-flex;flex-direction:column;text-align:center;vertical-align:middle;font-size:.82em;line-height:1.05;margin:0 2px}
 .frac .fnum{border-bottom:1.5px solid currentColor;padding:0 3px}
 .frac .fden{padding:0 3px}
+.rad{border-top:1.5px solid currentColor;padding:0 2px;margin-left:1px}
 
 /* ---------- Mobile ---------- */
 @media(max-width:760px){
@@ -308,7 +309,7 @@ function examMarks(exam,subject){return (EXAMS[exam]&&EXAMS[exam].marks[subject]
 function examNeg(exam){return (EXAMS[exam]&&EXAMS[exam].negative)||0;}
 function streamsFor(exam){return Object.keys(EXAMS[exam].streams);}
 function examsForStream(stream){return EXAM_KEYS.filter(k=>EXAMS[k].streams[stream]);}
-function qLabel(q){return fmtMath(q.text)+(q.year?` <b style="color:var(--gold)">(${q.year})</b>`:"");}
+function qLabel(q){return fmtMath(q.text,q.subject)+(q.year?` <b style="color:var(--gold)">(${q.year})</b>`:"");}
 function confirmModal(message,onYes,yesLabel){
   modal(`<h2 style="font-size:20px">${esc(message)}</h2>
     <div class="row end" style="margin-top:20px;gap:12px">
@@ -359,16 +360,43 @@ function numericalControl(p){return `<label>Numerical questions (Physics &amp; C
     <option value="any">Include — any mix</option><option value="include">Include — set %</option>
     <option value="exclude">Exclude numericals</option><option value="only">Only numericals</option></select>
   <div id="${p}PctRow" class="row" style="display:none;gap:8px;margin-top:6px"><span class="muted" style="font-size:13px">Numerical %</span><input id="${p}Pct" type="number" min="0" max="100" value="30" style="width:84px"/></div>`;}
-// Legacy plain-text math: ^superscripts, _subscripts, simple numeric fractions
-function legacyFmt(s){
+// Convert sqrt(...) / cbrt(...) to a real radical (√ glyph + overlined content), handling nesting
+function radicals(s){
+  const re=/(sqrt|cbrt)\s*\(/i; let m;
+  while((m=s.match(re))){
+    const start=m.index, open=start+m[0].length-1;
+    let depth=0,j=open;
+    for(;j<s.length;j++){const c=s[j]; if(c==="(")depth++; else if(c===")"){depth--; if(depth===0)break;}}
+    const inner=s.slice(open+1,j);
+    const sym=/cbrt/i.test(m[1])?"∛":"√";
+    s=s.slice(0,start)+sym+'<span class="rad">'+radicals(inner)+'</span>'+s.slice(j+1);
+  }
+  return s;
+}
+const GREEK={alpha:"α",beta:"β",gamma:"γ",delta:"δ",Delta:"Δ",epsilon:"ε",theta:"θ",Theta:"Θ",kappa:"κ",lambda:"λ",mu:"μ",nu:"ν",xi:"ξ",pi:"π",Pi:"Π",rho:"ρ",sigma:"σ",Sigma:"Σ",tau:"τ",phi:"φ",Phi:"Φ",chi:"χ",psi:"ψ",omega:"ω",Omega:"Ω"};
+// Smart formatter for PLAIN-TEXT questions (no LaTeX): radicals, symbols, chemistry, powers, fractions
+function prettyPlain(s,subject){
   s=esc(s??"");
-  s=s.replace(/\^\{([^}]+)\}/g,'<sup>$1</sup>').replace(/\^\(([^)]+)\)/g,'<sup>$1</sup>').replace(/\^(-?[0-9]+|-?[A-Za-z])/g,'<sup>$1</sup>');
+  s=radicals(s);
+  s=s.replace(/\bintegral\s+integral\b/gi,"integral").replace(/\bintegral\b/gi,"∫");
+  s=s.replace(/\*/g,"·");
+  s=s.replace(/<=/g,"≤").replace(/>=/g,"≥").replace(/!=/g,"≠").replace(/\+-|-\+/g,"±").replace(/\b(infinity|infty)\b/gi,"∞").replace(/->/g,"→");
+  s=s.replace(/\b(alpha|beta|gamma|delta|Delta|epsilon|theta|Theta|kappa|lambda|mu|nu|xi|pi|Pi|rho|sigma|Sigma|tau|phi|Phi|chi|psi|omega|Omega)\b/g,m=>GREEK[m]||m);
+  const chem=(subject==="Chemistry"||subject==="Biology"||subject==="Botany"||subject==="Zoology");
+  if(chem){
+    s=s.replace(/([A-Za-z\)\]])(\d*)([+\-])(?=$|[\s,.\)\]\}])/g,'$1<sup>$2$3</sup>'); // ionic charges e.g. Cu2+
+    s=s.replace(/([A-Za-z\)\]])(\d+)/g,'$1<sub>$2</sub>');                            // formula subscripts e.g. MnO2
+  }
+  s=s.replace(/\^\{([^}]+)\}/g,'<sup>$1</sup>').replace(/\^\(([^)]+)\)/g,'<sup>$1</sup>')
+     .replace(/\^([0-9]+[+\-])(?=$|[\s,.\)\]\}])/g,'<sup>$1</sup>')
+     .replace(/\^([+\-])(?=$|[\s,.\)\]\}])/g,'<sup>$1</sup>')
+     .replace(/\^(-?[0-9]+|-?[A-Za-z])/g,'<sup>$1</sup>');
   s=s.replace(/_\{([^}]+)\}/g,'<sub>$1</sub>').replace(/_\(([^)]+)\)/g,'<sub>$1</sub>').replace(/_([0-9]+|[A-Za-z])/g,'<sub>$1</sub>');
   s=s.replace(/(\d+)\s*\/\s*(\d+)/g,'<span class="frac"><span class="fnum">$1</span><span class="fden">$2</span></span>');
   return s;
 }
-// Full math: renders LaTeX in \(...\), \[...\], $$...$$, $...$ with KaTeX; plain text via legacyFmt
-function fmtMath(s){
+// Full math: renders LaTeX in \(...\), \[...\], $$...$$, $...$ with KaTeX; plain text via prettyPlain
+function fmtMath(s,subject){
   if(s==null) return "";
   s=String(s);
   const parts=s.split(/(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g);
@@ -380,10 +408,10 @@ function fmtMath(s){
     else if(p.startsWith("$$")&&p.endsWith("$$")&&p.length>=4){tex=p.slice(2,-2);display=true;}
     else if(p.startsWith("$")&&p.endsWith("$")&&p.length>=2){tex=p.slice(1,-1);}
     if(tex!=null){
-      if(window.katex){ try{ return katex.renderToString(tex,{throwOnError:false,displayMode:display}); }catch(e){ return legacyFmt(p); } }
-      return legacyFmt(tex);
+      if(window.katex){ try{ return katex.renderToString(tex,{throwOnError:false,displayMode:display}); }catch(e){ return prettyPlain(p,subject); } }
+      return prettyPlain(tex,subject);
     }
-    return legacyFmt(p);
+    return prettyPlain(p,subject);
   }).join("");
 }
 
@@ -868,9 +896,9 @@ async function approveAll(){
 function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
     <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''}</div>
-    <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text)}</p>
-    <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o)}</div></div>`).join("")}</div>
-    ${x.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(x.solution)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
+    <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text,x.subject)}</p>
+    <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o,x.subject)}</div></div>`).join("")}</div>
+    ${x.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(x.solution,x.subject)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
     <div class="row end" style="margin-top:14px"><button class="btn danger sm" onclick="rejectQ('${id}')">Reject</button>
       <button class="btn ghost sm" onclick="editReviewQ('${id}')">Edit</button>
       <button class="btn sm" onclick="approveQ('${id}')">✓ Approve &amp; go live</button></div></div>`;
@@ -1479,7 +1507,7 @@ function renderQ(){
   const i=EXAM.cur,q=EXAM.questions[i],sel=EXAM.answers[i],m=examMarks(EXAM.test.exam,q.subject);
   el("qCard").innerHTML=`<div class="q-meta">Question ${i+1} of ${EXAM.questions.length} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
     <p class="q-text">${qLabel(q)}</p>
-    <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o)}</div></div>`).join("")}</div>`;
+    <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
   el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review"; renderPalette();
 }
 function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
@@ -1530,8 +1558,8 @@ function showResult(r){
     return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${q.subject}${q.topic?" · "+q.topic:""}</div>
       <p class="q-text" style="font-size:16px;margin:6px 0 14px">${qLabel(q)}</p>
       ${q.options.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
-        return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
-      ${q.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(q.solution)}</div>`:""}</div>`;}).join("");
+        return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
+      ${q.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(q.solution,q.subject)}</div>`:""}</div>`;}).join("");
 }
 async function reviewAttempt(attemptId){
   const a=(await db.collection("attempts").doc(attemptId).get()).data();
