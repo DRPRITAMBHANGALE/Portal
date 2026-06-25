@@ -1041,13 +1041,14 @@ function pagePapers(){
       <label>Time allowed (minutes, shown on paper)</label><input id="ppTime" type="number" value="60"/>
       <div class="msg" id="ppMsg"></div>
       <div class="row" style="gap:10px;margin-top:6px">
-        <button class="btn" id="ppBtnQ" onclick="generatePaper(false)">Question paper</button>
-        <button class="btn gold" id="ppBtnS" onclick="generatePaper(true)">Solutions sheet</button>
+        <button class="btn" id="ppBtnQ" onclick="generatePaper()">Generate question paper</button>
+        <button class="btn gold" id="ppBtnS" onclick="openSolutions()" style="display:none">Open solutions for this paper</button>
       </div>
     </div>`);
   ppRebuild();
 }
 function ppRebuild(){
+  LAST_PAPER=null; const sb=el("ppBtnS"); if(sb) sb.style.display="none";
   const type=val("ppType"),exam=val("ppExam");
   let html="";
   if(type==="chapter"){
@@ -1074,10 +1075,11 @@ function ppFillChaps(){
     : `<span class="muted">No chapters saved — add them in Syllabus first.</span>`;
 }
 async function fetchQs(ids){ const docs=await Promise.all(ids.map(id=>db.collection("questions").doc(id).get())); return docs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()})); }
-async function generatePaper(withSolutions){
-  const type=val("ppType"),exam=val("ppExam"),btn=withSolutions?"ppBtnS":"ppBtnQ";
+let LAST_PAPER=null;
+async function generatePaper(){
+  const type=val("ppType"),exam=val("ppExam");
   const weights=gatherWeights(".ppdiffpct"),numMode=val("ppNumMode"),numPct=parseFloat(val("ppNumPct"))||0;
-  setBtn(btn,true,"Building…");
+  setBtn("ppBtnQ",true,"Building…");
   try{
     let groups=[],short=[],cls="";
     if(type==="chapter"){
@@ -1104,11 +1106,16 @@ async function generatePaper(withSolutions){
     const total=groups.reduce((a,g)=>a+g.qs.length,0);
     if(!total) throw new Error("No matching questions in the bank yet for this selection.");
     const meta={title:val("ppTitle").trim()||"Practice Paper",exam,cls,time:parseInt(val("ppTime"))||60};
-    openPaperWindow(buildPaperDoc(meta,groups,withSolutions));
-    setBtn(btn,false,withSolutions?"Solutions sheet":"Question paper");
-    if(short.length) setMsg("ppMsg","Note — fewer questions than requested for: "+short.join(", ")+". Generate more to fill.","err");
-    else setMsg("ppMsg",`✓ Built ${total} question${total===1?"":"s"}. Use your browser’s “Save as PDF”.`,"ok");
-  }catch(e){ setMsg("ppMsg",errMsg(e),"err"); setBtn(btn,false,withSolutions?"Solutions sheet":"Question paper"); }
+    LAST_PAPER={meta,groups};
+    openPaperWindow(buildPaperDoc(meta,groups,false));
+    el("ppBtnS").style.display="inline-flex";
+    setBtn("ppBtnQ",false,"Generate question paper");
+    setMsg("ppMsg",`✓ Built ${total} question${total===1?"":"s"}. The question paper opened in a new tab — now click “Open solutions” for the matching answer key.`+(short.length?" Note — fewer than requested for: "+short.join(", ")+".":""), short.length?"err":"ok");
+  }catch(e){ setMsg("ppMsg",errMsg(e),"err"); setBtn("ppBtnQ",false,"Generate question paper"); }
+}
+function openSolutions(){
+  if(!LAST_PAPER){ setMsg("ppMsg","Generate the question paper first — then its solutions will match exactly.","err"); return; }
+  openPaperWindow(buildPaperDoc(LAST_PAPER.meta,LAST_PAPER.groups,true));
 }
 function buildPaperDoc(meta,groups,withSolutions){
   const marks=EXAMS[meta.exam], total=groups.reduce((a,g)=>a+g.qs.reduce((s,q)=>s+examMarks(meta.exam,q.subject),0),0);
