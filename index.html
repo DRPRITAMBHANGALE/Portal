@@ -645,8 +645,15 @@ function openAIGen(){
   el("gSubject").onchange=()=>fillTopics("gExam",val("gClass"),"gSubject","gTopic");
 }
 async function aiGenerate(payload){
+  if(!AI_FUNCTION_URL || AI_FUNCTION_URL.startsWith("PASTE"))
+    throw new Error("AI function link is not set. In index.html, AI_FUNCTION_URL is still blank/placeholder — paste your function URL and re-upload to GitHub.");
   const token=await auth.currentUser.getIdToken();
-  const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
+  let res;
+  try{
+    res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
+  }catch(err){
+    throw new Error("Couldn't reach the AI function (network/CORS). Check: (1) the function is deployed, (2) AI_FUNCTION_URL is exactly its URL, (3) the function allows public access. URL tried: "+AI_FUNCTION_URL);
+  }
   if(!res.ok){ let m="server returned "+res.status; try{const j=await res.json(); if(j&&(j.message||j.error)) m=j.message||j.error;}catch(_){} throw new Error(m); }
   const data=await res.json(); return data.questions||[];
 }
