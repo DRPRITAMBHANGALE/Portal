@@ -140,6 +140,10 @@ tr:last-child td{border-bottom:none}
 .q-text{font-size:18px;line-height:1.55;margin:0 0 22px;font-weight:500}
 .opt{display:flex;gap:13px;align-items:flex-start;padding:14px 16px;border:1.5px solid var(--line-2);border-radius:11px;margin-bottom:11px;cursor:pointer;transition:.12s;background:#fff}
 .opt:hover{border-color:var(--accent)}
+.search-hit{padding:9px 12px;border:1px solid var(--line);border-top:none;cursor:pointer;font-size:14px;background:var(--paper-2)}
+.search-hit:first-child{border-top:1px solid var(--line);border-radius:8px 8px 0 0}
+.search-hit:last-child{border-radius:0 0 8px 8px}
+.search-hit:hover{background:var(--accent-soft)}
 .opt.sel{border-color:var(--accent);background:var(--accent-soft)}
 .opt .k{width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line-2);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none}
 .opt.sel .k{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -1208,7 +1212,7 @@ function openCreateTest(){
     <label>Title</label><input id="tTitle" placeholder="e.g. Weekly Mock — Mechanics"/>
     <div class="grid cols-2">
       <div><label>Test type</label><select id="tType" onchange="tRebuild()">
-        <option value="chapter">Chapter test (pick &amp; merge chapters)</option>
+        <option value="chapter">Chapter test (pick &amp; merge chapters — any subjects)</option>
         <option value="subject">Subject full test (all chapters)</option>
         <option value="mock">Full mock test (full paper)</option></select></div>
       <div><label>Exam</label><select id="tExam" onchange="tRebuild()">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
@@ -1242,9 +1246,9 @@ function tRebuild(){
   el("tMark").textContent="Marking: "+EXAMS[exam].note;
   let html="";
   if(type==="chapter"){
-    html=`<div class="grid cols-2"><div><label>Class</label>${classSelect("tCls",false)}</div><div><label>Subject</label><select id="tSubj"></select></div></div>
-      <label>Chapters — tick one or more to merge</label><div class="row" id="tChaps" style="max-height:150px;overflow:auto"></div>
-      <label>Number of questions</label><input id="tQcount" type="number" min="1" value="20"/>`;
+    html=`<div><label>Class</label>${classSelect("tCls",false)}</div>
+      <label>Subjects &amp; chapters — tick any subjects to merge (e.g. Physics + Maths), then pick chapters and how many questions from each</label>
+      <div id="tSubjBlocks"></div>`;
   } else if(type==="subject"){
     html=`<div class="grid cols-2"><div><label>Subject</label><select id="tSubj"></select></div><div><label>Class scope</label>${clsScopeSelect("tScopeCls")}</div></div>
       <label>Number of questions (across all chapters)</label><input id="tQcount" type="number" min="1" value="30"/>`;
@@ -1254,15 +1258,29 @@ function tRebuild(){
       <div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Full ${esc(exam)} paper: ${Object.entries(full).map(([s,n])=>`${s} ${n}`).join(" · ")} — total <b>${Object.values(full).reduce((a,b)=>a+b,0)}</b> questions, drawn from all your saved chapters.</div>`;
   }
   el("tDyn").innerHTML=html;
-  if(type==="chapter"){ fillSubjects("tExam","tSubj",false); tFillChaps(); el("tSubj").onchange=tFillChaps; el("tCls").onchange=tFillChaps; }
+  if(type==="chapter"){ tRenderSubjBlocks(); el("tCls").onchange=tRenderSubjBlocks; }
   else if(type==="subject"){ fillSubjects("tExam","tSubj",false); }
   else { el("tDur").value=EXAMS[exam].fullDuration; }
 }
-function tFillChaps(){
-  const list=topicsFor(val("tExam"),val("tCls"),val("tSubj"));
-  el("tChaps").innerHTML=list.length
-    ? list.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="tchap" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
-    : `<span class="muted">No chapters saved — add them in Syllabus first.</span>`;
+function tRenderSubjBlocks(){
+  const exam=val("tExam"),cls=val("tCls");
+  el("tSubjBlocks").innerHTML=examSubjects(exam).map(s=>{
+    const chaps=topicsFor(exam,cls,s);
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:8px;margin:0">
+        <input type="checkbox" class="tSubjOn" data-subject="${esc(s)}" onchange="tSubjToggle(this)" style="width:auto"/>
+        <b style="flex:1">${esc(s)}</b><span class="muted" style="font-size:12.5px">Questions:</span>
+        <input type="number" class="tSubjCount" data-subject="${esc(s)}" value="10" min="1" style="width:66px" disabled/></label>
+      <div class="row tSubjChaps" data-subject="${esc(s)}" style="display:none;margin-top:8px;padding-left:26px">
+        ${chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="tchap" data-subject="${esc(s)}" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+          :`<span class="muted">No chapters saved for ${esc(s)} — add them in Syllabus first.</span>`}
+      </div></div>`;
+  }).join("");
+}
+function tSubjToggle(cb){
+  const s=cb.dataset.subject,on=cb.checked;
+  document.querySelector(`.tSubjChaps[data-subject="${CSS.escape(s)}"]`).style.display=on?"flex":"none";
+  document.querySelector(`.tSubjCount[data-subject="${CSS.escape(s)}"]`).disabled=!on;
 }
 async function createTest(){
   const title=val("tTitle").trim(),exam=val("tExam"),type=val("tType");
@@ -1273,12 +1291,17 @@ async function createTest(){
     const weights=gatherWeights(".tdiffpct"), numMode=val("tNumMode"), numPct=parseFloat(val("tNumPct"))||0;
     let questionIds=[],subjects=[],cls="",short=[];
     if(type==="chapter"){
-      const subject=val("tSubj"),chapters=[...document.querySelectorAll(".tchap:checked")].map(c=>c.value);
-      const count=Math.max(1,parseInt(val("tQcount"))||20);
-      if(!chapters.length) throw new Error("Tick at least one chapter.");
-      questionIds=await pullForSubject({exam,subject,classes:[val("tCls")],chapters,count,weights,numMode,numPct});
-      if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
-      subjects=[subject]; cls=val("tCls");
+      const subjOn=[...document.querySelectorAll(".tSubjOn:checked")].map(cb=>cb.dataset.subject);
+      if(!subjOn.length) throw new Error("Tick at least one subject.");
+      cls=val("tCls");
+      for(const subject of subjOn){
+        const chapters=[...document.querySelectorAll(`.tchap[data-subject="${CSS.escape(subject)}"]:checked`)].map(c=>c.value);
+        const count=Math.max(1,parseInt(document.querySelector(`.tSubjCount[data-subject="${CSS.escape(subject)}"]`).value)||10);
+        if(!chapters.length) throw new Error(`Tick at least one chapter for ${subject}, or untick that subject.`);
+        const ids=await pullForSubject({exam,subject,classes:[cls],chapters,count,weights,numMode,numPct});
+        if(ids.length<count) short.push(`${subject}: ${ids.length}/${count}`);
+        questionIds.push(...ids); subjects.push(subject);
+      }
     } else if(type==="subject"){
       const subject=val("tSubj"),classes=scopeClasses(val("tScopeCls")),count=Math.max(1,parseInt(val("tQcount"))||30);
       questionIds=await pullForSubject({exam,subject,classes,count,weights,numMode,numPct});
@@ -1316,12 +1339,39 @@ async function pageStudents(){
   setView(`<h1 class="page-title">Students</h1>
     <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · create logins &amp; manage students</p>
     ${ME.role==="master"?`<div class="card" style="margin-bottom:16px"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h3 style="margin:0">Centre admins</h3><button class="btn ghost sm" onclick="openAddAdmin()">+ Add centre admin</button></div><div id="adminList" class="muted">Loading…</div></div>`:""}
+    <div class="card" style="margin-bottom:16px">
+      <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div><h3 style="margin:0 0 2px">Promote batch to next year</h3>
+          <p class="muted" style="margin:0;font-size:13px">Moves every Class 11 student ${ME.role==="master"?"in the chosen centre":"in "+esc(centreName(ME.centreId))} to Class 12 in one click — no need to migrate students one by one when a new academic year starts.</p></div>
+        <div class="row" style="gap:8px">
+          ${ME.role==="master"?`<select id="promCentre"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
+          <button class="btn gold sm" id="promBtn" onclick="promoteBatch()">🎓 Promote Class 11 → 12</button></div></div>
+      <div class="msg" id="promMsg"></div></div>
     <div class="bar"><div class="spacer" style="flex:1"></div>
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
   loadStudents();
   if(ME.role==="master") loadAdmins();
+}
+async function promoteBatch(){
+  const centreId=ME.role==="master"?val("promCentre"):ME.centreId;
+  let q=db.collection("users").where("role","==","student").where("class","==","11");
+  if(centreId) q=q.where("centreId","==",centreId);
+  setBtn("promBtn",true,"Checking…");
+  try{
+    const snap=await q.get();
+    if(snap.empty){ setMsg("promMsg","No Class 11 students found"+(centreId?" in "+centreName(centreId):"")+" — nothing to promote.","err"); setBtn("promBtn",false,"🎓 Promote Class 11 → 12"); return; }
+    setBtn("promBtn",false,"🎓 Promote Class 11 → 12");
+    if(!confirm(`Promote ${snap.size} Class 11 student${snap.size===1?"":"s"}${centreId?" in "+centreName(centreId):" across all centres"} to Class 12?\n\nThis updates their profile only — it doesn't affect past results or report cards.`)) return;
+    setBtn("promBtn",true,`Promoting 0/${snap.size}…`);
+    let n=0;
+    for(const d of snap.docs){ await db.collection("users").doc(d.id).update({class:"12"}); n++; setBtn("promBtn",true,`Promoting ${n}/${snap.size}…`); }
+    const byCentre={}; snap.docs.forEach(d=>{ const c=d.data().centreId; (byCentre[c]=byCentre[c]||[]).push(d.data().name); });
+    for(const cid of Object.keys(byCentre)) await logCentreUpdate("students_promoted",cid,{count:byCentre[cid].length,studentNames:byCentre[cid]});
+    setMsg("promMsg",`✓ Promoted ${snap.size} student${snap.size===1?"":"s"} to Class 12.`,"ok");
+    setBtn("promBtn",false,"🎓 Promote Class 11 → 12"); loadStudents();
+  }catch(e){ setMsg("promMsg",errMsg(e),"err"); setBtn("promBtn",false,"🎓 Promote Class 11 → 12"); }
 }
 async function loadAdmins(){
   try{
@@ -1344,12 +1394,12 @@ function pageCentreUpdates(){
     <p class="page-sub">Every student added or removed, and by whom, across all six centres.</p>
     <div class="grid cols-2" style="max-width:640px">
       <div><label>Centre</label><select id="cuCentre" onchange="loadCentreUpdates()"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
-      <div><label>Action</label><select id="cuAction" onchange="loadCentreUpdates()"><option value="">All actions</option><option value="student_added">Student added</option><option value="students_bulk_added">Bulk upload</option><option value="student_deleted">Student deleted</option></select></div>
+      <div><label>Action</label><select id="cuAction" onchange="loadCentreUpdates()"><option value="">All actions</option><option value="student_added">Student added</option><option value="students_bulk_added">Bulk upload</option><option value="student_deleted">Student deleted</option><option value="students_promoted">Promoted to Class 12</option></select></div>
     </div>
     <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
   loadCentreUpdates();
 }
-function cuActionLabel(a){ return {student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted"}[a]||a; }
+function cuActionLabel(a){ return {student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12"}[a]||a; }
 async function loadCentreUpdates(){
   const centreF=val("cuCentre"),actionF=val("cuAction");
   el("cuList").innerHTML=`<div class="muted">Loading…</div>`;
@@ -1360,7 +1410,7 @@ async function loadCentreUpdates(){
     if(!docs.length){ el("cuList").innerHTML=emptyState("No updates yet","Actions by centre admins (and you) will show up here."); return; }
     el("cuList").innerHTML=tableHTML(["When","Centre","By","Action","Details"],
       docs.map(d=>{const x=d.data();
-        const details=x.action==="students_bulk_added"
+        const details=(x.action==="students_bulk_added"||x.action==="students_promoted")
           ? `${x.count} student${x.count===1?"":"s"}: ${esc((x.studentNames||[]).slice(0,6).join(", "))}${(x.studentNames||[]).length>6?` +${x.studentNames.length-6} more`:""}`
           : `${esc(x.studentName||"—")}${x.loginId?` (${esc(x.loginId)})`:""}`;
         return [fmtDate(x.createdAt),centreName(x.centreId),`${esc(x.actorName)} <span class="muted" style="font-size:11.5px">(${x.actorRole})</span>`,cuActionLabel(x.action),details];}));
@@ -1379,12 +1429,13 @@ async function loadStudents(){
 }
 function openAddStudent(){
   modal(`<h2>Add student</h2>
-    <p class="muted">Creates the student's login. They sign in with the email &amp; password you set here.</p>
+    <p class="muted">Creates the student's login. They sign in with the email &amp; password you set here. New students start in Class 11 — no need to set this manually; use "Promote batch" each year to move them to Class 12.</p>
     <label>Full name</label><input id="sName"/>
     <label>Login ID (username)</label><input id="sLogin" placeholder="e.g. aarav01 — no spaces"/>
     <label>Password</label><input id="sPass" placeholder="min 6 characters"/>
-    <div class="grid cols-2"><div><label>Class</label>${classSelect("sClass",false)}</div>
-      <div><label>Stream</label><select id="sStream" onchange="sStreamNote()"><option>PCM</option><option>PCB</option></select></div></div>
+    <label>Course</label><select id="sStream" onchange="sStreamNote()">
+      <option value="PCM">PCM — JEE Main &amp; MHT-CET (PCM)</option>
+      <option value="PCB">PCB — NEET &amp; MHT-CET (PCB)</option></select>
     <div class="note" id="sNote"></div>
     ${ME.role==="master"?`<label>Centre</label><select id="sCentre">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
     <div class="msg" id="sMsg"></div>
@@ -1401,7 +1452,7 @@ async function addStudent(){
   setBtn("sBtn",true,"Creating…");
   try{
     const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
-    await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),pw:pass,class:val("sClass"),stream:val("sStream"),
+    await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),pw:pass,class:"11",stream:val("sStream"),
       centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await secondaryApp.auth().signOut();
     logCentreUpdate("student_added",centreId,{studentName:name,loginId});
@@ -1425,7 +1476,8 @@ function openBulkStudents(){
   modal(`<h2>⬆ Upload students (Excel)</h2>
     <p class="muted">Upload an Excel list of students. The app creates each login automatically and gives you back an Excel of their Login IDs &amp; passwords to share.</p>
     <div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Your Excel needs these column headings in row 1:
-      <b>Name</b>, <b>Class</b> (11 or 12), <b>Stream</b> (PCM or PCB)${ME.role==="master"?`, <b>Centre</b> (one of: ${CENTRES.map(c=>c.id).join(", ")})`:""}.
+      <b>Name</b>, <b>Course</b> (PCM or PCB)${ME.role==="master"?`, <b>Centre</b> (one of: ${CENTRES.map(c=>c.id).join(", ")})`:""}.
+      Every new student starts in Class 11 automatically — use "Promote batch" each year to move a whole centre to Class 12, so you never need a Class column here.
       Login IDs &amp; passwords are generated for you — don't add those columns.</div>
     <div class="row" style="margin-top:12px;margin-bottom:2px"><button class="btn ghost sm" onclick="downloadStudentTemplate()">⬇ Download Excel template</button>
       <span class="muted" style="font-size:12px">Grab the template, fill rows, then upload it.</span></div>
@@ -1438,10 +1490,10 @@ function openBulkStudents(){
       <button class="btn" id="bBtn" onclick="runBulkStudents()" disabled>Create logins</button></div>`);
 }
 function downloadStudentTemplate(){
-  const headers = ME.role==="master" ? ["Name","Class","Stream","Centre"] : ["Name","Class","Stream"];
+  const headers = ME.role==="master" ? ["Name","Course","Centre"] : ["Name","Course"];
   const sample = ME.role==="master"
-    ? [["Aarav Shah","11","PCM","AMB"],["Diya Patil","12","PCB","KW"]]
-    : [["Aarav Shah","11","PCM"],["Diya Patil","12","PCB"]];
+    ? [["Aarav Shah","PCM","AMB"],["Diya Patil","PCB","KW"]]
+    : [["Aarav Shah","PCM"],["Diya Patil","PCB"]];
   const ws=XLSX.utils.aoa_to_sheet([headers,...sample]);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Students");
   XLSX.writeFile(wb,"Students_Upload_Template.xlsx");
@@ -1457,8 +1509,8 @@ async function bulkPreview(){
     rows.forEach(r=>{
       const get=k=>{const key=Object.keys(r).find(x=>x.trim().toLowerCase()===k); return key?String(r[key]).trim():"";};
       const name=get("name"); if(!name) return;
-      let cls=(get("class").match(/\d+/)||[""])[0]; if(cls!=="11"&&cls!=="12")cls="11";
-      let stream=get("stream").toUpperCase(); if(stream!=="PCM"&&stream!=="PCB")stream="PCM";
+      const cls="11"; // every new student starts in Class 11 — promote a whole batch later via "Promote batch"
+      let stream=(get("course")||get("stream")).toUpperCase(); if(stream!=="PCM"&&stream!=="PCB")stream="PCM";
       let centre=get("centre").toUpperCase();
       if(ME.role==="admin") centre=ME.centreId;
       else if(!CENTRES.find(c=>c.id===centre)) centre=""; // resolve at run time to default
@@ -1469,7 +1521,7 @@ async function bulkPreview(){
     setMsg("bMsg",`Found ${out.length} student(s) ready to create.`,"ok");
     el("bBtn").disabled=false; el("bBtn").textContent=`Create ${out.length} login${out.length===1?"":"s"}`;
     el("bPreview").innerHTML=`<div style="max-height:200px;overflow:auto;margin-top:12px;border:1px solid var(--line);border-radius:10px">`+
-      tableHTML(["Name","Class","Stream","Centre"],out.slice(0,50).map(r=>[esc(r.name),r.cls,r.stream,centreName(r.centre||(ME.role==="master"?val("bDefCentre"):ME.centreId))]))+`</div>`;
+      tableHTML(["Name","Course","Centre"],out.slice(0,50).map(r=>[esc(r.name),r.stream,centreName(r.centre||(ME.role==="master"?val("bDefCentre"):ME.centreId))]))+`</div>`;
   }catch(e){ setMsg("bMsg","Could not read file: "+errMsg(e),"err"); }
 }
 function genLoginId(name){ const base=(name.toLowerCase().replace(/[^a-z]/g,"")||"student").slice(0,9); return base+Math.floor(100+Math.random()*900); }
@@ -1542,18 +1594,21 @@ async function addAdmin(){
 /* ============================================================
    10. RESULTS + ONE-CLICK REPORT CARD
    ============================================================ */
+let R_STUDENTS=[];
 async function pageResults(){
   setView(`<h1 class="page-title">Results &amp; report cards</h1>
-    <p class="page-sub">Pick a centre, then a single student — or download every student's report card for that centre in one file.</p>
+    <p class="page-sub">Pick a centre, then find a student by typing their name or picking from the list — or download every student's report card for that centre in one file.</p>
     <div class="grid cols-2">
       <div>${ME.role==="master"?`<label>Centre</label><select id="rCentre" onchange="rCentreChanged()"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<label>Centre</label><input value="${centreName(ME.centreId)}" disabled/>`}</div>
-      <div><label>Find student</label><select id="rStudent"><option value="">— select a student —</option></select></div>
+      <div><label>Search by name</label><input id="rSearch" type="text" placeholder="Start typing a student's name…" oninput="rSearchInput()" autocomplete="off"/>
+        <div id="rSearchList"></div></div>
     </div>
-    <div class="row" style="gap:10px;margin:6px 0 4px"><button class="btn gold" id="rAllBtn" onclick="downloadAllReportCards()">⤓ Download all report cards</button></div>
+    <label style="margin-top:10px">…or pick from the list (A–Z)</label>
+    <select id="rStudent" onchange="rSelectStudent(val('rStudent'))"><option value="">— select a student —</option></select>
+    <div class="row" style="gap:10px;margin:10px 0 4px"><button class="btn gold" id="rAllBtn" onclick="downloadAllReportCards()">⤓ Download all report cards</button></div>
     <div class="msg" id="rMsg"></div>
     <div id="rResults"></div>`);
   await rCentreChanged();
-  el("rStudent").onchange=()=>loadStudentResults(val("rStudent"));
 }
 function allBtnLabel(centreId){ return centreId?`⤓ Download all report cards — ${centreName(centreId)}`:"⤓ Download all report cards — every centre"; }
 async function rCentreChanged(){
@@ -1561,9 +1616,24 @@ async function rCentreChanged(){
   let q=db.collection("users").where("role","==","student");
   if(centreId) q=q.where("centreId","==",centreId);
   const snap=await q.get();
-  el("rStudent").innerHTML=`<option value="">— select a student —</option>`+snap.docs.map(d=>`<option value="${d.id}">${esc(d.data().name)} · ${centreName(d.data().centreId)}</option>`).join("");
+  R_STUDENTS=snap.docs.map(d=>({id:d.id,name:d.data().name,centreId:d.data().centreId})).sort((a,b)=>a.name.localeCompare(b.name));
+  el("rStudent").innerHTML=`<option value="">— select a student —</option>`+R_STUDENTS.map(s=>`<option value="${s.id}">${esc(s.name)} · ${centreName(s.centreId)}</option>`).join("");
+  el("rSearch").value=""; el("rSearchList").innerHTML="";
   el("rResults").innerHTML=""; setMsg("rMsg","","");
   const btn=el("rAllBtn"); if(btn) btn.textContent=allBtnLabel(centreId);
+}
+function rSearchInput(){
+  const q=val("rSearch").trim().toLowerCase();
+  if(!q){ el("rSearchList").innerHTML=""; return; }
+  const hits=R_STUDENTS.filter(s=>s.name.toLowerCase().includes(q)).slice(0,8);
+  el("rSearchList").innerHTML=hits.length
+    ? hits.map(s=>`<div class="search-hit" onclick="rSelectStudent('${s.id}')">${esc(s.name)} <span class="muted" style="font-size:12px">· ${esc(centreName(s.centreId))}</span></div>`).join("")
+    : `<div class="muted" style="padding:8px 2px;font-size:13px">No student matches "${esc(val("rSearch"))}".</div>`;
+}
+function rSelectStudent(uid){
+  if(!uid) return;
+  el("rStudent").value=uid; el("rSearch").value=""; el("rSearchList").innerHTML="";
+  loadStudentResults(uid);
 }
 async function loadStudentResults(uid){
   if(!uid){ el("rResults").innerHTML=""; return; }
@@ -1773,7 +1843,7 @@ function pagePractice(){
     <div class="card" style="max-width:600px">
       <div class="grid cols-2">
         <div><label>Type</label><select id="pType" onchange="pRebuild()">
-          <option value="chapter">By chapters</option>
+          <option value="chapter">By chapters (mix subjects)</option>
           <option value="subject">Full subject (all chapters)</option>
           <option value="mock">Full mock paper</option></select></div>
         <div><label>Exam</label><select id="pExam" onchange="pRebuild()">${myExams.map(e=>`<option>${e}</option>`).join("")}</select></div>
@@ -1797,9 +1867,8 @@ function pRebuild(){
   const type=val("pType"),exam=val("pExam");
   let html="";
   if(type==="chapter"){
-    html=`<div><label>Subject</label><select id="pSubj"></select></div>
-      <label>Chapters — tick one or more to merge</label><div class="row" id="pChaps" style="max-height:140px;overflow:auto"></div>
-      <label>Number of questions (10–90)</label><input id="pCount" type="number" min="10" max="90" value="20"/>`;
+    html=`<label>Subjects &amp; chapters — tick any subjects to merge (e.g. Physics + Maths), then pick chapters and how many questions from each</label>
+      <div id="pSubjBlocks"></div>`;
   } else if(type==="subject"){
     html=`<div class="grid cols-2"><div><label>Subject</label><select id="pSubj"></select></div>
       <div><label>Number of questions (10–90)</label><input id="pCount" type="number" min="10" max="90" value="30"/></div></div>`;
@@ -1808,15 +1877,29 @@ function pRebuild(){
     html=`<div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Full ${esc(exam)} mock: ${Object.entries(full).map(([s,n])=>`${s} ${n}`).join(" · ")} — total <b>${Object.values(full).reduce((a,b)=>a+b,0)}</b> questions from all chapters of Class 11 &amp; 12.</div>`;
   }
   el("pDyn").innerHTML=html;
-  if(type==="chapter"){ fillSubjects("pExam","pSubj",false,ME.stream); pFillChaps(); el("pSubj").onchange=pFillChaps; }
+  if(type==="chapter"){ pRenderSubjBlocks(); }
   else if(type==="subject"){ fillSubjects("pExam","pSubj",false,ME.stream); }
   else { el("pDur").value=EXAMS[exam].fullDuration; }
 }
-function pFillChaps(){
-  const list=topicsFor(val("pExam"),ME.class,val("pSubj"));
-  el("pChaps").innerHTML=list.length
-    ? list.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="pchap" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
-    : `<span class="muted">No chapters available yet for this subject.</span>`;
+function pRenderSubjBlocks(){
+  const exam=val("pExam"),cls=ME.class,subs=EXAMS[exam].streams[ME.stream]||examSubjects(exam);
+  el("pSubjBlocks").innerHTML=subs.map(s=>{
+    const chaps=topicsFor(exam,cls,s);
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:8px;margin:0">
+        <input type="checkbox" class="pSubjOn" data-subject="${esc(s)}" onchange="pSubjToggle(this)" style="width:auto"/>
+        <b style="flex:1">${esc(s)}</b><span class="muted" style="font-size:12.5px">Questions:</span>
+        <input type="number" class="pSubjCount" data-subject="${esc(s)}" value="10" min="1" style="width:66px" disabled/></label>
+      <div class="row pSubjChaps" data-subject="${esc(s)}" style="display:none;margin-top:8px;padding-left:26px">
+        ${chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="pchap" data-subject="${esc(s)}" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+          :`<span class="muted">No chapters available yet for ${esc(s)}.</span>`}
+      </div></div>`;
+  }).join("");
+}
+function pSubjToggle(cb){
+  const s=cb.dataset.subject,on=cb.checked;
+  document.querySelector(`.pSubjChaps[data-subject="${CSS.escape(s)}"]`).style.display=on?"flex":"none";
+  document.querySelector(`.pSubjCount[data-subject="${CSS.escape(s)}"]`).disabled=!on;
 }
 async function startPractice(){
   const type=val("pType"),exam=val("pExam"),weights=gatherWeights(".pdiffpct"),numMode=val("pNumMode"),numPct=parseFloat(val("pNumPct"))||0;
@@ -1824,11 +1907,17 @@ async function startPractice(){
   try{
     let questionIds=[],title="",dur=parseInt(val("pDur"))||20;
     if(type==="chapter"){
-      const subject=val("pSubj"),chapters=[...document.querySelectorAll(".pchap:checked")].map(c=>c.value);
-      const count=Math.min(90,Math.max(10,parseInt(val("pCount"))||20));
-      if(!chapters.length) throw new Error("Tick at least one chapter.");
-      questionIds=await pullForSubject({exam,subject,classes:[ME.class],chapters,count,weights,numMode,numPct});
-      title=`Practice · ${exam} · ${subject}`;
+      const subjOn=[...document.querySelectorAll(".pSubjOn:checked")].map(cb=>cb.dataset.subject);
+      if(!subjOn.length) throw new Error("Tick at least one subject.");
+      const names=[];
+      for(const subject of subjOn){
+        const chapters=[...document.querySelectorAll(`.pchap[data-subject="${CSS.escape(subject)}"]:checked`)].map(c=>c.value);
+        const count=Math.max(1,parseInt(document.querySelector(`.pSubjCount[data-subject="${CSS.escape(subject)}"]`).value)||10);
+        if(!chapters.length) throw new Error(`Tick at least one chapter for ${subject}, or untick that subject.`);
+        questionIds.push(...await pullForSubject({exam,subject,classes:[ME.class],chapters,count,weights,numMode,numPct}));
+        names.push(subject);
+      }
+      title=`Practice · ${exam} · ${names.join(" + ")}`;
     } else if(type==="subject"){
       const subject=val("pSubj"),count=Math.min(90,Math.max(10,parseInt(val("pCount"))||30));
       questionIds=await pullForSubject({exam,subject,classes:[ME.class],count,weights,numMode,numPct});
