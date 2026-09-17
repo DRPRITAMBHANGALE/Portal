@@ -118,6 +118,7 @@ tr:last-child td{border-bottom:none}
 .tag.exam{background:#ece3f0;color:#5a3a73}
 .tag.scheduled{background:#e7ecf5;color:#2c4470}.tag.open{background:var(--accent-soft);color:var(--accent-ink)}
 .tag.closed{background:#ece9e0;color:var(--ink-soft)}
+.tag.danger{background:var(--danger);color:#fff}
 
 .modal-bg{position:fixed;inset:0;background:rgba(35,33,28,.46);display:none;place-items:center;z-index:90;padding:20px;overflow:auto}
 .modal-bg.show{display:grid}
@@ -314,6 +315,13 @@ function examMarks(exam,subject){return (EXAMS[exam]&&EXAMS[exam].marks[subject]
 function examNeg(exam){return (EXAMS[exam]&&EXAMS[exam].negative)||0;}
 function streamsFor(exam){return Object.keys(EXAMS[exam].streams);}
 function examsForStream(stream){return EXAM_KEYS.filter(k=>EXAMS[k].streams[stream]);}
+// Practice is always instant. A class test shows solutions immediately unless the staff set a specific reveal time that hasn't arrived yet.
+function solutionsUnlocked(test,isPractice){
+  if(isPractice) return true;
+  if(!test||!test.solutionsAt) return true;
+  const t=test.solutionsAt.toMillis?test.solutionsAt.toMillis():new Date(test.solutionsAt).getTime();
+  return Date.now()>=t;
+}
 function qLabel(q){return fmtMath(q.text,q.subject)+(q.year?` <b style="color:var(--gold)">(${q.year})</b>`:"");}
 function confirmModal(message,onYes,yesLabel){
   modal(`<h2 style="font-size:20px">${esc(message)}</h2>
@@ -321,6 +329,10 @@ function confirmModal(message,onYes,yesLabel){
       <button class="btn ghost" onclick="closeModal()">No</button>
       <button class="btn" id="cfYes">${esc(yesLabel||"Yes")}</button></div>`);
   el("cfYes").onclick=()=>{closeModal();onYes();};
+}
+function warnModal(title,message){
+  modal(`<h2 style="font-size:19px;color:#822f22">⚠ ${esc(title)}</h2><p style="margin-top:8px;line-height:1.5">${esc(message)}</p>
+    <div class="row end" style="margin-top:18px"><button class="btn danger" onclick="closeModal()">I understand</button></div>`);
 }
 function scopeClasses(v){return v==="both"?["11","12"]:[v];}
 // Pull live question IDs for one subject across given classes & chapters.
@@ -523,9 +535,15 @@ const STAFF_NAV=[
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
   {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
-  {id:"students",label:"Students",ic:"☺"},{id:"results",label:"Results & report cards",ic:"⤓"}
+  {id:"students",label:"Students",ic:"☺"},{id:"results",label:"Results & report cards",ic:"⤓"},
+  {id:"toppers",label:"Toppers",ic:"🏆"},{id:"centreupdates",label:"Centre updates",ic:"🕘"}
 ];
-const NAV={ master:STAFF_NAV, admin:STAFF_NAV,
+const ADMIN_NAV=[
+  {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
+  {id:"students",label:"Students",ic:"☺"},
+  {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"}
+];
+const NAV={ master:STAFF_NAV, admin:ADMIN_NAV,
   student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"history",label:"My results",ic:"⤓"}] };
 function buildNav(){
   const wrap=el("sideNav"); wrap.innerHTML="";
@@ -535,11 +553,13 @@ function buildNav(){
   const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: papers + logo"; wrap.appendChild(v);
 }
 function go(page){
+  const allowed=NAV[ME.role].map(n=>n.id);
+  if(!allowed.includes(page)) page=allowed[0]; // not permitted for this role — fall back to their first page
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
   ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,students:pageStudents,
-    results:pageResults,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
+    results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
 }
 
 /* ============================================================
@@ -550,8 +570,9 @@ async function pageDashboard(){
     <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · overview</p>
     <div class="grid cols-3" id="kpis"><div class="card"><div class="muted">Loading…</div></div></div>
     <div class="card" style="margin-top:18px"><h3>Recent tests</h3><div id="recentTests" class="muted">Loading…</div></div>`);
-  const [tests,students,pending]=await Promise.all([scopedCount("tests"),scopedCount("users",true),scopedCount("questions",false,{status:"pending"})]);
-  el("kpis").innerHTML=`${statCard("Tests created",tests)}${statCard("Active students",students)}${statCard("Awaiting review",pending)}`;
+  const [tests,students,pending]=await Promise.all([scopedCount("tests"),scopedCount("users",true),
+    ME.role==="master"?scopedCount("questions",false,{status:"pending"}):Promise.resolve(null)]);
+  el("kpis").innerHTML=`${statCard("Tests created",tests)}${statCard("Active students",students)}${pending!==null?statCard("Awaiting review",pending):""}`;
   try{
     const snap=await db.collection("tests").orderBy("createdAt","desc").limit(6).get();
     const docs=ME.role==="master"?snap.docs:snap.docs.filter(d=>d.data().scope===ME.centreId||d.data().scope==="all");
@@ -995,7 +1016,7 @@ async function loadTests(){
     }
     el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
       :tableHTML(["Title","Exam","Subjects","Q","Scope","Window","Status",""],
-        docs.map(d=>{const t=d.data();const canEdit=ME.role==="master"||(ME.role==="admin"&&t.scope===ME.centreId);return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}</span>`,
+        docs.map(d=>{const t=d.data();const canEdit=ME.role==="master"||(ME.role==="admin"&&t.scope===ME.centreId);return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}${t.solutionsAt?` · 🔒 Solutions from ${fmtDate(t.solutionsAt)}`:""}</span>`,
           examTag(t.exam),subjChips(t.subjects),(t.questionIds||[]).length,centreName(t.scope),windowLabel(t),testStatusTag(t),
           `<button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button>`+(canEdit?` <button class="btn ghost sm" onclick="openReschedule('${d.id}')">Reschedule</button> <button class="btn ghost sm danger" onclick="deleteTest('${d.id}')">Delete</button>`:"")];}));
   }catch(e){ el("testList").innerHTML=errBox(e); }
@@ -1008,6 +1029,11 @@ async function openReschedule(id){
     <div class="grid cols-2"><div><label>Opens</label><input id="rsStart" type="datetime-local" value="${toLocal(t.startAt)}"/></div>
       <div><label>Closes</label><input id="rsEnd" type="datetime-local" value="${toLocal(t.endAt)}"/></div></div>
     <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
+    <label>When should students see the answer key &amp; solutions?</label>
+    <select id="rsSolMode" onchange="el('rsSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
+      <option value="immediate" ${!t.solutionsAt?"selected":""}>Immediately after each student submits</option>
+      <option value="scheduled" ${t.solutionsAt?"selected":""}>Only from a specific date &amp; time</option></select>
+    <div id="rsSolAtRow" style="display:${t.solutionsAt?"block":"none"}"><label>Show solutions from</label><input id="rsSolAt" type="datetime-local" value="${toLocal(t.solutionsAt)}"/></div>
     <div class="msg" id="rsMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="rsBtn" onclick="saveReschedule('${id}')">Save changes</button></div>`);
@@ -1015,10 +1041,15 @@ async function openReschedule(id){
 async function saveReschedule(id){
   setBtn("rsBtn",true,"Saving…");
   try{
+    let solutionsAt=null;
+    if(val("rsSolMode")==="scheduled"){
+      if(!val("rsSolAt")) throw new Error("Pick a date & time for when solutions should be shown, or switch back to \"Immediately\".");
+      solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("rsSolAt")));
+    }
     await db.collection("tests").doc(id).update({title:val("rsTitle").trim()||"Test",
       startAt:val("rsStart")?firebase.firestore.Timestamp.fromDate(new Date(val("rsStart"))):null,
       endAt:val("rsEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("rsEnd"))):null,
-      duration:parseInt(val("rsDur"))||30});
+      duration:parseInt(val("rsDur"))||30,solutionsAt});
     closeModal(); loadTests();
   }catch(e){ setMsg("rsMsg",errMsg(e),"err"); setBtn("rsBtn",false,"Save changes"); }
 }
@@ -1189,11 +1220,21 @@ function openCreateTest(){
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="tDur" type="number" value="30"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="tScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="tStart" type="datetime-local"/></div><div><label>Closes</label><input id="tEnd" type="datetime-local"/></div></div>
+    <label>When should students see the answer key &amp; solutions?</label>
+    <select id="tSolMode" onchange="tSolModeChanged()">
+      <option value="immediate">Immediately after each student submits</option>
+      <option value="scheduled">Only from a specific date &amp; time</option></select>
+    <div id="tSolAtRow" style="display:none"><label>Show solutions from</label><input id="tSolAt" type="datetime-local"/></div>
     <div class="note" id="tMark"></div>
     <div class="msg" id="tMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="tSaveBtn" onclick="createTest()">Create &amp; schedule</button></div>`);
   tRebuild();
+}
+function tSolModeChanged(){
+  const show=val("tSolMode")==="scheduled";
+  el("tSolAtRow").style.display=show?"block":"none";
+  if(show && !val("tSolAt") && val("tEnd")) el("tSolAt").value=val("tEnd"); // convenience: default to the test's Closes time
 }
 function clsScopeSelect(id){return `<select id="${id}"><option value="11">Class 11</option><option value="12">Class 12</option><option value="both">Both 11 &amp; 12</option></select>`;}
 function tRebuild(){
@@ -1253,9 +1294,15 @@ async function createTest(){
       cls=val("tScopeCls");
     }
     if(!questionIds.length) throw new Error("No matching questions in the bank yet. Generate/approve more first.");
+    let solutionsAt=null;
+    if(val("tSolMode")==="scheduled"){
+      if(!val("tSolAt")) throw new Error("Pick a date & time for when solutions should be shown, or switch back to \"Immediately\".");
+      solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("tSolAt")));
+    }
     await db.collection("tests").add({title,exam,type,subjects,class:cls,questionIds,duration:parseInt(val("tDur"))||30,scope,isPractice:false,
       startAt:val("tStart")?firebase.firestore.Timestamp.fromDate(new Date(val("tStart"))):null,
       endAt:val("tEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("tEnd"))):null,
+      solutionsAt,
       createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     closeModal(); loadTests();
     if(short.length) setTimeout(()=>alert("Test created. Some parts had fewer questions than requested:\n"+short.join("\n")+"\nGenerate more to fill them next time."),200);
@@ -1268,12 +1315,56 @@ async function createTest(){
 async function pageStudents(){
   setView(`<h1 class="page-title">Students</h1>
     <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · create logins &amp; manage students</p>
+    ${ME.role==="master"?`<div class="card" style="margin-bottom:16px"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h3 style="margin:0">Centre admins</h3><button class="btn ghost sm" onclick="openAddAdmin()">+ Add centre admin</button></div><div id="adminList" class="muted">Loading…</div></div>`:""}
     <div class="bar"><div class="spacer" style="flex:1"></div>
-      ${ME.role==="master"?`<button class="btn ghost" onclick="openAddAdmin()">+ Add centre admin</button>`:""}
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
   loadStudents();
+  if(ME.role==="master") loadAdmins();
+}
+async function loadAdmins(){
+  try{
+    const snap=await db.collection("users").where("role","==","admin").get();
+    el("adminList").innerHTML=snap.empty?`<p class="muted" style="margin:0">No centre admins yet — use “+ Add centre admin” above.</p>`
+      :tableHTML(["Name","Email","Password","Centre",""],
+        snap.docs.map(d=>{const a=d.data();return [`<b>${esc(a.name)}</b>`,esc(a.email||"—"),esc(a.pw||"—"),centreName(a.centreId),
+          `<button class="btn ghost sm danger" onclick="delAdmin('${d.id}')">Delete</button>`];}));
+  }catch(e){ el("adminList").innerHTML=errBox(e); }
+}
+async function delAdmin(uid){
+  if(!confirm("Delete this centre admin? They lose access immediately.")) return;
+  try{ await db.collection("users").doc(uid).delete(); loadAdmins(); }
+  catch(e){ alert("Could not delete: "+errMsg(e)); }
+}
+
+/* ===== Centre updates — master-only audit trail of admin actions ===== */
+function pageCentreUpdates(){
+  setView(`<h1 class="page-title">Centre updates</h1>
+    <p class="page-sub">Every student added or removed, and by whom, across all six centres.</p>
+    <div class="grid cols-2" style="max-width:640px">
+      <div><label>Centre</label><select id="cuCentre" onchange="loadCentreUpdates()"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
+      <div><label>Action</label><select id="cuAction" onchange="loadCentreUpdates()"><option value="">All actions</option><option value="student_added">Student added</option><option value="students_bulk_added">Bulk upload</option><option value="student_deleted">Student deleted</option></select></div>
+    </div>
+    <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
+  loadCentreUpdates();
+}
+function cuActionLabel(a){ return {student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted"}[a]||a; }
+async function loadCentreUpdates(){
+  const centreF=val("cuCentre"),actionF=val("cuAction");
+  el("cuList").innerHTML=`<div class="muted">Loading…</div>`;
+  try{
+    let q=db.collection("centreLogs").orderBy("createdAt","desc").limit(300);
+    const snap=await q.get();
+    let docs=snap.docs.filter(d=>{const x=d.data(); return (!centreF||x.centreId===centreF)&&(!actionF||x.action===actionF); });
+    if(!docs.length){ el("cuList").innerHTML=emptyState("No updates yet","Actions by centre admins (and you) will show up here."); return; }
+    el("cuList").innerHTML=tableHTML(["When","Centre","By","Action","Details"],
+      docs.map(d=>{const x=d.data();
+        const details=x.action==="students_bulk_added"
+          ? `${x.count} student${x.count===1?"":"s"}: ${esc((x.studentNames||[]).slice(0,6).join(", "))}${(x.studentNames||[]).length>6?` +${x.studentNames.length-6} more`:""}`
+          : `${esc(x.studentName||"—")}${x.loginId?` (${esc(x.loginId)})`:""}`;
+        return [fmtDate(x.createdAt),centreName(x.centreId),`${esc(x.actorName)} <span class="muted" style="font-size:11.5px">(${x.actorRole})</span>`,cuActionLabel(x.action),details];}));
+  }catch(e){ el("cuList").innerHTML=errBox(e); }
 }
 async function loadStudents(){
   let q=db.collection("users").where("role","==","student");
@@ -1313,12 +1404,19 @@ async function addStudent(){
     await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),pw:pass,class:val("sClass"),stream:val("sStream"),
       centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await secondaryApp.auth().signOut();
+    logCentreUpdate("student_added",centreId,{studentName:name,loginId});
     closeModal(); loadStudents();
   }catch(e){ setMsg("sMsg",errMsg(e),"err"); setBtn("sBtn",false,"Create login"); }
 }
 async function delStudent(uid){
   if(!confirm("Delete this student? They lose access and disappear from the list. (Their past results are kept unless removed separately.)")) return;
-  try{ await db.collection("users").doc(uid).delete(); loadStudents(); }
+  try{
+    const snap=await db.collection("users").doc(uid).get();
+    const stu=snap.exists?snap.data():null;
+    await db.collection("users").doc(uid).delete();
+    if(stu) logCentreUpdate("student_deleted",stu.centreId,{studentName:stu.name,loginId:stu.loginId});
+    loadStudents();
+  }
   catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 
@@ -1402,14 +1500,25 @@ async function runBulkStudents(){
     const ws=XLSX.utils.json_to_sheet(created,{header:["Name","Login ID","Password","Class","Stream","Centre"]});
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Logins");
     XLSX.writeFile(wb,"Student_Logins_"+new Date().toISOString().slice(0,10)+".xlsx");
+    // log one summary entry per centre involved in this bulk run
+    const byCentre={};
+    created.forEach(c=>{ const cid=CENTRES.find(x=>x.name===c.Centre)?.id||c.Centre; (byCentre[cid]=byCentre[cid]||[]).push(c.Name); });
+    for(const cid of Object.keys(byCentre)) await logCentreUpdate("students_bulk_added",cid,{count:byCentre[cid].length,studentNames:byCentre[cid]});
   }
   setMsg("bMsg",`✓ Created ${created.length} login(s)${fails.length?`, ${fails.length} failed (${fails.map(f=>esc(f.name)).join(", ")})`:""}. The credentials Excel has downloaded — share it with students.`, fails.length?"err":"ok");
   setBtn("bBtn",false,"Create logins"); loadStudents();
 }
+// Records who (which admin/master) added/removed which student(s), for the master-only Centre updates log
+async function logCentreUpdate(action,centreId,detail){
+  try{
+    await db.collection("centreLogs").add({action,centreId,actorUid:ME.uid,actorName:ME.name,actorRole:ME.role,
+      ...detail,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+  }catch(e){ console.error("centre log failed",e); } // never block the actual action on a logging failure
+}
 
 function openAddAdmin(){
   modal(`<h2>Add centre admin</h2>
-    <p class="muted">Creates a login that can manage one centre — schedule tests, add students, generate &amp; approve questions for that centre.</p>
+    <p class="muted">Creates a login that can manage one centre — schedule tests, add students (single or bulk), and view that centre's results, report cards &amp; toppers. Question bank and syllabus stay master-only.</p>
     <label>Full name</label><input id="aName"/>
     <label>Email</label><input id="aEmail" type="email"/>
     <label>Password</label><input id="aPass" placeholder="min 6 characters"/>
@@ -1424,7 +1533,7 @@ async function addAdmin(){
   setBtn("aBtn",true,"Creating…");
   try{
     const cred=await secondaryApp.auth().createUserWithEmailAndPassword(email,pass);
-    await db.collection("users").doc(cred.user.uid).set({role:"admin",name,email,centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    await db.collection("users").doc(cred.user.uid).set({role:"admin",name,email,pw:pass,centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await secondaryApp.auth().signOut();
     closeModal();
   }catch(e){ setMsg("aMsg",errMsg(e),"err"); setBtn("aBtn",false,"Create admin login"); }
@@ -1435,14 +1544,26 @@ async function addAdmin(){
    ============================================================ */
 async function pageResults(){
   setView(`<h1 class="page-title">Results &amp; report cards</h1>
-    <p class="page-sub">Pick a student to see every attempt and download a report card PDF.</p>
-    <div class="bar"><div class="grow"><label>Find student</label><select id="rStudent"><option value="">— select a student —</option></select></div></div>
+    <p class="page-sub">Pick a centre, then a single student — or download every student's report card for that centre in one file.</p>
+    <div class="grid cols-2">
+      <div>${ME.role==="master"?`<label>Centre</label><select id="rCentre" onchange="rCentreChanged()"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<label>Centre</label><input value="${centreName(ME.centreId)}" disabled/>`}</div>
+      <div><label>Find student</label><select id="rStudent"><option value="">— select a student —</option></select></div>
+    </div>
+    <div class="row" style="gap:10px;margin:6px 0 4px"><button class="btn gold" id="rAllBtn" onclick="downloadAllReportCards()">⤓ Download all report cards</button></div>
+    <div class="msg" id="rMsg"></div>
     <div id="rResults"></div>`);
-  let q=db.collection("users").where("role","==","student");
-  if(ME.role==="admin") q=q.where("centreId","==",ME.centreId);
-  const snap=await q.get();
-  el("rStudent").innerHTML+=snap.docs.map(d=>`<option value="${d.id}">${esc(d.data().name)} · ${centreName(d.data().centreId)}</option>`).join("");
+  await rCentreChanged();
   el("rStudent").onchange=()=>loadStudentResults(val("rStudent"));
+}
+function allBtnLabel(centreId){ return centreId?`⤓ Download all report cards — ${centreName(centreId)}`:"⤓ Download all report cards — every centre"; }
+async function rCentreChanged(){
+  const centreId=ME.role==="master"?val("rCentre"):ME.centreId;
+  let q=db.collection("users").where("role","==","student");
+  if(centreId) q=q.where("centreId","==",centreId);
+  const snap=await q.get();
+  el("rStudent").innerHTML=`<option value="">— select a student —</option>`+snap.docs.map(d=>`<option value="${d.id}">${esc(d.data().name)} · ${centreName(d.data().centreId)}</option>`).join("");
+  el("rResults").innerHTML=""; setMsg("rMsg","","");
+  const btn=el("rAllBtn"); if(btn) btn.textContent=allBtnLabel(centreId);
 }
 async function loadStudentResults(uid){
   if(!uid){ el("rResults").innerHTML=""; return; }
@@ -1452,7 +1573,9 @@ async function loadStudentResults(uid){
   const stu=stuDoc.data();
   const adocs=attempts.docs.filter(d=>!d.data().isPractice);
   if(!adocs.length){ el("rResults").innerHTML=`<div class="card">${emptyState("No attempts yet",esc(stu.name)+" hasn't taken any scheduled tests.")}</div>`; return; }
-  const rows=adocs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+  const rows=adocs.map(d=>{const a=d.data();
+    if(a.disqualified) return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`<span class="tag danger">Disqualified</span>`,"—","—",`<button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>`];
+    return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
     `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>`];});
   el("rResults").innerHTML=`<div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -1460,10 +1583,8 @@ async function loadStudentResults(uid){
       <button class="btn gold" onclick='downloadReportCard("${uid}")'>⤓ Download report card</button></div>
     ${tableHTML(["Test","Exam","Date","Score","%","Breakdown",""],rows)}</div>`;
 }
-async function downloadReportCard(uid){
-  const [stuDoc,attempts]=await Promise.all([db.collection("users").doc(uid).get(),
-    db.collection("attempts").where("studentUid","==",uid).orderBy("submittedAt","desc").get()]);
-  const stu=stuDoc.data(); const {jsPDF}=window.jspdf; const doc=new jsPDF();
+// Draws one student's report card onto the CURRENT page of an open jsPDF doc (call doc.addPage() before this, except for the first student)
+function drawReportCardPage(doc,stu,attemptDocs){
   doc.setFillColor(31,92,82); doc.rect(0,0,210,30,"F");
   doc.setTextColor(255); doc.setFont("times","bold"); doc.setFontSize(20); doc.text("Sonam Tuitions",14,14);
   doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.text("Online Test Series — Performance Report Card",14,22);
@@ -1471,16 +1592,138 @@ async function downloadReportCard(uid){
   doc.setTextColor(35,33,28); doc.setFontSize(12); doc.setFont("helvetica","bold"); doc.text(`${stu.name}`,14,42);
   doc.setFont("helvetica","normal"); doc.setFontSize(10);
   doc.text(`Class ${stu.class} ${stu.stream||""}   |   Centre: ${centreName(stu.centreId)}   |   Generated: ${new Date().toLocaleDateString()}`,14,49);
-  const rows=attempts.docs.filter(d=>!d.data().isPractice).map(d=>{const a=d.data();return [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",`${a.correct}`,`${a.wrong}`,`${a.unattempted}`];});
-  const real=attempts.docs.filter(d=>!d.data().isPractice);
+  const shown=attemptDocs.filter(d=>!d.data().isPractice);
+  const real=shown.filter(d=>!d.data().disqualified); // disqualified attempts are shown but don't count toward the overall score
+  const rows=shown.map(d=>{const a=d.data();
+    return a.disqualified
+      ? [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),"DISQUALIFIED","—","—","—","—"]
+      : [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",`${a.correct}`,`${a.wrong}`,`${a.unattempted}`];});
   const totS=real.reduce((s,d)=>s+d.data().score,0), totT=real.reduce((s,d)=>s+d.data().total,0);
-  doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Correct","Wrong","Skipped"]],body:rows,
-    headStyles:{fillColor:[31,92,82]},styles:{fontSize:8.5,cellPadding:2.5},alternateRowStyles:{fillColor:[246,243,236]}});
-  let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(11);
-  doc.text(`Overall: ${totS}/${totT}  (${pct(totS,totT)}%)   ·   Tests taken: ${real.length}`,14,y);
+  if(rows.length){
+    doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Correct","Wrong","Skipped"]],body:rows,
+      headStyles:{fillColor:[31,92,82]},styles:{fontSize:8.5,cellPadding:2.5},alternateRowStyles:{fillColor:[246,243,236]},
+      didParseCell:function(d){ if(d.section==="body"&&d.row.raw[3]==="DISQUALIFIED"){ d.cell.styles.textColor=[163,64,47]; d.cell.styles.fontStyle="bold"; } }});
+    let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(11);
+    doc.text(`Overall: ${totS}/${totT}  (${pct(totS,totT)}%)   ·   Tests taken: ${real.length}${shown.length>real.length?`   ·   Disqualified: ${shown.length-real.length}`:""}`,14,y);
+  } else {
+    doc.setFont("helvetica","italic"); doc.setFontSize(10.5); doc.setTextColor(120);
+    doc.text("No scheduled test attempts yet.",14,66);
+  }
   doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(120);
   doc.text("Computer-generated by the Sonam Tuitions test portal.",14,285);
+}
+async function downloadReportCard(uid){
+  const [stuDoc,attempts]=await Promise.all([db.collection("users").doc(uid).get(),
+    db.collection("attempts").where("studentUid","==",uid).orderBy("submittedAt","desc").get()]);
+  const stu=stuDoc.data(); const {jsPDF}=window.jspdf; const doc=new jsPDF();
+  drawReportCardPage(doc,stu,attempts.docs);
   doc.save(`ReportCard_${stu.name.replace(/\s+/g,"_")}.pdf`);
+}
+async function downloadAllReportCards(){
+  const centreId=ME.role==="master"?val("rCentre"):ME.centreId;
+  setBtn("rAllBtn",true,"Building…"); setMsg("rMsg","Fetching students…","ok");
+  try{
+    let q=db.collection("users").where("role","==","student");
+    if(centreId) q=q.where("centreId","==",centreId);
+    const snap=await q.get();
+    if(snap.empty){ setMsg("rMsg","No students found for this centre.","err"); setBtn("rAllBtn",false,allBtnLabel(centreId)); return; }
+    const {jsPDF}=window.jspdf; const doc=new jsPDF();
+    let n=0;
+    for(const d of snap.docs){
+      const stu={id:d.id,...d.data()};
+      setMsg("rMsg",`Building… ${n+1}/${snap.size} (${esc(stu.name)})`,"ok");
+      const attempts=await db.collection("attempts").where("studentUid","==",stu.id).orderBy("submittedAt","desc").get();
+      if(n>0) doc.addPage();
+      drawReportCardPage(doc,stu,attempts.docs);
+      n++;
+    }
+    const fname=`ReportCards_${centreId?centreId:"AllCentres"}_${new Date().toISOString().slice(0,10)}.pdf`;
+    doc.save(fname);
+    setMsg("rMsg",`✓ Downloaded ${snap.size} report card${snap.size===1?"":"s"} in one PDF (one per page).`,"ok");
+  }catch(e){ setMsg("rMsg",errMsg(e),"err"); }
+  setBtn("rAllBtn",false,allBtnLabel(centreId));
+}
+
+/* ===== Toppers leaderboard ===== */
+function pageToppers(){
+  setView(`<h1 class="page-title">Toppers</h1>
+    <p class="page-sub">Ranked by average score % across scheduled (class) tests — practice attempts are not counted.</p>
+    <div class="card" style="max-width:680px">
+      <div class="grid cols-2">
+        <div><label>Exam</label><select id="tpExam"><option value="">All exams</option>${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
+        <div><label>Class</label><select id="tpClass"><option value="">Both 11 &amp; 12</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
+      </div>
+      <div class="grid cols-2">
+        <div><label>Centre</label>${ME.role==="master"?`<select id="tpCentre"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div>
+        <div><label>Show top</label><select id="tpTopN"><option value="10">Top 10</option><option value="20">Top 20</option><option value="50">Top 50</option><option value="all">All ranked students</option></select></div>
+      </div>
+      <div class="msg" id="tpMsg"></div>
+      <div class="row" style="gap:10px;margin-top:6px">
+        <button class="btn" id="tpBtn" onclick="loadToppers()">Show toppers</button>
+        <button class="btn gold" id="tpPrintBtn" onclick="printToppers()" style="display:none">🖶 Print / Save as PDF</button>
+      </div>
+    </div>
+    <div id="tpResults" style="margin-top:18px"></div>`);
+}
+let LAST_TOPPERS=null;
+async function loadToppers(){
+  const examF=val("tpExam"),clsF=val("tpClass"),centreF=ME.role==="master"?val("tpCentre"):ME.centreId,topN=val("tpTopN");
+  setBtn("tpBtn",true,"Calculating…"); el("tpPrintBtn").style.display="none"; LAST_TOPPERS=null;
+  try{
+    let aq=db.collection("attempts").where("isPractice","==",false);
+    if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
+    let uq=db.collection("users").where("role","==","student");
+    if(ME.role==="admin") uq=uq.where("centreId","==",ME.centreId);
+    const [asnap,usnap]=await Promise.all([aq.get(),uq.get()]);
+    const stuMap={}; usnap.docs.forEach(d=>stuMap[d.id]={id:d.id,...d.data()});
+    const agg={};
+    asnap.forEach(d=>{
+      const a=d.data(); if(examF&&a.exam!==examF) return; if(a.disqualified) return;
+      const stu=stuMap[a.studentUid]; if(!stu) return; // only current, in-scope students
+      if(clsF&&stu.class!==clsF) return;
+      if(centreF&&stu.centreId!==centreF) return;
+      if(!agg[a.studentUid]) agg[a.studentUid]={score:0,total:0,count:0};
+      agg[a.studentUid].score+=a.score; agg[a.studentUid].total+=a.total; agg[a.studentUid].count++;
+    });
+    let rows=Object.keys(agg).map(uid=>{const g=agg[uid],stu=stuMap[uid];
+      return {name:stu.name,centre:stu.centreId,cls:stu.class,stream:stu.stream,tests:g.count,score:g.score,total:g.total,avg:g.total?g.score/g.total*100:0};});
+    rows.sort((a,b)=>b.avg-a.avg||b.tests-a.tests);
+    if(topN!=="all") rows=rows.slice(0,parseInt(topN));
+    const meta={exam:examF||"All exams",cls:clsF?clsLabel(clsF):"Class 11 & 12",centre:ME.role==="master"?(centreF?centreName(centreF):"All centres"):centreName(ME.centreId)};
+    LAST_TOPPERS={meta,rows};
+    setBtn("tpBtn",false,"Show toppers");
+    if(!rows.length){ el("tpResults").innerHTML=`<div class="card">${emptyState("No ranked results yet","No matching class-test attempts found for this filter.")}</div>`; return; }
+    el("tpPrintBtn").style.display="inline-flex";
+    el("tpResults").innerHTML=`<div class="card"><p class="muted" style="margin:0 0 10px">${esc(meta.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)}</p>
+      ${tableHTML(["Rank","Name","Centre","Class","Tests taken","Score","Average %"],
+        rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.tests,`${r.score}/${r.total}`,`<b>${r.avg.toFixed(1)}%</b>`]))}</div>`;
+  }catch(e){ el("tpResults").innerHTML=errBox(e); setBtn("tpBtn",false,"Show toppers"); }
+}
+function medal(rank){ return rank===1?"🥇 1":rank===2?"🥈 2":rank===3?"🥉 3":String(rank); }
+function printToppers(){
+  if(!LAST_TOPPERS||!LAST_TOPPERS.rows.length) return;
+  const {meta,rows}=LAST_TOPPERS;
+  const body=rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
+    <td>${esc(clsLabel(r.cls))}</td><td>${r.tests}</td><td>${r.score}/${r.total}</td><td><b>${r.avg.toFixed(1)}%</b></td></tr>`).join("");
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Toppers List</title>
+  <style>
+    *{box-sizing:border-box} body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:28px 30px;font-size:13.5px}
+    .head{text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}
+    .head img{height:72px;display:block;margin:0 auto 4px} .head .ttl{font-size:17px;font-weight:bold;margin-top:2px}
+    .meta{text-align:center;color:#444;font-size:12.5px;margin-bottom:16px}
+    table{width:100%;border-collapse:collapse} th,td{border:1px solid #ccc;padding:7px 9px;text-align:left;font-size:12.5px}
+    th{background:#1f3d2f;color:#fff} tr:nth-child(even){background:#f7f5ee} td.rk{text-align:center;font-weight:bold;width:44px}
+    .foot{text-align:center;color:#999;font-size:10.5px;margin-top:18px;border-top:1px solid #ddd;padding-top:6px}
+    @media print{body{padding:0}@page{margin:14mm}}
+  </style></head><body>
+  <div class="head"><img src="${LOGO}"/><div class="ttl">Toppers List</div></div>
+  <div class="meta">${esc(meta.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; Generated ${new Date().toLocaleDateString()}</div>
+  <table><thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Tests taken</th><th>Score</th><th>Average %</th></tr></thead>
+  <tbody>${body}</tbody></table>
+  <div class="foot">Sonam Tuitions · generated from the test portal</div>
+  <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
+  </body></html>`;
+  openPaperWindow(html);
 }
 
 /* ============================================================
@@ -1634,7 +1877,9 @@ async function pageHistory(){
     const snap=await db.collection("attempts").where("studentUid","==",ME.uid).orderBy("submittedAt","desc").get();
     el("histList").innerHTML=snap.empty?emptyState("No attempts yet","Take a test or practice to see results here.")
       :tableHTML(["Test","Exam","Date","Score","%","Breakdown",""],
-        snap.docs.map(d=>{const a=d.data();return [`<b>${esc(a.testTitle)}</b>${a.isPractice?' <span class="tag pending">practice</span>':''}`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+        snap.docs.map(d=>{const a=d.data();
+          if(a.disqualified) return [`<b>${esc(a.testTitle)}</b> <span class="tag danger">Disqualified</span>`,examTag(a.exam),fmtDate(a.submittedAt),"—","—","—",`<button class="btn ghost sm" onclick='reviewAttempt("${d.id}")'>Check answers</button>`];
+          return [`<b>${esc(a.testTitle)}</b>${a.isPractice?' <span class="tag pending">practice</span>':''}`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
           `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn ghost sm" onclick='reviewAttempt("${d.id}")'>Check answers</button>`];}));
   }catch(e){ el("histList").innerHTML=errBox(e); }
 }
@@ -1644,16 +1889,38 @@ async function pageHistory(){
    ============================================================ */
 let EXAM=null;
 async function startTest(testId){ const doc=await db.collection("tests").doc(testId).get(); launchExam({id:testId,...doc.data()},false); }
+let VIS_HANDLER=null;
 async function launchExam(test,isPractice){
   const qDocs=await Promise.all(test.questionIds.map(id=>db.collection("questions").doc(id).get()));
   let questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
   questions=shuffle(questions); // randomised per attempt — no two students see the same order
   if(!questions.length){ alert("This test has no available questions."); return; }
-  EXAM={test,questions,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000};
+  EXAM={test,questions,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,disqualified:false,live:true};
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
   renderPalette(); renderQ(); startTimer();
+  attachCheatGuard();
 }
+function attachCheatGuard(){
+  detachCheatGuard();
+  VIS_HANDLER=()=>{
+    if(!EXAM||!EXAM.live) return;
+    if(document.hidden){
+      EXAM.violations=(EXAM.violations||0)+1;
+      if(EXAM.violations>=3){ EXAM.disqualified=true; submitExam(false,true); }
+    } else if(!EXAM.disqualified){
+      if(EXAM.violations===1) warnModal("Warning 1 of 2","Switching tabs or opening a new tab during a test isn't allowed. One more time and you'll get a final warning — a third time auto-submits your test as malpractice.");
+      else if(EXAM.violations===2) warnModal("Final warning (2 of 2)","This is your last warning. Switching tabs or opening a new tab again will auto-submit your test immediately and mark it as malpractice.");
+    }
+  };
+  document.addEventListener("visibilitychange",VIS_HANDLER);
+  window.addEventListener("beforeunload",BEFOREUNLOAD_HANDLER);
+}
+function detachCheatGuard(){
+  if(VIS_HANDLER){ document.removeEventListener("visibilitychange",VIS_HANDLER); VIS_HANDLER=null; }
+  window.removeEventListener("beforeunload",BEFOREUNLOAD_HANDLER);
+}
+function BEFOREUNLOAD_HANDLER(e){ if(EXAM&&EXAM.live){ e.preventDefault(); e.returnValue=""; } }
 function startTimer(){
   clearInterval(EXAM.timerInt);
   EXAM.timerInt=setInterval(()=>{
@@ -1681,7 +1948,9 @@ function confirmSubmit(){
   const ans=Object.keys(EXAM.answers).length,tot=EXAM.questions.length;
   confirmModal(`Do you want to submit the test? (${ans} of ${tot} answered)`, ()=>submitExam(false), "Yes, submit");
 }
-async function submitExam(auto){
+async function submitExam(auto,disqualify){
+  if(EXAM.live===false) return; // already submitted (guards against a double-fire)
+  EXAM.live=false; detachCheatGuard();
   clearInterval(EXAM.timerInt);
   const exam=EXAM.test.exam,neg=examNeg(exam);
   let score=0,correct=0,wrong=0,unattempted=0;
@@ -1695,16 +1964,25 @@ async function submitExam(auto){
   // every attempt is saved (practice too) so answers can be reviewed later
   try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,isPractice:!!EXAM.isPractice,
       studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
-      questionOrder:order,answers,
+      questionOrder:order,answers,disqualified:!!disqualify,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
   catch(e){ console.error("attempt save failed",e); }
-  showResult({score,total,correct,wrong,unattempted});
+  if(disqualify) showMalpracticeResult(); else showResult({score,total,correct,wrong,unattempted});
+}
+function showMalpracticeResult(){
+  el("examScreen").style.display="none"; document.body.style.overflow="";
+  setView(`<div class="card" style="max-width:520px;margin:40px auto;text-align:center;border-color:var(--danger)">
+    <div style="font-size:44px;margin-bottom:6px">⚠</div>
+    <h2 class="serif" style="color:#822f22;font-size:22px;margin-bottom:8px">Test auto-submitted due to malpractice</h2>
+    <p class="muted" style="line-height:1.6">Switching tabs or opening a new tab was detected three times during this test, so it was ended automatically. This attempt is recorded as <b>disqualified</b> and will not count toward your results.</p>
+    <button class="btn" style="margin-top:16px" onclick="go(ME.role==='student'?'myhome':'dashboard')">Back</button></div>`);
 }
 function showResult(r){
   const p=pct(r.score,r.total);
   el("examScreen").style.display="none"; document.body.style.overflow="";
-  setView(`<div class="score-hero">
+  setView(`${r.disqualified?`<div class="card" style="border-color:var(--danger);background:var(--danger-soft);margin-bottom:14px"><b style="color:#822f22">⚠ Disqualified</b> <span class="muted">— this attempt was auto-submitted for tab-switching and is not counted in your results. Shown below for reference only.</span></div>`:""}
+    <div class="score-hero">
       <div class="muted" style="text-transform:uppercase;letter-spacing:1px;font-weight:700;font-size:12px">${esc(EXAM.test.title)}${EXAM.isPractice?" · Practice":""}</div>
       <div class="big">${r.score}<small>/${r.total}</small></div>
       <div class="pct">${p}% scored${EXAM.isPractice?" (practice — not saved to report card)":""}</div></div>
@@ -1713,7 +1991,13 @@ function showResult(r){
       <div class="kpi w"><div class="n">${r.wrong}</div><div class="l">Wrong</div></div>
       <div class="kpi u"><div class="n">${r.unattempted}</div><div class="l">Skipped</div></div>
       <div class="kpi"><div class="n">${EXAM.questions.length}</div><div class="l">Total Q</div></div></div>
-    <h2 class="serif" style="font-size:22px;margin:8px 0 14px">Detailed solutions</h2><div id="solList"></div>`);
+    ${solutionsUnlocked(EXAM.test,EXAM.isPractice)?`<h2 class="serif" style="font-size:22px;margin:8px 0 14px">Detailed solutions</h2><div id="solList"></div>`
+      :`<div class="card" style="text-align:center;padding:30px 20px;margin-top:8px">
+          <div style="font-size:30px;margin-bottom:6px">🔒</div>
+          <h3 style="margin-bottom:6px">Solutions not available yet</h3>
+          <p class="muted">Your score above is final — the answer key and explanations for this test will be shown from <b>${fmtDate(EXAM.test.solutionsAt)}</b>. Check back after that to review each question.</p>
+        </div>`}`);
+  if(!solutionsUnlocked(EXAM.test,EXAM.isPractice)) return;
   el("solList").innerHTML=EXAM.questions.map((q,i)=>{const sel=EXAM.answers[i];
     return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${q.subject}${q.topic?" · "+q.topic:""}</div>
       <p class="q-text" style="font-size:16px;margin:6px 0 14px">${qLabel(q)}</p>
@@ -1723,17 +2007,17 @@ function showResult(r){
 }
 async function reviewAttempt(attemptId){
   const a=(await db.collection("attempts").doc(attemptId).get()).data();
-  let order=a.questionOrder, answersArr=a.answers;
-  if(!order){ // older attempt without saved order — fall back to the test's question list
+  let order=a.questionOrder, answersArr=a.answers, solutionsAt=null;
+  if(!a.isPractice){
     const t=await db.collection("tests").doc(a.testId).get();
-    if(!t.exists){ alert("Saved answers aren't available for this older attempt."); return; }
-    order=t.data().questionIds;
+    if(t.exists){ solutionsAt=t.data().solutionsAt||null; if(!order) order=t.data().questionIds; }
   }
+  if(!order){ alert("Saved answers aren't available for this older attempt."); return; }
   const qDocs=await Promise.all(order.map(id=>db.collection("questions").doc(id).get()));
   const questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
   const answers={}; if(answersArr) answersArr.forEach((v,i)=>{ if(v!==null&&v!==undefined) answers[i]=v; });
-  EXAM={test:{title:a.testTitle,exam:a.exam},questions,answers,isPractice:!!a.isPractice};
-  showResult({score:a.score,total:a.total,correct:a.correct,wrong:a.wrong,unattempted:a.unattempted});
+  EXAM={test:{title:a.testTitle,exam:a.exam,solutionsAt},questions,answers,isPractice:!!a.isPractice};
+  showResult({score:a.score,total:a.total,correct:a.correct,wrong:a.wrong,unattempted:a.unattempted,disqualified:!!a.disqualified});
 }
 
 /* ============================================================
@@ -1741,10 +2025,16 @@ async function reviewAttempt(attemptId){
    ============================================================ */
 async function viewTestResults(testId){
   const t=(await db.collection("tests").doc(testId).get()).data();
-  const snap=await db.collection("attempts").where("testId","==",testId).orderBy("score","desc").get();
+  const snap=await db.collection("attempts").where("testId","==",testId).get();
+  const docs=snap.docs.slice().sort((a,b)=>{
+    const A=a.data(),B=b.data();
+    if(!!A.disqualified!==!!B.disqualified) return A.disqualified?1:-1; // disqualified sinks to the bottom, not ranked by partial score
+    return (B.score||0)-(A.score||0);
+  });
   modal(`<button class="x" onclick="closeModal()">×</button><h2>${esc(t.title)} — results</h2>
-    ${snap.empty?emptyState("No attempts yet","No students have taken this test."):
-      tableHTML(["Rank","Student","Centre","Score","%"],snap.docs.map((d,i)=>{const a=d.data();return [`#${i+1}`,esc(a.studentName),centreName(a.centreId),`${a.score}/${a.total}`,pct(a.score,a.total)+"%"];}))}`,true);
+    ${!docs.length?emptyState("No attempts yet","No students have taken this test."):
+      tableHTML(["Rank","Student","Centre","Score","%"],docs.map((d,i)=>{const a=d.data();
+        return [`#${i+1}`,esc(a.studentName)+(a.disqualified?' <span class="tag danger">Disqualified</span>':""),centreName(a.centreId),a.disqualified?"—":`${a.score}/${a.total}`,a.disqualified?"—":pct(a.score,a.total)+"%"];}))}`,true);
 }
 
 /* ============================================================
