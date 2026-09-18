@@ -225,6 +225,7 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
     <label>Email or Login ID</label><input type="text" id="loginEmail" placeholder="your email or username" autocomplete="username"/>
     <label>Password</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password"/>
     <button class="btn full" id="loginBtn" onclick="doLogin()">Sign in</button>
+    <p style="text-align:center;margin-top:12px"><a href="javascript:void(0)" onclick="showForgotPassword()" style="font-size:13px;color:var(--accent);text-decoration:underline">Forgot your password?</a></p>
     <div class="msg" id="authMsg"></div>
     <p class="muted" style="margin-top:18px;text-align:center;font-size:12.5px">
       First-time setup? Open the browser console and run <code>bootstrapMaster()</code> once.</p>
@@ -2242,6 +2243,12 @@ function errBox(e){return `<div class="note">Couldn't load: ${esc(errMsg(e))}. $
 function errMsg(e){return (e&&e.message)||String(e);}
 function modal(html,wide){el("modalBox").className="modal"+(wide?" wide":"");el("modalBox").innerHTML=html;el("modalBg").classList.add("show");}
 function closeModal(){el("modalBg").classList.remove("show");}
+function showForgotPassword(){
+  modal(`<h2>Forgot your password?</h2>
+    <p class="muted">For security, passwords can't be reset from this screen directly. Please contact your centre — they can set a new password for you right away from their side of the portal.</p>
+    <p class="muted" style="margin-top:10px">Staff: this is done from <b>Students → Reset password</b> once you're signed in.</p>
+    <div class="row end" style="margin-top:16px"><button class="btn" onclick="closeModal()">Got it</button></div>`);
+}
 function classSelect(id,withAll=true){return `<select id="${id}">${withAll?'<option value="all">All</option>':''}<option value="11">Class 11</option><option value="12">Class 12</option></select>`;}
 function difficultySelect(id,withAny=false){return `<select id="${id}">${withAny?'<option value="">Any</option>':''}${DIFFICULTIES.map(d=>`<option>${d}</option>`).join("")}</select>`;}
 function difficultyChecks(cls){return DIFFICULTIES.map(d=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="${cls}" value="${esc(d)}" style="width:auto"/> ${esc(d)}</label>`).join("");}
