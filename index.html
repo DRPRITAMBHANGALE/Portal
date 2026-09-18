@@ -1358,6 +1358,10 @@ async function pageStudents(){
     <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · create logins &amp; manage students</p>
     ${ME.role==="master"?`<div class="card" style="margin-bottom:16px"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h3 style="margin:0">Centre admins</h3><button class="btn ghost sm" onclick="openAddAdmin()">+ Add centre admin</button></div><div id="adminList" class="muted">Loading…</div></div>`:""}
     <div class="card" style="margin-bottom:16px">
+      <h3 style="margin:0 0 2px">Practice tests access</h3>
+      <p class="muted" style="margin:0 0 10px;font-size:13px">Turn student self-practice on or off per centre — e.g. switch it off during exam week so students focus only on scheduled tests.</p>
+      <div id="practiceAccessList" class="muted">Loading…</div></div>
+    <div class="card" style="margin-bottom:16px">
       <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div><h3 style="margin:0 0 2px">Promote batch to next year</h3>
           <p class="muted" style="margin:0;font-size:13px">Moves every Class 11 student ${ME.role==="master"?"in the chosen centre":"in "+esc(centreName(ME.centreId))} to Class 12 in one click — no need to migrate students one by one when a new academic year starts.</p></div>
@@ -1369,8 +1373,29 @@ async function pageStudents(){
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
-  loadStudents();
+  loadStudents(); loadPracticeAccess();
   if(ME.role==="master") loadAdmins();
+}
+async function loadPracticeAccess(){
+  try{
+    const doc=await db.collection("settings").doc("practiceAccess").get();
+    const flags=doc.exists?doc.data():{};
+    const rows=(ME.role==="master"?CENTRES:CENTRES.filter(c=>c.id===ME.centreId)).map(c=>{
+      const on=flags[c.id]!==false; // missing = enabled by default
+      return `<div class="row" style="justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span>${esc(c.name)}</span>
+        <button class="btn ${on?'':'ghost'} sm" style="min-width:110px" onclick="togglePracticeAccess('${c.id}',${on})">${on?"✓ Enabled":"✕ Disabled"}</button></div>`;
+    }).join("");
+    el("practiceAccessList").innerHTML=`<div>${rows}</div>`;
+  }catch(e){ el("practiceAccessList").innerHTML=errBox(e); }
+}
+async function togglePracticeAccess(centreId,currentlyOn){
+  const next=!currentlyOn;
+  try{
+    await db.collection("settings").doc("practiceAccess").set({[centreId]:next},{merge:true});
+    logCentreUpdate("practice_toggled",centreId,{enabled:next});
+    loadPracticeAccess();
+  }catch(e){ alert("Could not update: "+errMsg(e)); }
 }
 async function promoteBatch(){
   const centreId=ME.role==="master"?val("promCentre"):ME.centreId;
@@ -1412,12 +1437,12 @@ function pageCentreUpdates(){
     <p class="page-sub">Every student added or removed, and by whom, across all six centres.</p>
     <div class="grid cols-2" style="max-width:640px">
       <div><label>Centre</label><select id="cuCentre" onchange="loadCentreUpdates()"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
-      <div><label>Action</label><select id="cuAction" onchange="loadCentreUpdates()"><option value="">All actions</option><option value="student_added">Student added</option><option value="students_bulk_added">Bulk upload</option><option value="student_deleted">Student deleted</option><option value="students_promoted">Promoted to Class 12</option></select></div>
+      <div><label>Action</label><select id="cuAction" onchange="loadCentreUpdates()"><option value="">All actions</option><option value="student_added">Student added</option><option value="students_bulk_added">Bulk upload</option><option value="student_deleted">Student deleted</option><option value="students_promoted">Promoted to Class 12</option><option value="student_password_reset">Password reset</option><option value="practice_toggled">Practice access changed</option></select></div>
     </div>
     <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
   loadCentreUpdates();
 }
-function cuActionLabel(a){ return {student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12"}[a]||a; }
+function cuActionLabel(a){ return {student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
 async function loadCentreUpdates(){
   const centreF=val("cuCentre"),actionF=val("cuAction");
   el("cuList").innerHTML=`<div class="muted">Loading…</div>`;
@@ -1430,6 +1455,7 @@ async function loadCentreUpdates(){
       docs.map(d=>{const x=d.data();
         const details=(x.action==="students_bulk_added"||x.action==="students_promoted")
           ? `${x.count} student${x.count===1?"":"s"}: ${esc((x.studentNames||[]).slice(0,6).join(", "))}${(x.studentNames||[]).length>6?` +${x.studentNames.length-6} more`:""}`
+          : x.action==="practice_toggled" ? `Practice ${x.enabled?"turned ON":"turned OFF"}`
           : `${esc(x.studentName||"—")}${x.loginId?` (${esc(x.loginId)})`:""}`;
         return [fmtDate(x.createdAt),centreName(x.centreId),`${esc(x.actorName)} <span class="muted" style="font-size:11.5px">(${x.actorRole})</span>`,cuActionLabel(x.action),details];}));
   }catch(e){ el("cuList").innerHTML=errBox(e); }
@@ -1442,7 +1468,7 @@ async function loadStudents(){
     el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
       :tableHTML(["Name","Login ID","Password","Class","Stream","Centre",""],
         snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.loginId||s.email||"—"),esc(s.pw||"—"),"Class "+s.class,s.stream||"—",centreName(s.centreId),
-          `<button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
+          `<button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
   }catch(e){ el("stuList").innerHTML=errBox(e); }
 }
 function openAddStudent(){
@@ -1476,6 +1502,30 @@ async function addStudent(){
     logCentreUpdate("student_added",centreId,{studentName:name,loginId});
     closeModal(); loadStudents();
   }catch(e){ setMsg("sMsg",errMsg(e),"err"); setBtn("sBtn",false,"Create login"); }
+}
+function openResetPassword(uid,name){
+  modal(`<h2>Reset password</h2>
+    <p class="muted">For <b>${esc(name)}</b>. This does <b>not</b> require their old password — use this when a student has forgotten it.</p>
+    <label>New password</label><input id="rpNew" placeholder="min 6 characters"/>
+    <button type="button" class="btn ghost sm" style="width:auto;margin-top:8px" onclick="el('rpNew').value=genPassword()">Generate random password</button>
+    <div class="msg" id="rpMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="rpBtn" onclick="doResetPassword('${uid}')">Reset password</button></div>`);
+}
+async function doResetPassword(uid){
+  const np=val("rpNew").trim();
+  if(np.length<6) return setMsg("rpMsg","Password must be at least 6 characters.","err");
+  setBtn("rpBtn",true,"Resetting…");
+  try{
+    const token=await auth.currentUser.getIdToken();
+    const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+      body:JSON.stringify({action:"resetStudentPassword",studentUid:uid,newPassword:np})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(data.error||("server returned "+res.status));
+    setMsg("rpMsg",`✓ Password reset to: ${esc(np)} — share this with the student.`,"ok");
+    setBtn("rpBtn",false,"Reset password");
+    setTimeout(()=>{closeModal(); loadStudents();},1600);
+  }catch(e){ setMsg("rpMsg",errMsg(e),"err"); setBtn("rpBtn",false,"Reset password"); }
 }
 async function delStudent(uid){
   if(!confirm("Delete this student? They lose access and disappear from the list. (Their past results are kept unless removed separately.)")) return;
@@ -1854,8 +1904,21 @@ async function pageStudentHome(){
     el("myTests").innerHTML=html||`<div class="card">${emptyState("No tests scheduled","Use the Practice tab to build your own.")}</div>`;
   }catch(e){ el("myTests").innerHTML=errBox(e); }
 }
-function pagePractice(){
+async function pagePractice(){
   const myExams=examsForStream(ME.stream||"PCM");
+  let practiceOn=true;
+  try{ const doc=await db.collection("settings").doc("practiceAccess").get(); practiceOn=!doc.exists||doc.data()[ME.centreId]!==false; }catch(_){}
+  if(!practiceOn){
+    setView(`<h1 class="page-title">Practice</h1>
+      <div class="card" style="text-align:center;padding:34px 22px">
+        <div style="font-size:32px;margin-bottom:8px">🔒</div>
+        <h3 style="margin-bottom:6px">Practice tests are currently off</h3>
+        <p class="muted">Your centre has turned off self-practice for now — check with ${esc(centreName(ME.centreId))} for when it will be back on. Any practice test you already scheduled is still available below.</p>
+      </div>
+      <div style="max-width:600px;margin-top:22px"><h3 class="serif" style="font-size:18px">Your scheduled practice</h3><div id="pSched" class="muted">Loading…</div></div>`);
+    loadScheduledPractice();
+    return;
+  }
   setView(`<h1 class="page-title">Practice</h1>
     <p class="page-sub">Build your own practice test — by chapters, a full subject, or a full mock paper. Start now or schedule it for later.</p>
     <div class="card" style="max-width:600px">
