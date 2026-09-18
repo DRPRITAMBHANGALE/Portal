@@ -186,6 +186,11 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
 .rad{border-top:1.5px solid currentColor;padding:0 2px;margin-left:1px}
 .logo-img{display:block} .login-logo{max-width:230px;width:100%;height:auto;margin:0 auto 6px}
 .top-logo{height:40px;width:auto;background:#fff;border-radius:7px;padding:3px 5px}
+.logtbl{border-collapse:collapse;width:100%;font-size:12px;font-family:'Courier New',monospace}
+.logtbl th,.logtbl td{border:1px solid var(--line);padding:5px 6px;text-align:center}
+.logtbl thead th{position:sticky;top:0;background:var(--accent);color:#fff;z-index:2}
+.logtbl tbody th{position:sticky;left:0;background:var(--paper-2);color:var(--ink)}
+.logtbl tbody tr:nth-child(even){background:#faf8f1}
 
 /* ---------- Mobile ---------- */
 @media(max-width:760px){
@@ -249,6 +254,7 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
 <!-- ============ EXAM SCREEN ============ -->
 <div class="exam" id="examScreen">
   <div class="ebar"><h2 id="examTitle">Test</h2><div class="spacer"></div>
+    <button class="btn ghost sm" style="color:#fff;border-color:rgba(255,255,255,.5)" onclick="openLogTables()">📊 Log Tables</button>
     <div class="timer" id="examTimer">--:--</div>
     <button class="btn gold sm" id="submitBtn" onclick="confirmSubmit()">Submit test</button></div>
   <div class="exam-body">
@@ -2241,6 +2247,42 @@ function tableHTML(head,rows){return `<table><thead><tr>${head.map(h=>`<th>${h}<
 function emptyState(t,s){return `<div class="empty"><div class="ico">◔</div><h3 class="serif" style="margin:10px 0 4px">${t}</h3><p class="muted">${s}</p></div>`;}
 function errBox(e){return `<div class="note">Couldn't load: ${esc(errMsg(e))}. ${/index/i.test(e.message||"")?'A Firestore index may be needed — click the link in the browser console (F12) to create it, then reload.':''}</div>`;}
 function errMsg(e){return (e&&e.message)||String(e);}
+/* ---- Log / Antilog reference tables (standard 4-figure format, computed exactly — same reference used in MHT-CET/JEE/NEET) ---- */
+function buildLogTableRows(){
+  let rows="";
+  for(let n=10;n<=99;n++){
+    const base=n/10; let cells="";
+    for(let d=0;d<=9;d++){ const v=Math.log10(base+d/100); cells+=`<td>${String(Math.round(v*10000)).padStart(4,"0")}</td>`; }
+    rows+=`<tr><th>${base.toFixed(1)}</th>${cells}</tr>`;
+  }
+  return rows;
+}
+function buildAntilogTableRows(){
+  let rows="";
+  for(let n=0;n<=99;n++){
+    const base=n/100; let cells="";
+    for(let d=0;d<=9;d++){ const v=Math.pow(10,base+d/1000); cells+=`<td>${String(Math.round(v*1000)).padStart(4,"0")}</td>`; }
+    rows+=`<tr><th>.${String(n).padStart(2,"0")}</th>${cells}</tr>`;
+  }
+  return rows;
+}
+function openLogTables(){
+  modal(`<button class="x" onclick="closeModal()">×</button>
+    <h2>📊 Log &amp; Antilog Tables</h2>
+    <p class="muted" style="margin-top:-4px">Standard 4-figure reference tables — the same lookup you'll use in the real exam. Find your row and column, and work out the value yourself.</p>
+    <div class="row" style="gap:8px;margin-bottom:10px">
+      <button class="btn sm" id="latTabLog" onclick="latShowTab('log')">Log Table</button>
+      <button class="btn ghost sm" id="latTabAnti" onclick="latShowTab('anti')">Antilog Table</button>
+    </div>
+    <div id="latTableWrap" style="max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:8px"></div>`,true);
+  latShowTab("log");
+}
+function latShowTab(which){
+  el("latTabLog").className="btn "+(which==="log"?"":"ghost")+" sm";
+  el("latTabAnti").className="btn "+(which==="anti"?"":"ghost")+" sm";
+  const head=`<tr><th>N</th>${Array.from({length:10},(_,i)=>`<th>${i}</th>`).join("")}</tr>`;
+  el("latTableWrap").innerHTML=`<table class="logtbl"><thead>${head}</thead><tbody>${which==="log"?buildLogTableRows():buildAntilogTableRows()}</tbody></table>`;
+}
 function modal(html,wide){el("modalBox").className="modal"+(wide?" wide":"");el("modalBox").innerHTML=html;el("modalBg").classList.add("show");}
 function closeModal(){el("modalBg").classList.remove("show");}
 function showForgotPassword(){
