@@ -1542,7 +1542,8 @@ async function delStudent(uid){
     const stu=snap.exists?snap.data():null;
     await db.collection("users").doc(uid).delete();
     if(stu) logCentreUpdate("student_deleted",stu.centreId,{studentName:stu.name,loginId:stu.loginId});
-    loadStudents();
+    if(el("stuList")) loadStudents();
+    if(el("ssResult")){ SS_STUDENTS=SS_STUDENTS.filter(s=>s.id!==uid); el("ssResult").innerHTML=`<div class="card">${emptyState("Student deleted","Search for another student above.")}</div>`; }
   }
   catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
@@ -1600,6 +1601,7 @@ async function ssSelectStudent(uid){
       <div class="row" style="gap:8px;margin-top:14px">
         <button class="btn ghost sm" onclick='openResetPassword("${uid}","${esc(stu.name)}")'>Reset password</button>
         <button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>
+        <button class="btn ghost sm danger" onclick="delStudent('${uid}')">Delete student</button>
       </div></div>`;
   }catch(e){ el("ssResult").innerHTML=errBox(e); }
 }
