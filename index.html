@@ -548,12 +548,13 @@ const STAFF_NAV=[
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
   {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
-  {id:"students",label:"Students",ic:"☺"},{id:"results",label:"Results & report cards",ic:"⤓"},
+  {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
+  {id:"results",label:"Results & report cards",ic:"⤓"},
   {id:"toppers",label:"Toppers",ic:"🏆"},{id:"centreupdates",label:"Centre updates",ic:"🕘"}
 ];
 const ADMIN_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
-  {id:"students",label:"Students",ic:"☺"},
+  {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
   {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"}
 ];
 const NAV={ master:STAFF_NAV, admin:ADMIN_NAV,
@@ -572,7 +573,7 @@ function go(page){
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
   ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,students:pageStudents,
-    results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
+    searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
 }
 
 /* ============================================================
@@ -1544,6 +1545,63 @@ async function delStudent(uid){
     loadStudents();
   }
   catch(e){ alert("Could not delete: "+errMsg(e)); }
+}
+
+/* ===== Search Student — quick lookup by name ===== */
+let SS_STUDENTS=[];
+async function pageSearchStudent(){
+  setView(`<h1 class="page-title">Search Student</h1>
+    <p class="page-sub">Find a student by name — see their login, password, centre, and last test activity in one place.</p>
+    <div class="card" style="max-width:640px">
+      <label>Search by name</label>
+      <input id="ssSearch" type="text" placeholder="Start typing a student's name…" oninput="ssSearchInput()" autocomplete="off"/>
+      <div id="ssSearchList"></div>
+    </div>
+    <div id="ssResult" style="margin-top:18px"></div>`);
+  await ssLoadStudents();
+}
+async function ssLoadStudents(){
+  let q=db.collection("users").where("role","==","student");
+  if(ME.role==="admin") q=q.where("centreId","==",ME.centreId);
+  const snap=await q.get();
+  SS_STUDENTS=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.name.localeCompare(b.name));
+}
+function ssSearchInput(){
+  const q=val("ssSearch").trim().toLowerCase();
+  if(!q){ el("ssSearchList").innerHTML=""; return; }
+  const hits=SS_STUDENTS.filter(s=>s.name.toLowerCase().includes(q)).slice(0,8);
+  el("ssSearchList").innerHTML=hits.length
+    ? hits.map(s=>`<div class="search-hit" onclick="ssSelectStudent('${s.id}')">${esc(s.name)} <span class="muted" style="font-size:12px">· ${esc(centreName(s.centreId))}</span></div>`).join("")
+    : `<div class="muted" style="padding:8px 2px;font-size:13px">No student matches "${esc(val("ssSearch"))}".</div>`;
+}
+async function ssSelectStudent(uid){
+  el("ssSearch").value=""; el("ssSearchList").innerHTML="";
+  el("ssResult").innerHTML=`<div class="card muted">Loading…</div>`;
+  const stu=SS_STUDENTS.find(s=>s.id===uid);
+  if(!stu){ el("ssResult").innerHTML=errBox(new Error("Student not found.")); return; }
+  try{
+    const snap=await db.collection("attempts").where("studentUid","==",uid).orderBy("submittedAt","desc").get();
+    let lastClass=null,lastPractice=null;
+    snap.forEach(d=>{ const a=d.data();
+      if(!lastClass && !a.isPractice) lastClass=a.submittedAt;
+      if(!lastPractice && a.isPractice) lastPractice=a.submittedAt;
+    });
+    el("ssResult").innerHTML=`<div class="card" style="max-width:640px">
+      <h3 style="margin:0 0 12px">${esc(stu.name)}</h3>
+      ${tableHTML(["Field","Value"],[
+        ["Login ID",esc(stu.loginId||stu.email||"—")],
+        ["Password",esc(stu.pw||"—")],
+        ["Class",esc("Class "+(stu.class||"—"))],
+        ["Course",esc(stu.stream||"—")],
+        ["Centre",esc(centreName(stu.centreId))],
+        ["Last class test given",lastClass?fmtDate(lastClass):"Never"],
+        ["Last practice test given",lastPractice?fmtDate(lastPractice):"Never"]
+      ])}
+      <div class="row" style="gap:8px;margin-top:14px">
+        <button class="btn ghost sm" onclick='openResetPassword("${uid}","${esc(stu.name)}")'>Reset password</button>
+        <button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>
+      </div></div>`;
+  }catch(e){ el("ssResult").innerHTML=errBox(e); }
 }
 
 /* ---- Bulk add students from an Excel file → credentials Excel out ---- */
