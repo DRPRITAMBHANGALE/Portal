@@ -1246,8 +1246,8 @@ function tRebuild(){
   el("tMark").textContent="Marking: "+EXAMS[exam].note;
   let html="";
   if(type==="chapter"){
-    html=`<div><label>Class</label>${classSelect("tCls",false)}</div>
-      <label>Subjects &amp; chapters — tick any subjects to merge (e.g. Physics + Maths), then pick chapters and how many questions from each</label>
+    html=`<div><label>Class</label>${clsScopeSelect("tCls")}</div>
+      <label>Subjects &amp; chapters — tick any subjects to merge (e.g. Physics + Maths), then pick chapters and how many questions from each. Choose "Both 11 &amp; 12" above to merge chapters across both years too.</label>
       <div id="tSubjBlocks"></div>`;
   } else if(type==="subject"){
     html=`<div class="grid cols-2"><div><label>Subject</label><select id="tSubj"></select></div><div><label>Class scope</label>${clsScopeSelect("tScopeCls")}</div></div>
@@ -1263,17 +1263,21 @@ function tRebuild(){
   else { el("tDur").value=EXAMS[exam].fullDuration; }
 }
 function tRenderSubjBlocks(){
-  const exam=val("tExam"),cls=val("tCls");
+  const exam=val("tExam"),clsScope=scopeClasses(val("tCls"));
   el("tSubjBlocks").innerHTML=examSubjects(exam).map(s=>{
-    const chaps=topicsFor(exam,cls,s);
+    const chapHtml=clsScope.map(cls=>{
+      const chaps=topicsFor(exam,cls,s);
+      return (clsScope.length>1?`<div class="muted" style="font-size:12px;font-weight:600;margin:6px 0 2px;width:100%">Class ${cls} chapters</div>`:"")+
+        (chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="tchap" data-subject="${esc(s)}" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+          :`<span class="muted" style="width:100%">No Class ${cls} chapters saved for ${esc(s)}.</span>`);
+    }).join("");
     return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
       <label style="display:flex;align-items:center;gap:8px;margin:0">
         <input type="checkbox" class="tSubjOn" data-subject="${esc(s)}" onchange="tSubjToggle(this)" style="width:auto"/>
         <b style="flex:1">${esc(s)}</b><span class="muted" style="font-size:12.5px">Questions:</span>
         <input type="number" class="tSubjCount" data-subject="${esc(s)}" value="10" min="1" style="width:66px" disabled/></label>
       <div class="row tSubjChaps" data-subject="${esc(s)}" style="display:none;margin-top:8px;padding-left:26px">
-        ${chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="tchap" data-subject="${esc(s)}" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
-          :`<span class="muted">No chapters saved for ${esc(s)} — add them in Syllabus first.</span>`}
+        ${chapHtml}
       </div></div>`;
   }).join("");
 }
@@ -1293,12 +1297,12 @@ async function createTest(){
     if(type==="chapter"){
       const subjOn=[...document.querySelectorAll(".tSubjOn:checked")].map(cb=>cb.dataset.subject);
       if(!subjOn.length) throw new Error("Tick at least one subject.");
-      cls=val("tCls");
+      cls=val("tCls"); const classesForPull=scopeClasses(cls);
       for(const subject of subjOn){
         const chapters=[...document.querySelectorAll(`.tchap[data-subject="${CSS.escape(subject)}"]:checked`)].map(c=>c.value);
         const count=Math.max(1,parseInt(document.querySelector(`.tSubjCount[data-subject="${CSS.escape(subject)}"]`).value)||10);
         if(!chapters.length) throw new Error(`Tick at least one chapter for ${subject}, or untick that subject.`);
-        const ids=await pullForSubject({exam,subject,classes:[cls],chapters,count,weights,numMode,numPct});
+        const ids=await pullForSubject({exam,subject,classes:classesForPull,chapters,count,weights,numMode,numPct});
         if(ids.length<count) short.push(`${subject}: ${ids.length}/${count}`);
         questionIds.push(...ids); subjects.push(subject);
       }
