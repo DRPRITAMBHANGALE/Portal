@@ -153,10 +153,11 @@ tr:last-child td{border-bottom:none}
 .palette{background:var(--paper-2);border:1px solid var(--line);border-radius:14px;padding:18px;position:sticky;top:84px}
 .palette h4{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft)}
 .pgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
-.pgrid button{aspect-ratio:1;border-radius:8px;border:1.5px solid var(--line-2);background:#fff;font-weight:700;font-size:13px;color:var(--ink-soft)}
+.pgrid button{aspect-ratio:1;border-radius:8px;border:1.5px solid var(--line-2);background:#fff;font-weight:700;font-size:13px;color:var(--ink-soft);position:relative}
 .pgrid button.cur{outline:2px solid var(--accent);outline-offset:1px}
 .pgrid button.answered{background:var(--accent);color:#fff;border-color:var(--accent)}
 .pgrid button.review{background:var(--gold);color:#fff;border-color:var(--gold)}
+.pgrid button.review-mark::after{content:"";position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--gold);border:1.5px solid #fff}
 .legend{font-size:12px;color:var(--ink-soft);margin-top:14px;line-height:1.9}
 .legend .dot{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 .solution{margin-top:16px;padding:16px;border-radius:11px;background:var(--accent-soft);border:1px solid #cfe0d7;font-size:14.5px;line-height:1.55}
@@ -262,6 +263,7 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
       <div class="legend">
         <div><span class="dot" style="background:var(--accent)"></span>Answered</div>
         <div><span class="dot" style="background:var(--gold)"></span>Marked for review</div>
+        <div><span class="dot" style="background:var(--accent);position:relative"><span style="position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--gold);border:1px solid #fff"></span></span>Answered &amp; marked</div>
         <div><span class="dot" style="background:#fff;border:1.5px solid var(--line-2)"></span>Not visited</div>
       </div></div></div>
   </div>
@@ -1113,8 +1115,14 @@ function ppRebuild(){
 function ppFillChaps(){
   const list=topicsFor(val("ppExam"),val("ppCls"),val("ppSubj"));
   el("ppChaps").innerHTML=list.length
-    ? list.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="ppchap" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+    ? `<button type="button" class="btn ghost sm" style="width:auto;margin-bottom:6px" onclick="ppToggleAllChaps()">Select all / clear</button>`+
+      list.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="ppchap" value="${esc(c)}" style="width:auto"/> ${esc(c)}</label>`).join("")
     : `<span class="muted">No chapters saved — add them in Syllabus first.</span>`;
+}
+function ppToggleAllChaps(){
+  const boxes=[...document.querySelectorAll(".ppchap")];
+  const allOn=boxes.every(b=>b.checked);
+  boxes.forEach(b=>b.checked=!allOn);
 }
 async function fetchQs(ids){ const docs=await Promise.all(ids.map(id=>db.collection("questions").doc(id).get())); return docs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()})); }
 let LAST_PAPER=null;
@@ -1268,7 +1276,7 @@ function tRenderSubjBlocks(){
     const chapHtml=clsScope.map(cls=>{
       const chaps=topicsFor(exam,cls,s);
       return (clsScope.length>1?`<div class="muted" style="font-size:12px;font-weight:600;margin:6px 0 2px;width:100%">Class ${cls} chapters</div>`:"")+
-        (chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="tchap" data-subject="${esc(s)}" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+        (chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="tchap" data-subject="${esc(s)}" value="${esc(c)}" style="width:auto"/> ${esc(c)}</label>`).join("")
           :`<span class="muted" style="width:100%">No Class ${cls} chapters saved for ${esc(s)}.</span>`);
     }).join("");
     return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
@@ -1277,9 +1285,15 @@ function tRenderSubjBlocks(){
         <b style="flex:1">${esc(s)}</b><span class="muted" style="font-size:12.5px">Questions:</span>
         <input type="number" class="tSubjCount" data-subject="${esc(s)}" value="10" min="1" style="width:66px" disabled/></label>
       <div class="row tSubjChaps" data-subject="${esc(s)}" style="display:none;margin-top:8px;padding-left:26px">
+        <button type="button" class="btn ghost sm" style="width:auto;margin-bottom:6px" onclick="tToggleAllChaps('${esc(s)}')">Select all / clear</button>
         ${chapHtml}
       </div></div>`;
   }).join("");
+}
+function tToggleAllChaps(subject){
+  const boxes=[...document.querySelectorAll(`.tchap[data-subject="${CSS.escape(subject)}"]`)];
+  const allOn=boxes.every(b=>b.checked);
+  boxes.forEach(b=>b.checked=!allOn);
 }
 function tSubjToggle(cb){
   const s=cb.dataset.subject,on=cb.checked;
@@ -1895,10 +1909,16 @@ function pRenderSubjBlocks(){
         <b style="flex:1">${esc(s)}</b><span class="muted" style="font-size:12.5px">Questions:</span>
         <input type="number" class="pSubjCount" data-subject="${esc(s)}" value="10" min="1" style="width:66px" disabled/></label>
       <div class="row pSubjChaps" data-subject="${esc(s)}" style="display:none;margin-top:8px;padding-left:26px">
-        ${chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="pchap" data-subject="${esc(s)}" value="${esc(c)}" checked style="width:auto"/> ${esc(c)}</label>`).join("")
+        <button type="button" class="btn ghost sm" style="width:auto;margin-bottom:6px" onclick="pToggleAllChaps('${esc(s)}')">Select all / clear</button>
+        ${chaps.length?chaps.map(c=>`<label style="margin:0;display:flex;gap:6px;align-items:center;width:48%"><input type="checkbox" class="pchap" data-subject="${esc(s)}" value="${esc(c)}" style="width:auto"/> ${esc(c)}</label>`).join("")
           :`<span class="muted">No chapters available yet for ${esc(s)}.</span>`}
       </div></div>`;
   }).join("");
+}
+function pToggleAllChaps(subject){
+  const boxes=[...document.querySelectorAll(`.pchap[data-subject="${CSS.escape(subject)}"]`)];
+  const allOn=boxes.every(b=>b.checked);
+  boxes.forEach(b=>b.checked=!allOn);
 }
 function pSubjToggle(cb){
   const s=cb.dataset.subject,on=cb.checked;
@@ -2034,7 +2054,11 @@ function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
 function navQ(d){ const n=EXAM.cur+d; if(n>=0&&n<EXAM.questions.length){EXAM.cur=n;renderQ();} }
 function toggleReview(){ EXAM.review.has(EXAM.cur)?EXAM.review.delete(EXAM.cur):EXAM.review.add(EXAM.cur); renderQ(); }
 function renderPalette(){
-  el("palette").innerHTML=EXAM.questions.map((_,i)=>{let cls="";if(EXAM.review.has(i))cls="review";else if(EXAM.answers[i]!==undefined)cls="answered";if(i===EXAM.cur)cls+=" cur";
+  el("palette").innerHTML=EXAM.questions.map((_,i)=>{
+    const answered=EXAM.answers[i]!==undefined, reviewed=EXAM.review.has(i);
+    let cls=answered?"answered":(reviewed?"review":"");
+    if(answered&&reviewed) cls+=" review-mark";
+    if(i===EXAM.cur) cls+=" cur";
     return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()">${i+1}</button>`;}).join("");
 }
 function confirmSubmit(){
