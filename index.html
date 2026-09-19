@@ -686,7 +686,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: draft papers"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: paper class & exam"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1374,6 +1374,7 @@ function openSelfUpload(){
     <hr class="sep"/>
     <p class="muted" style="margin-bottom:2px">📝 <b>A draft paper is made automatically</b> from this file as soon as it's read. Questions you approve later from the Review queue are added to it in their original place. When you're happy, click <b>Save as final paper</b> — here, or later from <b>Tests → Draft papers</b>.</p>
     <label>Paper title</label><input id="suTitle" placeholder="Leave blank to use the file name"/>
+    <label>Paper is for</label><select id="suPaperClass"><option value="">Same class as chosen above</option><option value="both">Class 11 &amp; 12 students</option><option value="11">Class 11 students</option><option value="12">Class 12 students</option></select>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="suDur" type="number" value="60"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="suScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="suStart" type="datetime-local"/></div><div><label>Closes</label><input id="suEnd" type="datetime-local"/></div></div>
@@ -1416,7 +1417,7 @@ async function handleSelfUpload(){
       const title=val("suTitle").trim()||f.name.replace(/\.docx$/i,"");
       if(!val("suTitle").trim()) el("suTitle").value=title;
       const subjects=[...new Set([...ready,...fixable].map(q=>q.subject))];
-      await draftRef.set({title,exam:val("suExam"),type:"selfUpload",subjects,class:val("suClass"),
+      await draftRef.set({title,exam:val("suExam"),type:"selfUpload",subjects,class:val("suPaperClass")||val("suClass"),
         questionIds:liveIds.slice(),qOrder:order,pendingIds,duration:parseInt(val("suDur"))||60,
         scope:"draft",finalScope:ME.role==="master"?val("suScope"):ME.centreId,draft:true,isPractice:false,
         startAt:null,endAt:null,solutionsAt:null,uploadId,uploadName:f.name,
@@ -1580,7 +1581,7 @@ async function deleteSelfUpload(i){
 // ---- Draft papers: made automatically by Self Upload, finalised with one click ----
 async function selfUploadFinalize(){
   if(!SELF_UPLOAD_DRAFT_ID) return;
-  const fields={title:val("suTitle").trim(),duration:parseInt(val("suDur"))||60,
+  const fields={title:val("suTitle").trim(),class:val("suPaperClass")||val("suClass"),duration:parseInt(val("suDur"))||60,
     scope:ME.role==="master"?val("suScope"):ME.centreId,
     startAt:val("suStart")?firebase.firestore.Timestamp.fromDate(new Date(val("suStart"))):null,
     endAt:val("suEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("suEnd"))):null,solutionsAt:null};
@@ -1627,6 +1628,8 @@ async function openFinalizeDraft(id){
   modal(`<h2>✓ Save as final paper</h2><p class="muted">${esc(t.title)} · ${(t.questionIds||[]).length} questions</p>
     ${waiting?`<div class="note" style="margin-bottom:10px">⚠ ${waiting} question${waiting===1?" is":"s are"} still waiting in the Review queue. Approve ${waiting===1?"it":"them"} first if you want ${waiting===1?"it":"them"} in this paper — they're added automatically.</div>`:""}
     <label>Title</label><input id="fdTitle" value="${esc(t.title)}"/>
+    <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="fdExam">${EXAM_KEYS.map(e=>`<option ${e===t.exam?"selected":""}>${e}</option>`).join("")}</select></div>
+      <div><label>Class (who can see it)</label><select id="fdClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="fdDur" type="number" value="${t.duration||60}"/></div>
       <div><label>Assign to</label><select id="fdScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}" ${t.finalScope===c.id?"selected":""}>${c.name}</option>`).join("")}</select></div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="fdStart" type="datetime-local"/></div><div><label>Closes</label><input id="fdEnd" type="datetime-local"/></div></div>
@@ -1644,7 +1647,7 @@ async function saveFinalizeDraft(id){
     let solutionsAt=null;
     if(val("fdSolMode")==="scheduled"){ if(!val("fdSolAt")) throw new Error("Pick when solutions should be shown, or switch back to \"Immediately\".");
       solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("fdSolAt"))); }
-    const fields={title:val("fdTitle").trim()||"Test",duration:parseInt(val("fdDur"))||60,scope:val("fdScope"),
+    const fields={title:val("fdTitle").trim()||"Test",exam:val("fdExam"),class:val("fdClass"),duration:parseInt(val("fdDur"))||60,scope:val("fdScope"),
       startAt:val("fdStart")?firebase.firestore.Timestamp.fromDate(new Date(val("fdStart"))):null,
       endAt:val("fdEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("fdEnd"))):null,solutionsAt};
     setBtn("fdBtn",true,"Saving…");
@@ -2029,6 +2032,8 @@ async function openReschedule(id){
   const toLocal=ts=>{ if(!ts)return""; const d=ts.toDate(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
   modal(`<h2>Reschedule test</h2><p class="muted">${esc(t.title)}</p>
     <label>Title</label><input id="rsTitle" value="${esc(t.title)}"/>
+    <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="rsExam">${EXAM_KEYS.map(e=>`<option ${e===t.exam?"selected":""}>${e}</option>`).join("")}</select></div>
+      <div><label>Class (who can see it)</label><select id="rsClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="rsStart" type="datetime-local" value="${toLocal(t.startAt)}"/></div>
       <div><label>Closes</label><input id="rsEnd" type="datetime-local" value="${toLocal(t.endAt)}"/></div></div>
     <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
@@ -2049,7 +2054,7 @@ async function saveReschedule(id){
       if(!val("rsSolAt")) throw new Error("Pick a date & time for when solutions should be shown, or switch back to \"Immediately\".");
       solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("rsSolAt")));
     }
-    await db.collection("tests").doc(id).update({title:val("rsTitle").trim()||"Test",
+    await db.collection("tests").doc(id).update({title:val("rsTitle").trim()||"Test",exam:val("rsExam"),class:val("rsClass"),
       startAt:val("rsStart")?firebase.firestore.Timestamp.fromDate(new Date(val("rsStart"))):null,
       endAt:val("rsEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("rsEnd"))):null,
       duration:parseInt(val("rsDur"))||30,solutionsAt});
