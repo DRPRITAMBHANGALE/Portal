@@ -1235,16 +1235,27 @@ async function rejectQ(id){ if(!confirm("Reject and delete this draft?"))return;
 async function editReviewQ(id){
   const x=(await db.collection("questions").doc(id).get()).data();
   modal(`<h2>Edit question</h2>
+    <div class="grid cols-2"><div><label>Exam</label><select id="eExam" onchange="eFillSubjects()">${EXAM_KEYS.map(e=>`<option ${e===x.exam?"selected":""}>${e}</option>`).join("")}</select></div>
+      <div><label>Class</label><select id="eClass"><option value="11" ${x.class==="11"?"selected":""}>Class 11</option><option value="12" ${x.class==="12"?"selected":""}>Class 12</option></select></div></div>
+    <div class="grid cols-2"><div><label>Subject</label><select id="eSubject"></select></div>
+      <div><label>Topic / chapter</label><input id="eTopic" value="${esc(x.topic||"")}"/></div></div>
+    <label>Difficulty</label><select id="eDiff">${DIFFICULTIES.map(d=>`<option ${d===x.difficulty?"selected":""}>${d}</option>`).join("")}</select>
     <label>Question</label><textarea id="eText" rows="3">${esc(x.text)}</textarea>
     ${[0,1,2,3].map(i=>`<label>Option ${"ABCD"[i]}</label><div class="row"><input id="eOpt${i}" style="flex:1" value="${esc(x.options[i]||"")}"/>
       <label style="margin:0;display:flex;gap:5px"><input type="radio" name="eCorrect" value="${i}" style="width:auto" ${i===x.correct?"checked":""}/> correct</label></div>`).join("")}
     <label>Solution</label><textarea id="eSol" rows="3">${esc(x.solution||"")}</textarea>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" onclick="saveEditQ('${id}')">Save &amp; approve</button></div>`);
+  eFillSubjects(x.subject);
+}
+function eFillSubjects(preselect){
+  fillSubjects("eExam","eSubject",false);
+  if(preselect && [...el("eSubject").options].some(o=>o.value===preselect)) el("eSubject").value=preselect;
 }
 async function saveEditQ(id){
   const correct=parseInt(document.querySelector('input[name=eCorrect]:checked').value);
-  await db.collection("questions").doc(id).update({text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
+  await db.collection("questions").doc(id).update({exam:val("eExam"),subject:val("eSubject"),class:val("eClass"),topic:val("eTopic").trim(),difficulty:val("eDiff"),
+    text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
   db.collection("auditDismissed").doc(id).delete().catch(()=>{}); // content changed — an old dismissal no longer applies
   closeModal();
   if(el("revList")) loadReview();
