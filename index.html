@@ -130,6 +130,10 @@ tr:last-child td{border-bottom:none}
 .exam{display:none;position:fixed;inset:0;background:var(--paper);z-index:80;overflow:auto}
 .exam .ebar{position:sticky;top:0;background:var(--accent);color:#fff;padding:0 22px;height:60px;display:flex;align-items:center;gap:18px;z-index:5}
 .exam .ebar h2{margin:0;font-size:17px;color:#fff}
+.subject-tabs{position:sticky;top:60px;background:var(--accent-ink);display:flex;gap:0;overflow-x:auto;z-index:4;padding:0 12px}
+.subject-tabs .subj-tab{background:transparent;border:none;color:rgba(255,255,255,.72);padding:11px 18px;font-family:'Spectral';font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent}
+.subject-tabs .subj-tab.active{color:#fff;border-bottom-color:var(--gold)}
+.subject-tabs .subj-tab .cnt{font-size:11.5px;font-weight:400;opacity:.8;margin-left:5px}
 .timer{font-family:'Spectral';font-size:22px;font-weight:600;background:rgba(255,255,255,.16);padding:5px 14px;border-radius:9px;letter-spacing:1px}
 .timer.low{background:var(--danger);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.6}}
@@ -203,6 +207,8 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
   table{font-size:13px} th,td{padding:8px 8px}
   .modal{padding:18px}
   .exam .ebar{padding:0 12px;gap:10px;height:54px}
+  .subject-tabs{top:54px}
+  .subject-tabs .subj-tab{padding:9px 13px;font-size:13px}
   .exam .ebar h2{font-size:14px}
   .timer{font-size:18px;padding:4px 10px}
   .exam-body{flex-direction:column;gap:16px;padding:14px 12px}
@@ -257,6 +263,7 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
     <button class="btn ghost sm" style="color:#fff;border-color:rgba(255,255,255,.5)" onclick="openLogTables()">📊 Log Tables</button>
     <div class="timer" id="examTimer">--:--</div>
     <button class="btn gold sm" id="submitBtn" onclick="confirmSubmit()">Submit test</button></div>
+  <div class="subject-tabs" id="subjectTabs" style="display:none"></div>
   <div class="exam-body">
     <div class="q-main">
       <div class="q-card" id="qCard"></div>
@@ -653,7 +660,7 @@ const STAFF_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
   {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
-  {id:"answeraudit",label:"Answer Key Audit",ic:"🩺"},
+  {id:"answeraudit",label:"Answer Key Audit",ic:"🩺"},{id:"dupfinder",label:"Duplicate Finder",ic:"🧬"},
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
   {id:"results",label:"Results & report cards",ic:"⤓"},
@@ -679,7 +686,7 @@ function go(page){
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
-  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,answeraudit:pageAnswerAudit,students:pageStudents,
+  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
     searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
 }
 
@@ -1198,6 +1205,79 @@ async function aiVerifyAudit(){
   setBtn("aiVerifyBtn",false,`🤖 AI-verify remaining flagged questions`);
   setMsg("aiVerifyMsg",`Done — ${confirmed} confirmed as genuine mismatches, ${cleared} cleared as false alarms${failed?`, ${failed} couldn't be checked (network/AI error — try again for those)`:""}.`,"ok");
 }
+
+/* ===== Duplicate Question Finder — the same question saved as separate entries is why
+   students sometimes see "the same question twice" in one test (the selection logic itself
+   is safe — verified — but two different documents with the same wording can both get picked). ===== */
+function normalizeQText(t){ return (t||"").toLowerCase().replace(/[^\w\s]/g,"").replace(/\s+/g," ").trim(); }
+function pageDupFinder(){
+  setView(`<h1 class="page-title">Duplicate Finder</h1>
+    <p class="page-sub">Finds questions saved as separate entries with identical or near-identical wording — the likely cause of a student seeing the same question twice in one test. Groups them so you can keep one copy and remove the rest.</p>
+    <button class="btn" id="dupBtn" onclick="runDupFinder()">🔍 Scan for duplicates</button>
+    <div class="msg" id="dupMsg" style="margin-top:10px"></div>
+    <div id="dupResults" style="margin-top:16px"></div>`);
+}
+let DUP_GROUPS=[];
+function sortDupGroup(g){
+  // Prefer keeping a LIVE copy over a pending one (a live one may already be used in a real test); tie-break on oldest.
+  return [...g].sort((a,b)=>{
+    if((a.status==="live")!==(b.status==="live")) return a.status==="live"?-1:1;
+    return (a.createdAt?.seconds||0)-(b.createdAt?.seconds||0);
+  });
+}
+async function runDupFinder(){
+  setBtn("dupBtn",true,"Scanning…"); el("dupResults").innerHTML=""; setMsg("dupMsg","","");
+  try{
+    const snap=await db.collection("questions").get();
+    const groups={};
+    snap.forEach(d=>{
+      const x=d.data();
+      const key=x.subject+"|"+x.class+"|"+normalizeQText(x.text);
+      (groups[key]=groups[key]||[]).push({id:d.id,...x});
+    });
+    const dupGroups=Object.values(groups).filter(g=>g.length>1);
+    DUP_GROUPS=dupGroups;
+    setBtn("dupBtn",false,"🔍 Scan for duplicates");
+    const totalExtra=dupGroups.reduce((s,g)=>s+g.length-1,0);
+    setMsg("dupMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${dupGroups.length} duplicate group${dupGroups.length===1?"":"s"} (${totalExtra} extra cop${totalExtra===1?"y":"ies"}).`,dupGroups.length?"err":"ok");
+    if(!dupGroups.length){ el("dupResults").innerHTML=`<div class="card">${emptyState("No duplicates found","Every question's wording is unique within its subject &amp; class.")}</div>`; return; }
+    el("dupResults").innerHTML=`<div class="card" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">
+        <p style="margin:0 0 4px"><b>Reviewed a few groups and they look right?</b></p>
+        <p class="muted" style="margin:0 0 10px">Keeps one copy per group (a live copy if there is one, else the oldest) and deletes the rest. Review a few groups below first — this can't be undone.</p>
+        <button class="btn gold sm" onclick="bulkDedupe()">✓ Keep one per group, delete ${totalExtra} duplicate${totalExtra===1?"":"s"}</button>
+      </div>`+
+      dupGroups.map((g,gi)=>{
+        const sorted=sortDupGroup(g);
+        return `<div class="card" style="margin-bottom:14px" id="dupgrp-${gi}">
+          <div>${examTag(sorted[0].exam)} ${subjTag(sorted[0].subject)} ${tag(sorted[0].topic||"—")} ${tag("Class "+sorted[0].class)} <span class="tag pending">${sorted.length} copies</span></div>
+          <p class="q-text" style="font-size:15px;margin:10px 0">${fmtMath(sorted[0].text,sorted[0].subject)}</p>
+          ${sorted.map((x,xi)=>`<div class="row" style="justify-content:space-between;align-items:center;padding:7px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px" id="dupitem-${x.id}">
+            <span class="muted" style="font-size:12.5px">${xi===0?'<b style="color:var(--accent)">Keep</b>':'Duplicate'} · ${x.status==="pending"?"Pending":"Live"} · added ${x.createdAt?fmtDate(x.createdAt,true):"—"}</span>
+            ${xi===0?'':`<button class="btn ghost sm danger" onclick="deleteDupItem('${x.id}','dupitem-${x.id}')">Delete this copy</button>`}
+          </div>`).join("")}
+        </div>`;
+      }).join("");
+  }catch(e){ el("dupResults").innerHTML=errBox(e); setBtn("dupBtn",false,"🔍 Scan for duplicates"); }
+}
+async function deleteDupItem(id,domId){
+  try{ await db.collection("questions").doc(id).delete(); el(domId)?.remove(); }
+  catch(e){ alert("Could not delete: "+errMsg(e)); }
+}
+async function bulkDedupe(){
+  const allExtras=[];
+  DUP_GROUPS.forEach(g=>{ sortDupGroup(g).slice(1).forEach(x=>{ if(el("dupitem-"+x.id)) allExtras.push(x.id); }); });
+  if(!allExtras.length) return;
+  if(!confirm(`Delete ${allExtras.length} duplicate question(s), keeping one copy per group?\n\nThis cannot be undone.`)) return;
+  try{
+    for(let i=0;i<allExtras.length;i+=400){
+      const batch=db.batch();
+      allExtras.slice(i,i+400).forEach(id=>batch.delete(db.collection("questions").doc(id)));
+      await batch.commit();
+    }
+    setMsg("dupMsg",`✓ Deleted ${allExtras.length} duplicate question(s).`,"ok");
+    el("dupResults").innerHTML="";
+  }catch(e){ alert("Bulk delete failed partway through: "+errMsg(e)); }
+}
 async function fixAuditAnswer(id,letter){
   try{ await db.collection("questions").doc(id).update({correct:"ABCD".indexOf(letter)}); el("aud-"+id)?.remove(); }
   catch(e){ alert("Could not update: "+errMsg(e)); }
@@ -1576,6 +1656,7 @@ async function createTest(){
       }
       cls=val("tScopeCls");
     }
+    questionIds=[...new Set(questionIds)]; // safety net: guarantee no question appears twice in one test
     if(!questionIds.length) throw new Error("No matching questions in the bank yet. Generate/approve more first.");
     let solutionsAt=null;
     if(val("tSolMode")==="scheduled"){
@@ -2335,6 +2416,7 @@ async function startPractice(){
       for(const s of Object.keys(full)){ questionIds.push(...await pullForSubject({exam,subject:s,classes:["11","12"],count:full[s],weights,numMode,numPct})); }
       title=`Practice · ${exam} full mock`; dur=EXAMS[exam].fullDuration;
     }
+    questionIds=[...new Set(questionIds)]; // safety net: guarantee no question appears twice in one practice test
     if(!questionIds.length){ setMsg("pMsg","No matching questions in the bank yet for this selection.","err"); setBtn("pBtn",false,"Start practice test"); return; }
 
     if(val("pWhen")==="later"){
@@ -2390,12 +2472,20 @@ let VIS_HANDLER=null;
 async function launchExam(test,isPractice){
   const qDocs=await Promise.all(test.questionIds.map(id=>db.collection("questions").doc(id).get()));
   let questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
-  questions=shuffle(questions); // randomised per attempt — no two students see the same order
   if(!questions.length){ alert("This test has no available questions."); return; }
-  EXAM={test,questions,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,disqualified:false,live:true};
+  // Group by subject so each subject sits together as its own section (like the real exam paper),
+  // while still randomising the ORDER within each subject per attempt — no two students see the same order.
+  const bySubject={}; questions.forEach(q=>{ (bySubject[q.subject]=bySubject[q.subject]||[]).push(q); });
+  let grouped=[],subjectBlocks=[];
+  Object.keys(bySubject).forEach(s=>{
+    const shuffled=shuffle(bySubject[s]);
+    subjectBlocks.push({subject:s,start:grouped.length,count:shuffled.length});
+    grouped=grouped.concat(shuffled);
+  });
+  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,disqualified:false,live:true};
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
-  renderPalette(); renderQ(); startTimer();
+  renderSubjectTabs(); renderPalette(); renderQ(); startTimer();
   attachCheatGuard();
 }
 function attachCheatGuard(){
@@ -2427,23 +2517,42 @@ function startTimer(){
     if(left<=0){ clearInterval(EXAM.timerInt); submitExam(true); }
   },500);
 }
+function currentBlockIdx(){
+  const idx=EXAM.subjectBlocks.findIndex(b=>EXAM.cur>=b.start && EXAM.cur<b.start+b.count);
+  return idx===-1?0:idx;
+}
+function renderSubjectTabs(){
+  const bar=el("subjectTabs");
+  if(!EXAM.subjectBlocks || EXAM.subjectBlocks.length<2){ bar.style.display="none"; return; }
+  bar.style.display="flex";
+  const activeIdx=currentBlockIdx();
+  bar.innerHTML=EXAM.subjectBlocks.map((b,i)=>{
+    const answeredCount=Array.from({length:b.count},(_,k)=>b.start+k).filter(gi=>EXAM.answers[gi]!==undefined).length;
+    return `<button class="subj-tab ${i===activeIdx?'active':''}" onclick="switchSubjectTab(${i})">${esc(b.subject)}<span class="cnt">${answeredCount}/${b.count}</span></button>`;
+  }).join("");
+}
+function switchSubjectTab(idx){ const b=EXAM.subjectBlocks[idx]; if(!b) return; EXAM.cur=b.start; renderQ(); }
 function renderQ(){
   const i=EXAM.cur,q=EXAM.questions[i],sel=EXAM.answers[i],m=examMarks(EXAM.test.exam,q.subject);
-  el("qCard").innerHTML=`<div class="q-meta">Question ${i+1} of ${EXAM.questions.length} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
+  const block=EXAM.subjectBlocks[currentBlockIdx()];
+  const localNum=block?(i-block.start+1):(i+1), localTotal=block?block.count:EXAM.questions.length;
+  el("qCard").innerHTML=`<div class="q-meta">Question ${localNum} of ${localTotal} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
     <p class="q-text">${qLabel(q)}</p>
     <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
-  el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review"; renderPalette();
+  el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review";
+  renderSubjectTabs(); renderPalette();
 }
 function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
 function navQ(d){ const n=EXAM.cur+d; if(n>=0&&n<EXAM.questions.length){EXAM.cur=n;renderQ();} }
 function toggleReview(){ EXAM.review.has(EXAM.cur)?EXAM.review.delete(EXAM.cur):EXAM.review.add(EXAM.cur); renderQ(); }
 function renderPalette(){
-  el("palette").innerHTML=EXAM.questions.map((_,i)=>{
+  const block=EXAM.subjectBlocks[currentBlockIdx()]||{start:0,count:EXAM.questions.length};
+  el("palette").innerHTML=Array.from({length:block.count},(_,k)=>block.start+k).map(i=>{
     const answered=EXAM.answers[i]!==undefined, reviewed=EXAM.review.has(i);
     let cls=answered?"answered":(reviewed?"review":"");
     if(answered&&reviewed) cls+=" review-mark";
     if(i===EXAM.cur) cls+=" cur";
-    return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()">${i+1}</button>`;}).join("");
+    return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()">${i-block.start+1}</button>`;}).join("");
 }
 function confirmSubmit(){
   const ans=Object.keys(EXAM.answers).length,tot=EXAM.questions.length;
