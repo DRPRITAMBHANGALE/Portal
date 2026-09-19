@@ -686,7 +686,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: paper class & exam"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: subject sections"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1360,6 +1360,31 @@ function restoreWordTokens(s,W){
   return {s,problems};
 }
 
+// ---- Subject sections by question number (for mixed PCM/PCB papers) ----
+function sectionRowsHTML(prefix,exam,ranges){
+  const subs=examSubjects(exam), r={}; (ranges||[]).forEach(x=>r[x.subject]=x);
+  return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:6px">`
+    +subs.map((sub,i)=>`<div class="row" style="gap:8px;align-items:center;margin:4px 0">
+      <div style="width:110px;font-weight:600;font-size:14px">${esc(sub)}</div>
+      <span class="muted" style="font-size:13px">Q</span><input id="${prefix}F${i}" type="number" min="1" style="width:80px" value="${r[sub]?r[sub].from:""}" placeholder="from"/>
+      <span class="muted" style="font-size:13px">to</span><input id="${prefix}T${i}" type="number" min="1" style="width:80px" value="${r[sub]?r[sub].to:""}" placeholder="to"/></div>`).join("")
+    +`<p class="muted" style="font-size:12px;margin:6px 0 0">Leave a subject blank if it isn't in the paper. Example for MHT-CET PCM: Physics 1 to 50, Chemistry 51 to 100, Mathematics 101 to 150.</p></div>`;
+}
+// Returns [{subject,from,to}] or throws a plain-language error.
+function readSectionRanges(prefix,exam){
+  const subs=examSubjects(exam), out=[];
+  subs.forEach((sub,i)=>{ const f=parseInt(val(prefix+"F"+i)), t=parseInt(val(prefix+"T"+i));
+    if(isNaN(f)&&isNaN(t)) return;
+    if(isNaN(f)||isNaN(t)) throw new Error(`Fill in both "from" and "to" for ${sub} (or leave both empty).`);
+    if(f<1||t<f) throw new Error(`For ${sub}, "from" must be 1 or more and not bigger than "to".`);
+    out.push({subject:sub,from:f,to:t}); });
+  out.sort((a,b)=>a.from-b.from);
+  for(let i=1;i<out.length;i++) if(out[i].from<=out[i-1].to) throw new Error(`${out[i-1].subject} and ${out[i].subject} question numbers overlap — check the ranges.`);
+  return out;
+}
+function subjectForNum(n,ranges,fallback){ const r=(ranges||[]).find(x=>n>=x.from&&n<=x.to); return r?r.subject:fallback; }
+function fillSectionRows(examId,boxId,prefix){ if(el(boxId)) el(boxId).innerHTML=sectionRowsHTML(prefix,val(examId)); }
+
 let SELF_UPLOAD_PARSED=[];
 function openSelfUpload(){
   modal(`<h2>📄 Self Upload — build from your own Word file</h2>
@@ -1367,6 +1392,8 @@ function openSelfUpload(){
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("suExam")}</div><div><label>Class</label>${classSelect("suClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="suSubject"></select></div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="e.g. Laws of Motion &amp; Thermal Properties"/></div></div>
     <label>Difficulty (applied to every question found)</label>${difficultySelect("suDiff")}
+    <label>Mixed paper? Subject by question number <span class="muted" style="font-weight:400">(optional — questions outside these ranges use the Subject chosen above)</span></label>
+    <div id="suSections"></div>
     <label>Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
     <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a></p>
     <div id="suPreview"></div>
@@ -1383,8 +1410,8 @@ function openSelfUpload(){
       <button class="btn ghost" onclick="closeModal()">Close</button>
       <button class="btn" id="suTestBtn" onclick="selfUploadFinalize()" disabled>✓ Save as final paper</button>
     </div>`,true);
-  fillSubjects("suExam","suSubject",false);
-  el("suExam").onchange=()=>fillSubjects("suExam","suSubject",false);
+  fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec");
+  el("suExam").onchange=()=>{ fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec"); };
 }
 let SELF_UPLOAD_LIVE_IDS=[], SELF_UPLOAD_DRAFT_ID=null;
 async function handleSelfUpload(){
@@ -1402,7 +1429,9 @@ async function handleSelfUpload(){
       raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
     }
     const defaults={exam:val("suExam"),subject:val("suSubject"),cls:val("suClass"),topic:val("suTopic").trim()||val("suSubject"),difficulty:val("suDiff")};
+    const ranges=readSectionRanges("suSec",val("suExam"));
     SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults,W);
+    SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.num,ranges,q.subject); if(!val("suTopic").trim()) q.topic=q.subject; });
     if(!SELF_UPLOAD_PARSED.length){ setMsg("suMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err"); return; }
     const ready=SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready");
     const fixable=SELF_UPLOAD_PARSED.filter(q=>q.tier==="fixable");
@@ -1437,7 +1466,7 @@ async function handleSelfUpload(){
       +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
           <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
-          <div class="muted" style="font-size:11.5px">answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
+          <div class="muted" style="font-size:11.5px">${esc(q.subject)} · answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
   }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
 }
 // Split the raw mammoth text into paper / answer-key / solutions, then parse each per question number.
@@ -1532,7 +1561,7 @@ async function selfUploadImport(ready,fixable,fileName,draftTestId){
     const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
     chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status}); byNum.push({num:q.num,id:ref.id});
       batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
-        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,
+        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,qNum:q.num,
         createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
     await batch.commit();
     refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingIds.push(r.ref.id); });
@@ -2037,6 +2066,9 @@ async function openReschedule(id){
     <div class="grid cols-2"><div><label>Opens</label><input id="rsStart" type="datetime-local" value="${toLocal(t.startAt)}"/></div>
       <div><label>Closes</label><input id="rsEnd" type="datetime-local" value="${toLocal(t.endAt)}"/></div></div>
     <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
+    ${ME.role==="master"?`<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number</summary>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 0">Use this for a mixed paper where every question got the same subject. Numbers follow the order of the questions in this paper. Leave all empty to change nothing.</p>
+      ${sectionRowsHTML("rsSec",t.exam)}</details>`:""}
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="rsSolMode" onchange="el('rsSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
       <option value="immediate" ${!t.solutionsAt?"selected":""}>Immediately after each student submits</option>
@@ -2053,6 +2085,20 @@ async function saveReschedule(id){
     if(val("rsSolMode")==="scheduled"){
       if(!val("rsSolAt")) throw new Error("Pick a date & time for when solutions should be shown, or switch back to \"Immediately\".");
       solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("rsSolAt")));
+    }
+    if(ME.role==="master"&&el("rsSecF0")){
+      const t0=(await db.collection("tests").doc(id).get()).data();
+      const ranges=readSectionRanges("rsSec",t0.exam);
+      if(ranges.length){
+        const order=(t0.qOrder&&t0.qOrder.length?t0.qOrder:t0.questionIds)||[]; const inTest=new Set(t0.questionIds||[]);
+        const qs=await Promise.all(order.map(qid=>db.collection("questions").doc(qid).get()));
+        const batch=db.batch(); const subjects=new Set();
+        qs.forEach((d,k)=>{ if(!d.exists) return; const x=d.data(); const n=x.qNum||(k+1);
+          const sub=subjectForNum(n,ranges,x.subject); if(inTest.has(d.id)) subjects.add(sub);
+          if(sub!==x.subject) batch.update(d.ref,{subject:sub,...(x.topic===x.subject?{topic:sub}:{})}); });
+        await batch.commit();
+        await db.collection("tests").doc(id).update({subjects:[...subjects]});
+      }
     }
     await db.collection("tests").doc(id).update({title:val("rsTitle").trim()||"Test",exam:val("rsExam"),class:val("rsClass"),
       startAt:val("rsStart")?firebase.firestore.Timestamp.fromDate(new Date(val("rsStart"))):null,
@@ -3158,7 +3204,8 @@ async function launchExam(test,isPractice){
   // while still randomising the ORDER within each subject per attempt — no two students see the same order.
   const bySubject={}; questions.forEach(q=>{ (bySubject[q.subject]=bySubject[q.subject]||[]).push(q); });
   let grouped=[],subjectBlocks=[];
-  Object.keys(bySubject).forEach(s=>{
+  const SUBJ_ORDER=["Physics","Chemistry","Mathematics","Biology","Botany","Zoology"];
+  Object.keys(bySubject).sort((a,b)=>{const ia=SUBJ_ORDER.indexOf(a),ib=SUBJ_ORDER.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);}).forEach(s=>{
     const shuffled=shuffle(bySubject[s]);
     subjectBlocks.push({subject:s,start:grouped.length,count:shuffled.length});
     grouped=grouped.concat(shuffled);
