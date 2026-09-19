@@ -686,7 +686,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: word equations"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: draft papers"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -711,7 +711,7 @@ async function pageDashboard(){
   el("kpis").innerHTML=`${statCard("Tests created",tests)}${statCard("Active students",students)}${pending!==null?statCard("Awaiting review",pending):""}`;
   try{
     const snap=await db.collection("tests").orderBy("createdAt","desc").limit(6).get();
-    const docs=ME.role==="master"?snap.docs:snap.docs.filter(d=>d.data().scope===ME.centreId||d.data().scope==="all");
+    const docs=(ME.role==="master"?snap.docs:snap.docs.filter(d=>d.data().scope===ME.centreId||d.data().scope==="all")).filter(d=>!d.data().draft);
     el("recentTests").innerHTML=!docs.length?emptyState("No tests yet","Create one from the Tests tab.")
       :tableHTML(["Title","Exam","Subjects","Scope","Window","Status"],
         docs.map(d=>{const t=d.data();return [`<b>${esc(t.title)}</b>`,examTag(t.exam),subjChips(t.subjects),centreName(t.scope),windowLabel(t),testStatusTag(t)];}));
@@ -1372,24 +1372,24 @@ function openSelfUpload(){
     <div id="suPreview"></div>
     <div class="msg" id="suMsg"></div>
     <hr class="sep"/>
-    <p class="muted" style="margin-bottom:2px">Optional — also build a test right now from the questions that were added live:</p>
-    <label>Test title</label><input id="suTitle" placeholder="e.g. Laws of Motion & Thermal Properties — Periodic Test"/>
+    <p class="muted" style="margin-bottom:2px">📝 <b>A draft paper is made automatically</b> from this file as soon as it's read. Questions you approve later from the Review queue are added to it in their original place. When you're happy, click <b>Save as final paper</b> — here, or later from <b>Tests → Draft papers</b>.</p>
+    <label>Paper title</label><input id="suTitle" placeholder="Leave blank to use the file name"/>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="suDur" type="number" value="60"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="suScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="suStart" type="datetime-local"/></div><div><label>Closes</label><input id="suEnd" type="datetime-local"/></div></div>
     <div class="msg" id="suActionMsg"></div>
     <div class="row end" style="margin-top:16px;gap:8px">
       <button class="btn ghost" onclick="closeModal()">Close</button>
-      <button class="btn" id="suTestBtn" onclick="selfUploadCreateTest()" disabled>📝 Create test from these</button>
+      <button class="btn" id="suTestBtn" onclick="selfUploadFinalize()" disabled>✓ Save as final paper</button>
     </div>`,true);
   fillSubjects("suExam","suSubject",false);
   el("suExam").onchange=()=>fillSubjects("suExam","suSubject",false);
 }
-let SELF_UPLOAD_LIVE_IDS=[];
+let SELF_UPLOAD_LIVE_IDS=[], SELF_UPLOAD_DRAFT_ID=null;
 async function handleSelfUpload(){
   const f=el("suFile").files[0]; if(!f) return;
   setMsg("suMsg","Reading file…","ok"); el("suPreview").innerHTML="";
-  el("suTestBtn").disabled=true; SELF_UPLOAD_LIVE_IDS=[];
+  el("suTestBtn").disabled=true; SELF_UPLOAD_LIVE_IDS=[]; SELF_UPLOAD_DRAFT_ID=null; setMsg("suActionMsg","","ok");
   try{
     if(!f.name.toLowerCase().endsWith(".docx")) throw new Error("Please upload a .docx file — legacy .doc must be saved as .docx first in Word (File → Save As → Word Document).");
     const buf=await f.arrayBuffer();
@@ -1407,15 +1407,31 @@ async function handleSelfUpload(){
     const fixable=SELF_UPLOAD_PARSED.filter(q=>q.tier==="fixable");
     const skipped=SELF_UPLOAD_PARSED.filter(q=>q.tier==="skip");
     setMsg("suMsg","Adding…","ok");
-    const {liveIds,pendingCount}=await selfUploadImport(ready,fixable,f.name);
+    const draftRef=db.collection("tests").doc();
+    const {liveIds,pendingIds,order,uploadId}=await selfUploadImport(ready,fixable,f.name,draftRef.id);
+    const pendingCount=pendingIds.length;
     SELF_UPLOAD_LIVE_IDS=liveIds;
+    // create the draft paper straight away (students and centre admins can't see drafts)
+    try{
+      const title=val("suTitle").trim()||f.name.replace(/\.docx$/i,"");
+      if(!val("suTitle").trim()) el("suTitle").value=title;
+      const subjects=[...new Set([...ready,...fixable].map(q=>q.subject))];
+      await draftRef.set({title,exam:val("suExam"),type:"selfUpload",subjects,class:val("suClass"),
+        questionIds:liveIds.slice(),qOrder:order,pendingIds,duration:parseInt(val("suDur"))||60,
+        scope:"draft",finalScope:ME.role==="master"?val("suScope"):ME.centreId,draft:true,isPractice:false,
+        startAt:null,endAt:null,solutionsAt:null,uploadId,uploadName:f.name,
+        createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+      SELF_UPLOAD_DRAFT_ID=draftRef.id;
+      setMsg("suActionMsg",`📝 Draft paper “${esc(title)}” created with ${liveIds.length} question${liveIds.length===1?"":"s"}`
+        +(pendingCount?` — ${pendingCount} more will join automatically when you approve them in the Review queue.`:"."),"ok");
+    }catch(err){ setMsg("suActionMsg","Questions were added, but the draft paper couldn't be created: "+errMsg(err),"err"); }
     setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}`
       +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
       +`✓ ${liveIds.length} added live to your question bank.`
       +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — something in them couldn't be read (see the red notes below); fix it there and approve.`:"")
       +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or a numerical-only answer this app can't store as multiple-choice).`:""),
       "ok");
-    el("suTestBtn").disabled=liveIds.length===0; el("suTestBtn").textContent=`📝 Create test from ${liveIds.length} question${liveIds.length===1?"":"s"}`;
+    el("suTestBtn").disabled=!SELF_UPLOAD_DRAFT_ID;
     el("suPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
       +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
@@ -1507,20 +1523,22 @@ function parseSelfUploadDoc(raw,defaults,W){
 }
 // Creates Firestore docs for both tiers in one pass: "ready" go live immediately, "fixable" go to the
 // Review queue (status:"pending") so a quick manual edit finishes them instead of losing them outright.
-async function selfUploadImport(ready,fixable,fileName){
-  const liveIds=[]; let pendingCount=0;
+async function selfUploadImport(ready,fixable,fileName,draftTestId){
+  const liveIds=[], pendingIds=[], byNum=[];
   const uploadId="su_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
   const all=[...ready.map(q=>({q,status:"live"})),...fixable.map(q=>({q,status:"pending"}))];
   for(let i=0;i<all.length;i+=400){
     const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
-    chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status});
+    chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status}); byNum.push({num:q.num,id:ref.id});
       batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
-        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",uploadId,uploadName:fileName||"",
+        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,
         createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
     await batch.commit();
-    refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingCount++; });
+    refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingIds.push(r.ref.id); });
   }
-  return {liveIds,pendingCount};
+  const order=byNum.sort((a,b)=>a.num-b.num).map(x=>x.id);
+  const liveSet=new Set(liveIds);
+  return {liveIds:order.filter(id=>liveSet.has(id)),pendingIds,order,uploadId};
 }
 
 // ---- Previous Self Uploads: list them and delete a whole upload in one go ----
@@ -1555,25 +1573,87 @@ async function deleteSelfUpload(i){
   setBtn("suhDel"+i,true,"Deleting…");
   try{
     for(let k=0;k<g.ids.length;k+=400){ const batch=db.batch(); g.ids.slice(k,k+400).forEach(id=>batch.delete(db.collection("questions").doc(id))); await batch.commit(); }
+    if(g.key.startsWith("su_")){ try{ const ds=await db.collection("tests").where("uploadId","==",g.key).get(); for(const d of ds.docs) if(d.data().draft) await d.ref.delete(); }catch(_){} }
     openSelfUploadHistory();
   }catch(e){ alert("Could not delete: "+errMsg(e)); setBtn("suhDel"+i,false,"Delete"); }
 }
-async function selfUploadCreateTest(){
-  if(!SELF_UPLOAD_LIVE_IDS.length) return;
-  const title=val("suTitle").trim();
-  if(!title) return setMsg("suActionMsg","Add a test title first.","err");
-  setBtn("suTestBtn",true,"Creating…");
+// ---- Draft papers: made automatically by Self Upload, finalised with one click ----
+async function selfUploadFinalize(){
+  if(!SELF_UPLOAD_DRAFT_ID) return;
+  const fields={title:val("suTitle").trim(),duration:parseInt(val("suDur"))||60,
+    scope:ME.role==="master"?val("suScope"):ME.centreId,
+    startAt:val("suStart")?firebase.firestore.Timestamp.fromDate(new Date(val("suStart"))):null,
+    endAt:val("suEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("suEnd"))):null,solutionsAt:null};
+  if(!fields.title) return setMsg("suActionMsg","Add a paper title first.","err");
+  setBtn("suTestBtn",true,"Saving…");
+  const ok=await finalizeDraft(SELF_UPLOAD_DRAFT_ID,fields);
+  if(ok){ setMsg("suActionMsg","✓ Saved as final paper. It's now in your Tests list.","ok"); setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="tests")loadTests();},1300); }
+  else setBtn("suTestBtn",false,"✓ Save as final paper");
+}
+// Turns a draft into a normal test. Warns if questions are still waiting in the Review queue.
+async function finalizeDraft(id,fields){
   try{
-    const exam=val("suExam"), scope=ME.role==="master"?val("suScope"):ME.centreId;
-    const subjects=[...new Set(SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready").map(q=>q.subject))];
-    await db.collection("tests").add({title,exam,type:"selfUpload",subjects,class:val("suClass"),questionIds:SELF_UPLOAD_LIVE_IDS,duration:parseInt(val("suDur"))||60,scope,isPractice:false,
-      startAt:val("suStart")?firebase.firestore.Timestamp.fromDate(new Date(val("suStart"))):null,
-      endAt:val("suEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("suEnd"))):null,
-      solutionsAt:null,
-      createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-    setMsg("suActionMsg",`✓ Test created with ${SELF_UPLOAD_LIVE_IDS.length} question(s).`,"ok");
-    setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="tests")loadTests();},1400);
-  }catch(e){ setMsg("suActionMsg",errMsg(e),"err"); setBtn("suTestBtn",false,`📝 Create test from ${SELF_UPLOAD_LIVE_IDS.length} question${SELF_UPLOAD_LIVE_IDS.length===1?"":"s"}`); }
+    const snap=await db.collection("tests").doc(id).get(); if(!snap.exists) throw new Error("This draft no longer exists.");
+    const t=snap.data(); const waiting=(t.pendingIds||[]).length;
+    if(!(t.questionIds||[]).length) throw new Error("This draft has no approved questions yet.");
+    if(waiting&&!confirm(`${waiting} question${waiting===1?" is":"s are"} still waiting in the Review queue and won't be in the final paper.\n\nSave as final paper anyway with ${(t.questionIds||[]).length} questions?\n(Cancel, then approve them first, if you want them included.)`)) return false;
+    await db.collection("tests").doc(id).update({...fields,draft:false,pendingIds:[],finalizedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    return true;
+  }catch(e){ alert("Could not save the paper: "+errMsg(e)); return false; }
+}
+// Keeps draft papers in step with the Review queue: approved questions join their draft in the
+// original position; rejected ones are dropped from it. `items` = [{id,draftTestId}]
+async function syncDraftPapers(items,approved){
+  const byDraft={};
+  items.forEach(x=>{ if(x&&x.draftTestId) (byDraft[x.draftTestId]=byDraft[x.draftTestId]||[]).push(x.id); });
+  for(const did of Object.keys(byDraft)){
+    try{
+      const ref=db.collection("tests").doc(did);
+      await db.runTransaction(async tx=>{
+        const snap=await tx.get(ref); if(!snap.exists) return; const t=snap.data(); if(!t.draft) return;
+        const ids=new Set(byDraft[did]);
+        const pendingIds=(t.pendingIds||[]).filter(x=>!ids.has(x));
+        let qOrder=t.qOrder||t.questionIds||[];
+        const have=new Set(t.questionIds||[]);
+        if(approved){ ids.forEach(x=>have.add(x)); ids.forEach(x=>{ if(!qOrder.includes(x)) qOrder=[...qOrder,x]; }); }
+        else { qOrder=qOrder.filter(x=>!ids.has(x)); ids.forEach(x=>have.delete(x)); }
+        tx.update(ref,{pendingIds,qOrder,questionIds:qOrder.filter(x=>have.has(x))});
+      });
+    }catch(e){ console.warn("Draft paper update failed",e); }
+  }
+}
+async function openFinalizeDraft(id){
+  const t=(await db.collection("tests").doc(id).get()).data(); const waiting=(t.pendingIds||[]).length;
+  modal(`<h2>✓ Save as final paper</h2><p class="muted">${esc(t.title)} · ${(t.questionIds||[]).length} questions</p>
+    ${waiting?`<div class="note" style="margin-bottom:10px">⚠ ${waiting} question${waiting===1?" is":"s are"} still waiting in the Review queue. Approve ${waiting===1?"it":"them"} first if you want ${waiting===1?"it":"them"} in this paper — they're added automatically.</div>`:""}
+    <label>Title</label><input id="fdTitle" value="${esc(t.title)}"/>
+    <div class="grid cols-2"><div><label>Duration (min)</label><input id="fdDur" type="number" value="${t.duration||60}"/></div>
+      <div><label>Assign to</label><select id="fdScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}" ${t.finalScope===c.id?"selected":""}>${c.name}</option>`).join("")}</select></div></div>
+    <div class="grid cols-2"><div><label>Opens</label><input id="fdStart" type="datetime-local"/></div><div><label>Closes</label><input id="fdEnd" type="datetime-local"/></div></div>
+    <label>When should students see the answer key &amp; solutions?</label>
+    <select id="fdSolMode" onchange="el('fdSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
+      <option value="immediate">Immediately after each student submits</option>
+      <option value="scheduled">Only from a specific date &amp; time</option></select>
+    <div id="fdSolAtRow" style="display:none"><label>Show solutions from</label><input id="fdSolAt" type="datetime-local"/></div>
+    <div class="msg" id="fdMsg"></div>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="fdBtn" onclick="saveFinalizeDraft('${id}')">✓ Save as final paper</button></div>`);
+}
+async function saveFinalizeDraft(id){
+  try{
+    let solutionsAt=null;
+    if(val("fdSolMode")==="scheduled"){ if(!val("fdSolAt")) throw new Error("Pick when solutions should be shown, or switch back to \"Immediately\".");
+      solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("fdSolAt"))); }
+    const fields={title:val("fdTitle").trim()||"Test",duration:parseInt(val("fdDur"))||60,scope:val("fdScope"),
+      startAt:val("fdStart")?firebase.firestore.Timestamp.fromDate(new Date(val("fdStart"))):null,
+      endAt:val("fdEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("fdEnd"))):null,solutionsAt};
+    setBtn("fdBtn",true,"Saving…");
+    if(await finalizeDraft(id,fields)){ closeModal(); loadTests(); } else setBtn("fdBtn",false,"✓ Save as final paper");
+  }catch(e){ setMsg("fdMsg",errMsg(e),"err"); }
+}
+async function deleteDraft(id){
+  if(!confirm("Delete this draft paper? The questions stay in your question bank.")) return;
+  try{ await db.collection("tests").doc(id).delete(); loadTests(); }catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 
 
@@ -1605,12 +1685,13 @@ async function approveAll(){
       docs.slice(i,i+400).forEach(d=>batch.update(d.ref,{status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()}));
       await batch.commit();
     }
+    await syncDraftPapers(docs.map(d=>({id:d.id,draftTestId:d.data().draftTestId})),true);
     loadReview();
   }catch(e){ alert("Could not approve all: "+errMsg(e)); }
 }
 function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
-    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''}</div>
+    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''} ${x.draftTestId?'<span class="tag pending">📝 joins its draft paper when approved</span>':''}</div>
     <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text,x.subject)}</p>
     <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o,x.subject)}</div></div>`).join("")}</div>
     ${x.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(x.solution,x.subject)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
@@ -1618,8 +1699,11 @@ function reviewCard(id,x){
       <button class="btn ghost sm" onclick="editReviewQ('${id}')">Edit</button>
       <button class="btn sm" onclick="approveQ('${id}')">✓ Approve &amp; go live</button></div></div>`;
 }
-async function approveQ(id){ await db.collection("questions").doc(id).update({status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()}); el("rev-"+id)?.remove(); loadReview(); }
-async function rejectQ(id){ if(!confirm("Reject and delete this draft?"))return; await db.collection("questions").doc(id).delete(); el("rev-"+id)?.remove(); loadReview(); }
+async function approveQ(id){ const ref=db.collection("questions").doc(id); const x=(await ref.get()).data()||{};
+  await ref.update({status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
+  await syncDraftPapers([{id,draftTestId:x.draftTestId}],true); el("rev-"+id)?.remove(); loadReview(); }
+async function rejectQ(id){ if(!confirm("Reject and delete this draft?"))return; const ref=db.collection("questions").doc(id); const x=(await ref.get()).data()||{};
+  await ref.delete(); await syncDraftPapers([{id,draftTestId:x.draftTestId}],false); el("rev-"+id)?.remove(); loadReview(); }
 async function editReviewQ(id){
   const x=(await db.collection("questions").doc(id).get()).data();
   modal(`<h2>Edit question</h2>
@@ -1645,6 +1729,7 @@ async function saveEditQ(id){
   await db.collection("questions").doc(id).update({exam:val("eExam"),subject:val("eSubject"),class:val("eClass"),topic:val("eTopic").trim(),difficulty:val("eDiff"),
     text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
   db.collection("auditDismissed").doc(id).delete().catch(()=>{}); // content changed — an old dismissal no longer applies
+  { const x=(await db.collection("questions").doc(id).get()).data()||{}; await syncDraftPapers([{id,draftTestId:x.draftTestId}],true); }
   closeModal();
   if(el("revList")) loadReview();
   if(el("aud-"+id)) el("aud-"+id).remove(); // fixed via the audit tool — drop it from the flagged list
@@ -1913,6 +1998,7 @@ async function pageTests(){
     <div class="bar"><div class="spacer" style="flex:1"></div>
       <button class="btn ghost" onclick="openSelfUpload()">📄 Self Upload (Word file)</button>
       <button class="btn" onclick="openCreateTest()">+ New test</button></div>
+    <div class="card" id="draftCard" style="display:none;margin-bottom:16px"><h3 style="margin-top:0">📝 Draft papers</h3><p class="muted" style="margin-top:-4px">Made by Self Upload. Students can't see these until you save them as final papers.</p><div id="draftList"></div></div>
     <div class="card"><div id="testList" class="muted">Loading…</div></div>`);
   loadTests();
 }
@@ -1925,6 +2011,12 @@ async function loadTests(){
       const all=await db.collection("tests").where("scope","==","all").get();
       docs=[...own.docs,...all.docs].sort((a,b)=>(b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0));
     }
+    const drafts=docs.filter(d=>d.data().draft); docs=docs.filter(d=>!d.data().draft);
+    if(el("draftCard")){ el("draftCard").style.display=drafts.length?"block":"none";
+      el("draftList").innerHTML=drafts.length?tableHTML(["Title","Exam","Questions","Waiting in Review queue",""],drafts.map(d=>{const t=d.data();const w=(t.pendingIds||[]).length;
+        return [`<b>${esc(t.title)}</b><br><span class="muted">${esc(t.uploadName||"")}</span>`,examTag(t.exam),(t.questionIds||[]).length,
+          w?`<a href="#" onclick="go('review');return false">${w} to approve →</a>`:'<span class="muted">none — ready</span>',
+          `<button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm danger" onclick="deleteDraft('${d.id}')">Delete</button>`];})):""; }
     el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
       :tableHTML(["Title","Exam","Subjects","Q","Scope","Window","Status",""],
         docs.map(d=>{const t=d.data();const canEdit=ME.role==="master"||(ME.role==="admin"&&t.scope===ME.centreId);return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}${t.solutionsAt?` · 🔒 Solutions from ${fmtDate(t.solutionsAt)}`:""}</span>`,
