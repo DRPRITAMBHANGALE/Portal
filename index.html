@@ -164,7 +164,9 @@ tr:last-child td{border-bottom:none}
 .pgrid button.review-mark::after{content:"";position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--gold);border:1.5px solid #fff}
 .legend{font-size:12px;color:var(--ink-soft);margin-top:14px;line-height:1.9}
 .legend .dot{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
-.solution{margin-top:16px;padding:16px;border-radius:11px;background:var(--accent-soft);border:1px solid #cfe0d7;font-size:14.5px;line-height:1.55}
+.solution{margin-top:16px;padding:16px;border-radius:11px;background:var(--accent-soft);border:1px solid #cfe0d7;font-size:14.5px;line-height:1.55;white-space:pre-line}
+.qfig{display:block;max-width:100%;max-height:320px;height:auto;margin:8px 0;border-radius:6px;background:#fff}
+.katex{font-size:1.08em}
 .solution b{color:var(--accent-ink)}
 
 .score-hero{text-align:center;padding:30px 20px;background:var(--paper-2);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);margin-bottom:22px}
@@ -539,9 +541,15 @@ function prettyPlain(s,subject){
   return s;
 }
 // Full math: renders LaTeX in \(...\), \[...\], $$...$$, $...$ with KaTeX; plain text via prettyPlain
+const QFIG_RE=/(\[\[img:data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+\]\])/;
 function fmtMath(s,subject){
   if(s==null) return "";
   s=String(s);
+  if(s.includes("[[img:")) return s.split(QFIG_RE).map(p=>{ const m=p.match(/^\[\[img:(data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+)\]\]$/);
+    return m?`<img class="qfig" src="${m[1]}" alt="diagram"/>`:fmtMathCore(p,subject); }).join("");
+  return fmtMathCore(s,subject);
+}
+function fmtMathCore(s,subject){
   const parts=s.split(/(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g);
   return parts.map(p=>{
     if(!p) return "";
@@ -678,7 +686,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: papers + logo"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: word equations"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -965,8 +973,13 @@ async function handleUploadFile(){
   try{
     let raw;
     if(f.name.toLowerCase().endsWith(".docx")){
-      if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
-      raw=(await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value;
+      const buf=await f.arrayBuffer(); let W=null;
+      try{ W=await readWordWithEquations(buf); }catch(err){ console.warn("Equation reader failed, falling back to text only:",err); }
+      if(W){ raw=W.raw.replace(/⟦E(\d+)⟧/g,(_,i)=>" $"+W.eqs[+i]+"$ ").replace(/⟦F(\d+)⟧/g,(_,i)=>" [[img:"+W.figs[+i]+"]] ").replace(/⟦EQ\?⟧/g,"[equation missing]").replace(/⟦FIG\?⟧/g,"[diagram missing]"); }
+      else{
+        if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
+        raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
+      }
     } else { raw=await f.text(); }
     const defaults={exam:val("uExam"),subject:val("uSubject"),cls:val("uClass"),topic:val("uTopic"),difficulty:val("uDiff")};
     UPLOAD_PARSED=parseQuestionsFromText(raw,defaults);
@@ -1031,6 +1044,322 @@ async function doImport(){
    Text-based parser only — equation-image content (MathType) can't be read and is
    honestly flagged per-question rather than silently imported broken.
    ============================================================ */
+/* MTEF v3 (Microsoft Equation 3.0 / MathType) -> LaTeX converter */
+function mtefToLatex(bytes){
+  // bytes: Uint8Array of the "Equation Native" stream
+  const hdrLen = bytes[0] | (bytes[1]<<8);
+  let p = hdrLen;
+  const ver = bytes[p];
+  if(ver!==3) throw new Error("MTEF v"+ver+" not supported");
+  p += 5;
+  const unknown = []; let SCRIPT=0;
+  const u8=()=>bytes[p++];
+  const u16=()=>{const v=bytes[p]|(bytes[p+1]<<8);p+=2;return v;};
+  function nudge(){ const a=u8(),b=u8(); if(a===128||b===128){p+=4;} }
+  function ruler(){ const n=u8(); p+=n*3; }
+  // ---- parse into tree ----
+  function readList(){ // until END
+    const items=[];
+    while(p<bytes.length){
+      const tag=bytes[p]; const type=tag&15, opt=tag>>4;
+      if(type===0){p++;break;}
+      items.push(readRecord());
+    }
+    return items;
+  }
+  function readRecord(){
+    const tag=u8(); const type=tag&15, opt=tag>>4;
+    switch(type){
+      case 1:{ // LINE
+        if(opt&8) nudge();
+        if(opt&4) u8();
+        if(opt&2){ if(bytes[p]===7) p++; ruler(); }
+        if(opt&1) return {t:"line",items:[]};
+        return {t:"line",items:readList()};
+      }
+      case 2:{ // CHAR
+        if(opt&8) nudge();
+        const tf=u8()-128; const ch=u16(); const emb=[];
+        if(opt&2){ // embellishment list
+          while(p<bytes.length){ if(bytes[p]===0){p++;break;} const et=u8(); if((et>>4)&8) nudge(); emb.push(u8()); if(bytes[p]===0&&bytes[p+1]===0) p++; }
+        }
+        return {t:"char",tf,ch,emb};
+      }
+      case 3:{ // TMPL
+        if(opt&8) nudge();
+        const sel=u8(),vari=u8(),topt=u8();
+        return {t:"tmpl",sel,vari,topt,items:readList()};
+      }
+      case 4:{ // PILE
+        if(opt&8) nudge();
+        const ha=u8(),va=u8();
+        if(opt&2){ if(bytes[p]===7) p++; ruler(); }
+        return {t:"pile",ha,items:readList()};
+      }
+      case 5:{ // MATRIX
+        if(opt&8) nudge();
+        const va=u8(),hj=u8(),vj=u8(),rows=u8(),cols=u8();
+        p+=Math.ceil((rows+1)*2/8); p+=Math.ceil((cols+1)*2/8);
+        return {t:"matrix",rows,cols,items:readList()};
+      }
+      case 6:{ if(opt&8) nudge(); return {t:"embell",e:u8()}; }
+      case 7:{ ruler(); return {t:"skip"}; }
+      case 8:{ u8(); u8(); while(p<bytes.length&&bytes[p]!==0)p++; p++; return {t:"skip"}; }
+      case 9:{ const l=u8(); if(l===101){u16();} else if(l===100){u8();u16();} else {u8();} return {t:"skip"}; }
+      case 10: case 11: case 12: case 13: case 14: return {t:"skip"};
+      default: throw new Error("bad record type "+type+" at "+(p-1));
+    }
+  }
+  const root=readList();
+
+  // ---- render ----
+  const GREEK={"α":"\\alpha","β":"\\beta","γ":"\\gamma","δ":"\\delta","ε":"\\varepsilon","ϵ":"\\epsilon","ζ":"\\zeta","η":"\\eta","θ":"\\theta","ϑ":"\\vartheta","ι":"\\iota","κ":"\\kappa","λ":"\\lambda","μ":"\\mu","ν":"\\nu","ξ":"\\xi","π":"\\pi","ϖ":"\\varpi","ρ":"\\rho","σ":"\\sigma","ς":"\\varsigma","τ":"\\tau","υ":"\\upsilon","φ":"\\phi","ϕ":"\\phi","χ":"\\chi","ψ":"\\psi","ω":"\\omega",
+    "Γ":"\\Gamma","Δ":"\\Delta","Θ":"\\Theta","Λ":"\\Lambda","Ξ":"\\Xi","Π":"\\Pi","Σ":"\\Sigma","Υ":"\\Upsilon","Φ":"\\Phi","Ψ":"\\Psi","Ω":"\\Omega","∆":"\\Delta","Ω":"\\Omega","µ":"\\mu"};
+  const SYM={"×":"\\times","·":"\\cdot","⋅":"\\cdot","•":"\\cdot","−":"-","±":"\\pm","∓":"\\mp","÷":"\\div","→":"\\rightarrow","←":"\\leftarrow","↔":"\\leftrightarrow","⇒":"\\Rightarrow","⇐":"\\Leftarrow","⇔":"\\Leftrightarrow","↑":"\\uparrow","↓":"\\downarrow","⇌":"\\rightleftharpoons","⇄":"\\rightleftarrows",
+    "≤":"\\le","≥":"\\ge","≠":"\\ne","≈":"\\approx","≅":"\\cong","≡":"\\equiv","∼":"\\sim","~":"\\sim","∝":"\\propto","∞":"\\infty","°":"^{\\circ}","′":"'","″":"''","∴":"\\therefore","∵":"\\because","∂":"\\partial","∇":"\\nabla","∫":"\\int","∮":"\\oint","∑":"\\sum","∏":"\\prod",
+    "∈":"\\in","∉":"\\notin","⊂":"\\subset","⊃":"\\supset","⊆":"\\subseteq","⊇":"\\supseteq","∪":"\\cup","∩":"\\cap","∅":"\\emptyset","∀":"\\forall","∃":"\\exists","¬":"\\neg","∧":"\\wedge","∨":"\\vee","⊥":"\\perp","∠":"\\angle","△":"\\triangle","…":"\\ldots","⋯":"\\cdots","⋮":"\\vdots","ℏ":"\\hbar","ℓ":"\\ell","√":"\\surd","%":"\\%","#":"\\#","&":"\\&","$":"\\char36 ","{":"\\{","}":"\\}","\\":"\\backslash","_":"\\_","^":"\\hat{}","|":"|","‖":"\\|","⟨":"\\langle","⟩":"\\rangle","〈":"\\langle","〉":"\\rangle","'":"'","ʹ":"'","∘":"\\circ","⊕":"\\oplus","⊗":"\\otimes","∗":"*","⁄":"/","ˆ":"\\hat{}","Å":"\\mathring{A}","∣":"|","⟶":"\\longrightarrow","⟵":"\\longleftarrow"};
+  const FUNCS=["sin","cos","tan","cot","sec","csc","cosec","log","ln","lim","exp","max","min","sinh","cosh","tanh","arg","det","deg"];
+  function chStr(c){
+    const code=c.ch;
+    if(code>=0xE000&&code<=0xF8FF){ // MT Extra / private area
+      const PUA={0xEB00:"\\,",0xEB01:"\\,",0xEB02:"\\;",0xEB03:"\\quad",0xEB04:"\\,",0xEB05:"",0xEB08:"",0xEF00:"\\;",0xEF01:"\\,",0xEF02:"\\,",0xEF03:"\\;",0xEF04:"\\,",0xEF05:"",0xEF06:"\\,",0xEF07:"",0xEF08:"\\quad",
+        0xEC00:"\\longrightarrow",0xEC01:"\\longleftarrow",0xEC02:"\\longleftrightarrow",0xEB19:"\\rightleftharpoons",0xEB1A:"\\rightleftharpoons",0xE98F:"\\rightarrow",0xE98B:"\\rightleftharpoons",0xE92D:"\\rightarrow",0xE900:"\\rightarrow",0xEB14:"\\hbar",0xEC0C:"\\ell",
+        0xF0B2:"''",0xF0A2:"'",0xF0B0:"^{\\circ}",0xF0D7:"\\times",0xF0B4:"\\times",0xF02D:"-",0xF02B:"+",0xF03D:"=",0xF0AE:"\\rightarrow",0xF0DE:"\\Rightarrow",0xF05C:"\\therefore",0xF0A5:"\\infty",0xF0B9:"\\ne",0xF0A3:"\\le",0xF0B3:"\\ge",0xF0BB:"\\approx",0xF0B1:"\\pm",0xF0D6:"\\sqrt{}",0xF0E5:"\\sum",0xF0F2:"\\int",0xF0B6:"\\partial",0xF0D1:"\\nabla",0xF0B5:"\\propto",0xF0C5:"\\oplus",0xF0C4:"\\otimes",0xF0AC:"\\leftarrow",0xF0AB:"\\leftrightarrow",0xF0DB:"\\Leftrightarrow",0xF0D0:"\\angle",0xF0BC:"\\ldots",0xF0B7:"\\cdot",0xF0D7:"\\cdot",0xF0E6:"(",0xF0F6:")",0xF0E7:"(",0xF0E8:"(",0xF0F7:")",0xF0F8:")",0xF0E9:"[",0xF0F9:"]",0xF0EC:"\\{",0xF0FC:"\\}"};
+      if(code in PUA) return PUA[code];
+      // Symbol-font chars remapped into F0xx
+      if(code>=0xF020&&code<=0xF0FF){ return symbolFont(code-0xF000); }
+      unknown.push(code.toString(16)); return "";
+    }
+    const s=String.fromCharCode(code);
+    if(c.tf===4||c.tf===5){ // Greek typeface, may be Symbol-font letters
+      if(/[A-Za-z]/.test(s)) return symbolFont(code);
+    }
+    if(c.tf===6 && code<0x100 && !/[0-9+\-=()\[\]<>\/.,:;!?|]/.test(s)) return symbolFont(code);
+    if(GREEK[s]) return GREEK[s]+" ";
+    if(SYM[s]!==undefined) return SYM[s]+(/^\\[a-zA-Z]+$/.test(SYM[s])?" ":"");
+    if(code<32) return "";
+    return s;
+  }
+  function symbolFont(code){
+    const g="αβχδεφγηιϕκλμνοπθρστυϖωξψζ", G="ΑΒΧΔΕΦΓΗΙϑΚΛΜΝΟΠΘΡΣΤΥςΩΞΨΖ";
+    const s=String.fromCharCode(code);
+    let u=null;
+    if(code>=97&&code<=122) u=g[code-97];
+    else if(code>=65&&code<=90) u=G[code-65];
+    else { const m={0xA3:"≤",0xB3:"≥",0xB9:"≠",0xBB:"≈",0xB1:"±",0xB4:"×",0xB7:"·",0xAE:"→",0xAC:"←",0xAB:"↔",0xDE:"⇒",0xDB:"⇔",0xA5:"∞",0xB0:"°",0xA2:"′",0xB2:"″",0x5C:"∴",0xB6:"∂",0xD1:"∇",0xB5:"∝",0xF2:"∫",0xE5:"∑",0xD5:"∏",0xCE:"∈",0xC7:"∩",0xC8:"∪",0x5E:"⊥",0xD0:"∠",0xBC:"…",0x2D:"−",0x2A:"∗",0x40:"≅",0x7E:"∼",0xC6:"∅",0x22:"∀",0x24:"∃",0xD7:"·",0x60:"",0xA0:"",0x20:""};
+      if(code in m) u=m[code]; else u=s; }
+    if(u==="") return "";
+    if(GREEK[u]) return GREEK[u]+" ";
+    if(SYM[u]!==undefined) return SYM[u]+(/^\\[a-zA-Z]+$/.test(SYM[u])?" ":"");
+    return u;
+  }
+  function applyEmb(s,emb){
+    for(const e of emb){
+      switch(e){
+        case 2:s="\\dot{"+s+"}";break; case 3:s="\\ddot{"+s+"}";break; case 4:s="\\dddot{"+s+"}";break;
+        case 5:s=s+"'";break; case 6:s=s+"''";break; case 7:s="{}'"+s;break; case 18:s=s+"'''";break;
+        case 8:s="\\tilde{"+s+"}";break; case 9:s="\\hat{"+s+"}";break; case 10:s="\\not{"+s+"}";break;
+        case 11:case 14:s="\\vec{"+s+"}";break; case 12:case 15:s="\\overleftarrow{"+s+"}";break; case 13:s="\\overleftrightarrow{"+s+"}";break;
+        case 16:case 17:s="\\bar{"+s+"}";break; case 19:s="\\overset{\\frown}{"+s+"}";break; case 20:s="\\overset{\\smile}{"+s+"}";break;
+      }
+    }
+    return s;
+  }
+  function lineStr(l){ if(!l) return ""; if(l.t==="line") return renderItems(l.items); return renderItems([l]); }
+  function renderItems(items){
+    let out=[]; // array of tokens
+    let i=0;
+    while(i<items.length){
+      const it=items[i];
+      if(it.t==="skip"||it.t==="embell"){i++;continue;}
+      if(it.t==="char"){
+        // group runs of text-typeface or function-typeface letters
+        if((it.tf===1||it.tf===2) && !it.emb.length){
+          let run="",j=i;
+          while(j<items.length&&items[j].t==="char"&&items[j].tf===it.tf&&!items[j].emb.length&&items[j].ch<0x250&&/[A-Za-z ]/.test(String.fromCharCode(items[j].ch))){run+=String.fromCharCode(items[j].ch);j++;}
+          if(run.length){
+            if(it.tf===2){
+              // split function names
+              let r=run.replace(/\s+/g," "), acc="";
+              const re=new RegExp("("+FUNCS.slice().sort((a,b)=>b.length-a.length).join("|")+")","g");
+              acc=r.split(re).map(seg=>{ if(!seg) return ""; if(FUNCS.includes(seg)) return seg==="cosec"?"\\operatorname{cosec} ":(seg==="csc"?"\\csc ":"\\"+seg+" "); return seg.trim()?"\\mathrm{"+seg.trim()+"}":"\\ "; }).join("");
+              out.push(acc);
+            } else {
+              if(run.trim()) out.push("\\text{"+run+"}"); else out.push("\\ ");
+            }
+            i=j; continue;
+          }
+        }
+        let s=chStr(it);
+        if(it.tf===7 && s) s="\\mathbf{"+s+"}";
+        if(it.emb.length) s=applyEmb(s||"{}",it.emb);
+        out.push(s); i++; continue;
+      }
+      if(it.t==="tmpl"){
+        const r=renderTmpl(it,out); if(r!=null) out.push(r); i++; continue;
+      }
+      if(it.t==="pile"){
+        const lines=it.items.filter(x=>x.t==="line").map(lineStr);
+        out.push(lines.length>1?"\\begin{matrix}"+lines.join("\\\\")+"\\end{matrix}":(lines[0]||""));
+        i++; continue;
+      }
+      if(it.t==="matrix"){
+        const cells=it.items.filter(x=>x.t==="line").map(lineStr); const rows=[];
+        for(let r=0;r<it.rows;r++) rows.push(cells.slice(r*it.cols,(r+1)*it.cols).join("&"));
+        out.push("\\begin{matrix}"+rows.join("\\\\")+"\\end{matrix}"); i++; continue;
+      }
+      if(it.t==="line"){ out.push("{"+lineStr(it)+"}"); i++; continue; }
+      i++;
+    }
+    return out.join("");
+  }
+  function fenceChar(c,left){
+    if(!c) return left?"(":")";
+    const s=String.fromCharCode(c.ch);
+    const m={"(":"(",")":")","[":"[","]":"]","{":"\\{","}":"\\}","|":"|","‖":"\\|","⟨":"\\langle","⟩":"\\rangle","〈":"\\langle","〉":"\\rangle","⌊":"\\lfloor","⌋":"\\rfloor","⌈":"\\lceil","⌉":"\\rceil"};
+    if(m[s]) return m[s];
+    const sy=symbolFont(c.ch>=0xF000?c.ch-0xF000:c.ch).trim();
+    return sy||".";
+  }
+  function renderTmpl(t,out){
+    const slots=t.items.filter(x=>x.t==="line"||x.t==="pile"||x.t==="matrix");
+    const chars=t.items.filter(x=>x.t==="char");
+    const S=k=>lineStr(slots[k]);
+    const sel=t.sel;
+    const fences={0:["\\langle","\\rangle"],1:["(",")"],2:["\\{","\\}"],3:["[","]"],4:["|","|"],5:["\\|","\\|"],6:["\\lfloor","\\rfloor"],7:["\\lceil","\\rceil"],8:["[","["],9:["]","]"],10:["]","["],11:["[",")"],12:["(","]"]};
+    if(sel<=12){
+      let [L,R]=fences[sel];
+      const v=t.vari; // bit0 left fence present, bit1 right fence present (v3: 1=left,2=right)
+      if(v===1) R="."; else if(v===2) L=".";
+      return "\\left"+L+" "+S(0)+"\\right"+R+" ";
+    }
+    switch(sel){
+      case 13: return !S(1)?"\\sqrt{"+S(0)+"}":"\\sqrt["+S(1)+"]{"+S(0)+"}";
+      case 14: return (SCRIPT?"\\frac{":"\\dfrac{")+S(0)+"}{"+S(1)+"}";
+      case 15: { // sub/superscript attached to the previous token (or a pre-script if nothing before)
+        SCRIPT++; const sub=S(0),sup=S(1); SCRIPT--;
+        let base=out.length?out.pop():"{}";
+        if(/^(\\[,;: ]|\\quad|\s*)$/.test(base)){ out.push(base); base="{}"; }
+        if(/[_^]\{[^{}]*\}$/.test(base)||/'$/.test(base)) base="{"+base+"}";
+        return base+(sub?"_{"+sub+"}":"")+(sup?"^{"+sup+"}":"");
+      }
+      case 16: return "\\underline{"+S(0)+"}";
+      case 17: return "\\overline{"+S(0)+"}";
+      case 19: { // arrow with text above/below
+        const ac=chars[chars.length-1]; const code=ac?ac.ch:0x2192;
+        const kind={0x2190:"leftarrow",0x2194:"leftrightarrow",0x21CC:"rightleftharpoons",0x21C4:"rightleftharpoons",0xEB19:"rightleftharpoons",0xEB1A:"rightleftharpoons",0x21D2:"Rightarrow",0x21D4:"Leftrightarrow"}[code]||"rightarrow";
+        const top=S(0),bot=S(1);
+        if(!top&&!bot) return "\\"+(kind==="rightarrow"?"longrightarrow":kind)+" ";
+        return "\\x"+kind+(bot?"["+bot+"]":"")+"{"+top+"}";
+      }
+      default: unknown.push("tmpl"+sel); return slots.map(lineStr).join(" ");
+    }
+  }
+  let tex=renderItems(root).replace(/\\cos\s*ec(?![a-zA-Z])/g,"\\operatorname{cosec}").replace(/\s+/g," ").trim();
+  return {tex,unknown};
+}
+
+
+/* ---- Word (.docx) reader that keeps equations & diagrams ----
+   Reads the .docx directly (XLSX.CFB unzips it and opens each embedded equation object).
+   Equation Editor 3.0 / MathType equations are converted to LaTeX (rendered by KaTeX via fmtMath);
+   PNG/JPEG diagrams are kept as small embedded pictures. The returned text has the same layout as
+   mammoth's raw text, with placeholders ⟦E0⟧ (equation), ⟦F0⟧ (picture), ⟦EQ?⟧ / ⟦FIG?⟧ (unreadable). */
+async function readWordWithEquations(arrayBuffer){
+  const CFBlib=(window.XLSX&&XLSX.CFB)||window.CFB;
+  if(!CFBlib) throw new Error("Word reader didn't load — check your internet and reload.");
+  const u8=new Uint8Array(arrayBuffer);
+  const zip=CFBlib.read(u8,{type:"array"});
+  const get=name=>{ const e=CFBlib.find(zip,name)||CFBlib.find(zip,"/"+name); return e&&e.content&&e.content.length?new Uint8Array(e.content):null; };
+  const dec=b=>new TextDecoder("utf-8").decode(b);
+  const docXml=get("word/document.xml"); if(!docXml) throw new Error("This doesn't look like a Word .docx file.");
+  const relsXml=get("word/_rels/document.xml.rels"), rels={};
+  if(relsXml){ const rd=new DOMParser().parseFromString(dec(relsXml),"application/xml");
+    Array.from(rd.getElementsByTagName("Relationship")).forEach(r=>rels[r.getAttribute("Id")]=r.getAttribute("Target")); }
+  const partFor=rid=>{ const t=rels[rid]; if(!t) return null; return get("word/"+t.replace(/^\.?\//,"").replace(/^\/?word\//,"")); };
+  const doc=new DOMParser().parseFromString(dec(docXml),"application/xml");
+  const eqs=[], figs=[], stats={equations:0,eqFailed:0,figures:0,figFailed:0};
+  const local=n=>n.localName||(n.nodeName||"").replace(/^.*:/,"");
+  const figCache={};
+  function equationFor(rid){
+    const bin=partFor(rid); if(!bin) return null;
+    try{ const ole=CFBlib.read(bin,{type:"array"}); const e=CFBlib.find(ole,"Equation Native");
+      if(!e||!e.content||!e.content.length) return null;
+      return mtefToLatex(new Uint8Array(e.content)).tex||null; }catch(_){ return null; }
+  }
+  function figureFor(rid){
+    if(rid in figCache) return figCache[rid];
+    const t=(rels[rid]||"").toLowerCase(), bin=partFor(rid); let tok="⟦FIG?⟧";
+    const mime=/\.png$/.test(t)?"image/png":(/\.jpe?g$/.test(t)?"image/jpeg":(/\.gif$/.test(t)?"image/gif":null));
+    if(bin&&mime){ let b="",CH=0x8000; for(let i=0;i<bin.length;i+=CH) b+=String.fromCharCode.apply(null,bin.subarray(i,i+CH));
+      figs.push("data:"+mime+";base64,"+btoa(b)); tok="⟦F"+(figs.length-1)+"⟧"; stats.figures++; }
+    else stats.figFailed++;
+    return figCache[rid]=tok;
+  }
+  const SYMF={a:"α",b:"β",c:"χ",d:"δ",e:"ε",f:"φ",g:"γ",h:"η",i:"ι",j:"ϕ",k:"κ",l:"λ",m:"μ",n:"ν",o:"ο",p:"π",q:"θ",r:"ρ",s:"σ",t:"τ",u:"υ",v:"ϖ",w:"ω",x:"ξ",y:"ψ",z:"ζ",
+    A:"Α",B:"Β",C:"Χ",D:"Δ",E:"Ε",F:"Φ",G:"Γ",H:"Η",I:"Ι",K:"Κ",L:"Λ",M:"Μ",N:"Ν",O:"Ο",P:"Π",Q:"Θ",R:"Ρ",S:"Σ",T:"Τ",U:"Υ",W:"Ω",X:"Ξ",Y:"Ψ",Z:"Ζ",
+    "£":"≤","³":"≥","¹":"≠","»":"≈","±":"±","´":"×","·":"·","®":"→","¬":"←","«":"↔","Þ":"⇒","Û":"⇔","¥":"∞","°":"°","¢":"′","²":"″","\\":"∴","¶":"∂","Ñ":"∇","µ":"∝","ò":"∫","å":"∑","Î":"∈","Ç":"∩","È":"∪","^":"⊥","Ð":"∠","¼":"…","-":"−","@":"≅","~":"∼","Æ":"∅","Ö":"√","×":"·"};
+  const symText=s=>[...s].map(ch=>{ const c=ch.charCodeAt(0); const k=c>=0xF000?String.fromCharCode(c-0xF000):ch; return SYMF[k]||k; }).join("");
+  function runIsSymbol(r){ const f=r.getElementsByTagName("w:rFonts")[0]; return !!f&&/^symbol$/i.test(f.getAttribute("w:ascii")||f.getAttribute("w:hAnsi")||""); }
+  function paraText(p){
+    let s="";
+    (function walk(n,sym){
+      for(let c=n.firstChild;c;c=c.nextSibling){
+        if(c.nodeType!==1) continue;
+        const ln=local(c);
+        if(ln==="r"){ walk(c,runIsSymbol(c)); continue; }
+        if(ln==="t") s+=sym?symText(c.textContent):c.textContent;
+        else if(ln==="tab"){ if(local(c.parentNode)==="r") s+="\t"; }
+        else if(ln==="br"||ln==="cr") s+="\n";
+        else if(ln==="noBreakHyphen") s+="-";
+        else if(ln==="sym"){ const ch=parseInt(c.getAttribute("w:char")||"0",16); if(ch) s+=symText(String.fromCharCode(ch>=0xF000?ch-0xF000:ch)); }
+        else if(["del","instrText","delText","pPr","rPr","Fallback","txbxContent"].includes(ln)) continue;
+        else if(ln==="object"){
+          const oo=c.getElementsByTagName("o:OLEObject")[0], rid=oo&&oo.getAttribute("r:id"), prog=(oo&&oo.getAttribute("ProgID"))||"";
+          if(/^Equation/i.test(prog)){ stats.equations++; const tex=rid?equationFor(rid):null;
+            if(tex){ eqs.push(tex); s+="⟦E"+(eqs.length-1)+"⟧"; } else { stats.eqFailed++; s+="⟦EQ?⟧"; } }
+          else { const im=c.getElementsByTagName("v:imagedata")[0]; s+=im?figureFor(im.getAttribute("r:id")):"⟦FIG?⟧"; }
+        }
+        else if(ln==="drawing"||ln==="pict"){
+          const blip=c.getElementsByTagName("a:blip")[0], im=c.getElementsByTagName("v:imagedata")[0];
+          if(blip) s+=figureFor(blip.getAttribute("r:embed")); else if(im) s+=figureFor(im.getAttribute("r:id"));
+          else walk(c,sym);
+        }
+        else walk(c,sym);
+      }
+    })(p,false);
+    return s;
+  }
+  const body=doc.getElementsByTagName("w:body")[0]||doc.documentElement;
+  const inFallback=n=>{ for(let a=n.parentNode;a;a=a.parentNode) if(a.nodeType===1&&local(a)==="Fallback") return true; return false; };
+  const out=[];
+  Array.from(body.getElementsByTagName("w:p")).forEach(p=>{ if(!inFallback(p)) out.push(paraText(p)); });
+  // shrink big pictures so each question stays small in the database
+  for(let i=0;i<figs.length;i++) figs[i]=await shrinkPicture(figs[i]);
+  return {raw:out.join("\n\n")+"\n\n",eqs,figs,stats};
+}
+function shrinkPicture(dataUrl,maxW=640){
+  return new Promise(res=>{ try{ const img=new Image();
+    img.onload=()=>{ try{ const sc=Math.min(1,maxW/img.width); const c=document.createElement("canvas");
+      c.width=Math.max(1,Math.round(img.width*sc)); c.height=Math.max(1,Math.round(img.height*sc));
+      const g=c.getContext("2d"); g.fillStyle="#fff"; g.fillRect(0,0,c.width,c.height); g.drawImage(img,0,0,c.width,c.height);
+      const png=c.toDataURL("image/png"), jpg=c.toDataURL("image/jpeg",0.85);
+      const best=[png,jpg,dataUrl].sort((a,b)=>a.length-b.length)[0]; res(best); }catch(_){ res(dataUrl); } };
+    img.onerror=()=>res(dataUrl); img.src=dataUrl; }catch(_){ res(dataUrl); } });
+}
+// Swap the placeholders back in: equations become $…$ (KaTeX), pictures become [[img:…]].
+// Returns the finished string and a list of problems (unreadable equation/picture).
+function restoreWordTokens(s,W){
+  const problems=[];
+  s=(s||"").replace(/⟦E(\d+)⟧/g,(_,i)=>" $"+W.eqs[+i]+"$ ")
+    .replace(/⟦F(\d+)⟧/g,(_,i)=>"\n[[img:"+W.figs[+i]+"]]\n")
+    .replace(/⟦EQ\?⟧/g,()=>{ problems.push("an equation couldn't be read — type it in"); return "[equation missing]"; })
+    .replace(/⟦FIG\?⟧/g,()=>{ problems.push("a diagram couldn't be imported (not PNG/JPEG)"); return "[diagram missing]"; });
+  s=s.split(/(\$[^$]*\$|\[\[img:[^\]]*\]\])/).map((p,i)=>i%2?p:p.replace(/ ([,.;:?!)\]])/g,"$1").replace(/([(\[]) /g,"$1")).join("");
+  s=s.replace(/[ \t]+/g," ").replace(/ *\n */g,"\n").replace(/\n{2,}/g,"\n").trim();
+  return {s,problems};
+}
+
 let SELF_UPLOAD_PARSED=[];
 function openSelfUpload(){
   modal(`<h2>📄 Self Upload — build from your own Word file</h2>
@@ -1039,6 +1368,7 @@ function openSelfUpload(){
     <div class="grid cols-2"><div><label>Subject</label><select id="suSubject"></select></div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="e.g. Laws of Motion &amp; Thermal Properties"/></div></div>
     <label>Difficulty (applied to every question found)</label>${difficultySelect("suDiff")}
     <label>Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
+    <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a></p>
     <div id="suPreview"></div>
     <div class="msg" id="suMsg"></div>
     <hr class="sep"/>
@@ -1062,27 +1392,34 @@ async function handleSelfUpload(){
   el("suTestBtn").disabled=true; SELF_UPLOAD_LIVE_IDS=[];
   try{
     if(!f.name.toLowerCase().endsWith(".docx")) throw new Error("Please upload a .docx file — legacy .doc must be saved as .docx first in Word (File → Save As → Word Document).");
-    if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
-    const raw=(await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value;
+    const buf=await f.arrayBuffer();
+    let W=null,raw;
+    setMsg("suMsg","Reading file and converting equations…","ok");
+    try{ W=await readWordWithEquations(buf); raw=W.raw; }catch(err){ console.warn("Equation reader failed, falling back to text only:",err); W=null; }
+    if(!W){
+      if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
+      raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
+    }
     const defaults={exam:val("suExam"),subject:val("suSubject"),cls:val("suClass"),topic:val("suTopic").trim()||val("suSubject"),difficulty:val("suDiff")};
-    SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults);
+    SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults,W);
     if(!SELF_UPLOAD_PARSED.length){ setMsg("suMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err"); return; }
     const ready=SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready");
     const fixable=SELF_UPLOAD_PARSED.filter(q=>q.tier==="fixable");
     const skipped=SELF_UPLOAD_PARSED.filter(q=>q.tier==="skip");
     setMsg("suMsg","Adding…","ok");
-    const {liveIds,pendingCount}=await selfUploadImport(ready,fixable);
+    const {liveIds,pendingCount}=await selfUploadImport(ready,fixable,f.name);
     SELF_UPLOAD_LIVE_IDS=liveIds;
-    setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}. `
+    setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}`
+      +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
       +`✓ ${liveIds.length} added live to your question bank.`
-      +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — missing a bit of content (usually an equation MathType couldn't be read as text), fill it in there and approve.`:"")
+      +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — something in them couldn't be read (see the red notes below); fix it there and approve.`:"")
       +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or a numerical-only answer this app can't store as multiple-choice).`:""),
       "ok");
     el("suTestBtn").disabled=liveIds.length===0; el("suTestBtn").textContent=`📝 Create test from ${liveIds.length} question${liveIds.length===1?"":"s"}`;
     el("suPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
       +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
-          <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${esc(truncate(q.text||"(no text found)",70))}</div>
+          <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
           <div class="muted" style="font-size:11.5px">answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
   }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
 }
@@ -1090,7 +1427,7 @@ async function handleSelfUpload(){
 // Every question is classified into a tier: "ready" (imports live), "fixable" (has text + a valid
 // answer, just missing option content — saved to Review queue for a quick manual fill-in instead of
 // being lost entirely), or "skip" (no text, or a non-A-D answer this app's MCQ format can't store).
-function parseSelfUploadDoc(raw,defaults){
+function parseSelfUploadDoc(raw,defaults,W){
   const akIdx=raw.search(/answer\s*keys?/i);
   const hsIdx=raw.search(/hints?\s*&?\s*solutions?/i);
   const paperEnd=akIdx>=0?akIdx:(hsIdx>=0?hsIdx:raw.length);
@@ -1099,21 +1436,36 @@ function parseSelfUploadDoc(raw,defaults){
   const solText=hsIdx>=0?raw.slice(hsIdx):"";
 
   const answers={};
-  const akRe=/(\d{1,3})\s*\.\s*\(([^)]{1,6})\)/g; let m;
+  const akRe=/(\d{1,3})\s*\.?\s*\(([^)]{1,6})\)/g; let m;
   while((m=akRe.exec(akText))) answers[parseInt(m[1])]=m[2].trim();
 
+  // Split a section into numbered chunks. A paragraph starts a new item when it begins with a number
+  // ("12." / "12.<tab>" / "12<tab>") that comes just after the previous one — so stray numbers inside
+  // questions (e.g. "10 m/s") can't be mistaken for a new question.
+  function numberedChunks(text,startRe){
+    const paras=text.split(/\n[ \t]*\n/); const chunks=[]; let cur=null,last=0;
+    paras.forEach(p=>{
+      const mm=p.match(startRe); const n=mm?parseInt(mm[1]):NaN;
+      if(mm && (last===0 ? n<=250 : (n>last && n<=last+5))){ cur={num:n,body:p.slice(mm[0].length),paras:[]}; chunks.push(cur); last=n; }
+      else if(cur) cur.paras.push(p);
+    });
+    return chunks;
+  }
   const solutions={};
-  const solChunks=solText.split(/\n\s*\n(?=\s*\d{1,3}\s*\.\s*Ans\.?\s*:?\s*\()/i);
-  solChunks.forEach(chunk=>{
-    const nm=chunk.match(/^\s*(\d{1,3})\s*\.\s*Ans\.?\s*:?\s*\(([^)]*)\)/i);
-    if(!nm) return;
-    let body=chunk.slice(nm[0].length).replace(/solution\s*:?/i,"");
-    body=body.replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
-    if(body) solutions[parseInt(nm[1])]=body;
+  numberedChunks(solText,/^\s*(\d{1,3})\s*\.?\s*Ans\.?\s*:?\s*\(([^)]*)\)/i).forEach(c=>{
+    let body=[c.body,...c.paras].join("\n").replace(/^\s*solution\s*:?/im,"");
+    body=body.split("\n").map(l=>l.replace(/[\t ]+/g," ").trim()).filter(l=>l&&!/^solution\s*:?$/i.test(l)).join("\n")
+      .replace(/^\s*solution\s*:?\s*/i,"").trim();
+    if(body) solutions[c.num]=body;
   });
 
   function findOptionMarks(text){
-    const find=(letter,from)=>{ const re=new RegExp("\\("+letter+"\\)","i"); const idx=text.slice(from).search(re); return idx===-1?-1:from+idx; };
+    return findMarks(text,false)||findMarks(text,true);
+  }
+  // strict: "(a)"; loose (fallback): also "a)" when it stands on its own, e.g. "a) 0.2  (b) 0.4"
+  function findMarks(text,loose){
+    const find=(letter,from)=>{ const re=loose?new RegExp("(?:\\(|(?<=^|\\s))"+letter+"\\)(?=\\s)","i"):new RegExp("\\("+letter+"\\)","i");
+      const mm=re.exec(text.slice(from)); if(!mm) return -1; const idx=from+mm.index; return mm[0].startsWith("(")?idx:idx-1; };
     const aIdx=find("A",0); if(aIdx===-1) return null;
     const bIdx=find("B",aIdx+3); if(bIdx===-1) return null;
     const cIdx=find("C",bIdx+3); if(cIdx===-1) return null;
@@ -1121,14 +1473,12 @@ function parseSelfUploadDoc(raw,defaults){
     return {aIdx,bIdx,cIdx,dIdx};
   }
   const clean=s=>(s||"").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
+  const fix=(s,problems)=>{ if(!W) return s; const r=restoreWordTokens(s,W); r.problems.forEach(p=>{ if(!problems.includes(p)) problems.push(p); }); return r.s; };
 
-  const qChunks=paperText.split(/\n\s*\n(?=\s*\d{1,3}\s*\.\s*\t)/);
   const out=[];
-  qChunks.forEach(chunk=>{
-    const nm=chunk.match(/^\s*(\d{1,3})\s*\.\s*\t?/);
-    if(!nm) return;
-    const num=parseInt(nm[1]);
-    const rest=chunk.slice(nm[0].length);
+  numberedChunks(paperText,/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/).forEach(c=>{
+    const num=c.num;
+    const rest=[c.body,...c.paras].join("\n\n");
     const marks=findOptionMarks(rest);
     const problems=[]; let text="",options=["","","",""];
     if(!marks){ problems.push("couldn't find 4 options (a)(b)(c)(d) — may share options with a question group, or have picture-based options"); text=clean(rest); }
@@ -1141,34 +1491,72 @@ function parseSelfUploadDoc(raw,defaults){
       options.forEach((o,i)=>{ if(!o) problems.push(`option ${"ABCD"[i]} looks empty (likely an equation image)`); });
     }
     if(!text) problems.push("no question text found");
-    const ansRaw=answers[num]; let correct=null,unstorableAnswer=false;
+    text=fix(text,problems); options=options.map(o=>fix(o,problems));
+    const solution=fix(solutions[num]||"",problems);
+    const ansRaw=answers[num]; let correct=null;
     if(ansRaw==null) problems.push("no answer key entry found for this question number");
     else if(/^[A-Da-d]$/.test(ansRaw)) correct="ABCD".indexOf(ansRaw.toUpperCase());
-    else { problems.push(`answer key says "(${ansRaw})" — not an A/B/C/D option (numerical-answer questions aren't supported for import)`); unstorableAnswer=true; }
-    // Classify: needs real text and a real A-D answer at minimum to be salvageable at all.
+    else problems.push(`answer key says "(${ansRaw})" — not an A/B/C/D option (numerical-answer questions aren't supported for import)`);
     let tier;
     if(!text || correct==null) tier="skip";
     else if(problems.length) tier="fixable";
     else tier="ready";
-    out.push({num,text,options,correct,solution:solutions[num]||"",problems,tier,...defaults});
+    out.push({num,text,options,correct,solution,problems,tier,...defaults});
   });
   return out;
 }
 // Creates Firestore docs for both tiers in one pass: "ready" go live immediately, "fixable" go to the
 // Review queue (status:"pending") so a quick manual edit finishes them instead of losing them outright.
-async function selfUploadImport(ready,fixable){
+async function selfUploadImport(ready,fixable,fileName){
   const liveIds=[]; let pendingCount=0;
+  const uploadId="su_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
   const all=[...ready.map(q=>({q,status:"live"})),...fixable.map(q=>({q,status:"pending"}))];
   for(let i=0;i<all.length;i+=400){
     const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
     chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status});
       batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
-        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",
+        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",uploadId,uploadName:fileName||"",
         createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
     await batch.commit();
     refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingCount++; });
   }
   return {liveIds,pendingCount};
+}
+
+// ---- Previous Self Uploads: list them and delete a whole upload in one go ----
+async function openSelfUploadHistory(){
+  modal(`<h2>🗂 Previous Self Uploads</h2><p class="muted">Each upload is listed with how many of its questions are live and how many are waiting in the Review queue. "Delete" removes every question from that upload.</p><div id="suhList" class="muted">Loading…</div>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,true);
+  try{
+    const snap=await db.collection("questions").where("source","==","selfUpload").get();
+    const groups={};
+    snap.docs.forEach(d=>{ const x=d.data(); const t=x.createdAt&&x.createdAt.toDate?x.createdAt.toDate():null;
+      const key=x.uploadId||("old_"+(x.createdBy||"")+"_"+(t?Math.floor(t.getTime()/120000):"0"));
+      const g=groups[key]||(groups[key]={key,name:x.uploadName||"",when:t,ids:[],live:0,pending:0,sample:""});
+      g.ids.push(d.id); if(x.status==="live") g.live++; else g.pending++;
+      if(!g.sample) g.sample=(x.subject||"")+(x.topic&&x.topic!==x.subject?" · "+x.topic:"");
+      if(t&&(!g.when||t<g.when)) g.when=t; });
+    const list=Object.values(groups).sort((a,b)=>(b.when||0)-(a.when||0));
+    window.SU_HISTORY=list;
+    if(!list.length){ el("suhList").innerHTML=emptyState("No uploads yet","Questions you add with Self Upload will be listed here."); return; }
+    el("suhList").innerHTML=list.map((g,i)=>`<div class="row" style="padding:10px 4px;border-bottom:1px solid var(--line);gap:10px;align-items:center">
+      <div class="grow" style="font-size:13.5px"><b>${g.when?g.when.toLocaleString("en-IN",{day:"numeric",month:"short",year:"numeric",hour:"numeric",minute:"2-digit"}):"Unknown date"}</b>${g.name?` · ${esc(g.name)}`:""}
+        <div class="muted" style="font-size:12px">${esc(g.sample)} · ${g.ids.length} question${g.ids.length===1?"":"s"} (${g.live} live, ${g.pending} in Review queue)</div></div>
+      <button class="btn danger sm" id="suhDel${i}" onclick="deleteSelfUpload(${i})">Delete</button></div>`).join("");
+  }catch(e){ el("suhList").innerHTML=errBox(e); }
+}
+async function deleteSelfUpload(i){
+  const g=(window.SU_HISTORY||[])[i]; if(!g) return;
+  let usedIn=0;
+  try{ const ts=await db.collection("tests").get(); const set=new Set(g.ids);
+    ts.docs.forEach(t=>{ if((t.data().questionIds||[]).some(id=>set.has(id))) usedIn++; }); }catch(_){}
+  const warn=usedIn?`\n\n⚠ ${usedIn} test${usedIn===1?" uses":"s use"} some of these questions — those questions will disappear from ${usedIn===1?"that test":"those tests"}.`:"";
+  if(!confirm(`Delete all ${g.ids.length} questions from this upload (${g.live} live, ${g.pending} in Review queue)? This can't be undone.${warn}`)) return;
+  setBtn("suhDel"+i,true,"Deleting…");
+  try{
+    for(let k=0;k<g.ids.length;k+=400){ const batch=db.batch(); g.ids.slice(k,k+400).forEach(id=>batch.delete(db.collection("questions").doc(id))); await batch.commit(); }
+    openSelfUploadHistory();
+  }catch(e){ alert("Could not delete: "+errMsg(e)); setBtn("suhDel"+i,false,"Delete"); }
 }
 async function selfUploadCreateTest(){
   if(!SELF_UPLOAD_LIVE_IDS.length) return;
@@ -1711,7 +2099,8 @@ function buildPaperDoc(meta,groups,withSolutions){
     .qh{display:flex;gap:6px;align-items:flex-start} .qh .mk{margin-left:auto;color:#666;font-size:11.5px;white-space:nowrap}
     .opts{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;margin:5px 0 0 22px}
     .op{padding:1px 0} .op.ok{font-weight:bold;color:#15643a}
-    .ans{margin:5px 0 0 22px;color:#15643a;font-size:12.5px} .ans .sol{color:#333;margin-top:2px;font-weight:normal}
+    .ans{margin:5px 0 0 22px;color:#15643a;font-size:12.5px} .ans .sol{color:#333;margin-top:2px;font-weight:normal;white-space:pre-line}
+    .qfig{display:block;max-width:100%;max-height:260px;margin:6px 0}
     .frac{display:inline-flex;flex-direction:column;text-align:center;vertical-align:middle;font-size:.85em;line-height:1.05;margin:0 2px}
     .frac .fnum{border-bottom:1.5px solid currentColor;padding:0 3px}.frac .fden{padding:0 3px}
     .rad{border-top:1.5px solid currentColor;padding:0 2px;margin-left:1px}
