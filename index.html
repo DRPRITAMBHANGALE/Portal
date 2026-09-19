@@ -1026,6 +1026,164 @@ async function doImport(){
 }
 
 /* ============================================================
+   6b. SELF UPLOAD — build a test (or add to bank) directly from your own
+   Word file: numbered question paper + "Answer Keys" + optional "HINTS & SOLUTION".
+   Text-based parser only — equation-image content (MathType) can't be read and is
+   honestly flagged per-question rather than silently imported broken.
+   ============================================================ */
+let SELF_UPLOAD_PARSED=[];
+function openSelfUpload(){
+  modal(`<h2>📄 Self Upload — build from your own Word file</h2>
+    <p class="muted">Upload a <b>.docx</b> file laid out like your periodic tests: a numbered question paper with (a)(b)(c)(d) options, an <b>"Answer Keys"</b> section, and optionally a <b>"HINTS &amp; SOLUTION"</b> section. Legacy <b>.doc</b> files must be saved as .docx first — open the file in Word, then File → Save As → Word Document (.docx).</p>
+    <div class="grid cols-2"><div><label>Exam</label>${examSelect("suExam")}</div><div><label>Class</label>${classSelect("suClass",false)}</div></div>
+    <div class="grid cols-2"><div><label>Subject</label><select id="suSubject"></select></div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="e.g. Laws of Motion &amp; Thermal Properties"/></div></div>
+    <label>Difficulty (applied to every question found)</label>${difficultySelect("suDiff")}
+    <label>Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
+    <div id="suPreview"></div>
+    <div class="msg" id="suMsg"></div>
+    <hr class="sep"/>
+    <p class="muted" style="margin-bottom:2px">If you'll create a test now (optional if you're only adding to the bank):</p>
+    <label>Test title</label><input id="suTitle" placeholder="e.g. Laws of Motion & Thermal Properties — Periodic Test"/>
+    <div class="grid cols-2"><div><label>Duration (min)</label><input id="suDur" type="number" value="60"/></div>
+      <div><label>Assign to</label>${ME.role==="master"?`<select id="suScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
+    <div class="grid cols-2"><div><label>Opens</label><input id="suStart" type="datetime-local"/></div><div><label>Closes</label><input id="suEnd" type="datetime-local"/></div></div>
+    <div class="msg" id="suActionMsg"></div>
+    <div class="row end" style="margin-top:16px;gap:8px">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn ghost" id="suBankBtn" onclick="selfUploadToBank()" disabled>➕ Add to question bank only</button>
+      <button class="btn" id="suTestBtn" onclick="selfUploadCreateTest()" disabled>📝 Create test now</button>
+    </div>`,true);
+  fillSubjects("suExam","suSubject",false);
+  el("suExam").onchange=()=>fillSubjects("suExam","suSubject",false);
+}
+async function handleSelfUpload(){
+  const f=el("suFile").files[0]; if(!f) return;
+  setMsg("suMsg","Reading file…","ok"); el("suPreview").innerHTML="";
+  el("suBankBtn").disabled=true; el("suTestBtn").disabled=true;
+  try{
+    if(!f.name.toLowerCase().endsWith(".docx")) throw new Error("Please upload a .docx file — legacy .doc must be saved as .docx first in Word (File → Save As → Word Document).");
+    if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
+    const raw=(await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value;
+    const defaults={exam:val("suExam"),subject:val("suSubject"),cls:val("suClass"),topic:val("suTopic").trim()||val("suSubject"),difficulty:val("suDiff")};
+    SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults);
+    const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length), bad=SELF_UPLOAD_PARSED.filter(q=>q.problems.length);
+    if(!SELF_UPLOAD_PARSED.length){ setMsg("suMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err"); return; }
+    setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}: ${ok.length} ready${bad.length?`, ${bad.length} with problems (won't be imported — usually an equation-only option MathType can't be read as text, or a shared-options question group)`:""}.`, bad.length?"err":"ok");
+    el("suBankBtn").disabled=ok.length===0; el("suBankBtn").textContent=`➕ Add ${ok.length} to question bank only`;
+    el("suTestBtn").disabled=ok.length===0; el("suTestBtn").textContent=`📝 Create test from ${ok.length} question${ok.length===1?"":"s"}`;
+    el("suPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
+      +SELF_UPLOAD_PARSED.map(q=>{const b=q.problems.length;
+        return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
+          <div style="font-size:13px">${b?"⚠️ ":"✓ "}<b>Q${q.num}.</b> ${esc(truncate(q.text||"(no text found)",70))}</div>
+          <div class="muted" style="font-size:11.5px">answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.solution?" · has solution":" · no solution text found"}${b?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
+  }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
+}
+// Split the raw mammoth text into paper / answer-key / solutions, then parse each per question number.
+function parseSelfUploadDoc(raw,defaults){
+  const akIdx=raw.search(/answer\s*keys?/i);
+  const hsIdx=raw.search(/hints?\s*&?\s*solutions?/i);
+  const paperEnd=akIdx>=0?akIdx:(hsIdx>=0?hsIdx:raw.length);
+  const paperText=raw.slice(0,paperEnd);
+  const akText=akIdx>=0?raw.slice(akIdx,(hsIdx>=0&&hsIdx>akIdx)?hsIdx:raw.length):"";
+  const solText=hsIdx>=0?raw.slice(hsIdx):"";
+
+  const answers={};
+  const akRe=/(\d{1,3})\s*\.\s*\(([^)]{1,6})\)/g; let m;
+  while((m=akRe.exec(akText))) answers[parseInt(m[1])]=m[2].trim();
+
+  const solutions={};
+  const solChunks=solText.split(/\n\s*\n(?=\s*\d{1,3}\s*\.\s*Ans\.?\s*:?\s*\()/i);
+  solChunks.forEach(chunk=>{
+    const nm=chunk.match(/^\s*(\d{1,3})\s*\.\s*Ans\.?\s*:?\s*\(([^)]*)\)/i);
+    if(!nm) return;
+    let body=chunk.slice(nm[0].length).replace(/solution\s*:?/i,"");
+    body=body.replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
+    if(body) solutions[parseInt(nm[1])]=body;
+  });
+
+  function findOptionMarks(text){
+    const find=(letter,from)=>{ const re=new RegExp("\\("+letter+"\\)","i"); const idx=text.slice(from).search(re); return idx===-1?-1:from+idx; };
+    const aIdx=find("A",0); if(aIdx===-1) return null;
+    const bIdx=find("B",aIdx+3); if(bIdx===-1) return null;
+    const cIdx=find("C",bIdx+3); if(cIdx===-1) return null;
+    const dIdx=find("D",cIdx+3); if(dIdx===-1) return null;
+    return {aIdx,bIdx,cIdx,dIdx};
+  }
+  const clean=s=>(s||"").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
+
+  const qChunks=paperText.split(/\n\s*\n(?=\s*\d{1,3}\s*\.\s*\t)/);
+  const out=[];
+  qChunks.forEach(chunk=>{
+    const nm=chunk.match(/^\s*(\d{1,3})\s*\.\s*\t?/);
+    if(!nm) return;
+    const num=parseInt(nm[1]);
+    const rest=chunk.slice(nm[0].length);
+    const marks=findOptionMarks(rest);
+    const problems=[]; let text="",options=["","","",""];
+    if(!marks){ problems.push("couldn't find 4 options (a)(b)(c)(d) — may share options with a question group, or have picture-based options"); text=clean(rest); }
+    else{
+      text=clean(rest.slice(0,marks.aIdx));
+      options[0]=clean(rest.slice(marks.aIdx+3,marks.bIdx));
+      options[1]=clean(rest.slice(marks.bIdx+3,marks.cIdx));
+      options[2]=clean(rest.slice(marks.cIdx+3,marks.dIdx));
+      options[3]=clean(rest.slice(marks.dIdx+3));
+      options.forEach((o,i)=>{ if(!o) problems.push(`option ${"ABCD"[i]} looks empty (likely an equation image)`); });
+    }
+    if(!text) problems.push("no question text found");
+    const ansRaw=answers[num]; let correct=null;
+    if(ansRaw==null) problems.push("no answer key entry found for this question number");
+    else if(/^[A-Da-d]$/.test(ansRaw)) correct="ABCD".indexOf(ansRaw.toUpperCase());
+    else problems.push(`answer key says "(${ansRaw})" — not an A/B/C/D option (numerical-answer questions aren't supported for import)`);
+    out.push({num,text,options,correct,solution:solutions[num]||"",problems,...defaults});
+  });
+  return out;
+}
+// Creates the actual question documents in Firestore for every ready (no-problems) parsed question. Returns their new IDs.
+async function selfUploadCreateDocs(){
+  const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length);
+  const ids=[];
+  for(let i=0;i<ok.length;i+=400){
+    const chunk=ok.slice(i,i+400), batch=db.batch(), refs=[];
+    chunk.forEach(q=>{ const ref=db.collection("questions").doc(); refs.push(ref);
+      batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
+        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status:"live",source:"selfUpload",
+        createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
+    await batch.commit();
+    refs.forEach(r=>ids.push(r.id));
+  }
+  return ids;
+}
+async function selfUploadToBank(){
+  const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length); if(!ok.length) return;
+  setBtn("suBankBtn",true,"Adding…");
+  try{
+    const ids=await selfUploadCreateDocs();
+    setMsg("suActionMsg",`✓ Added ${ids.length} question(s) to the live question bank.`,"ok");
+    setBtn("suBankBtn",false,`➕ Add ${ok.length} to question bank only`);
+    setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="questions")loadQuestions();},1400);
+  }catch(e){ setMsg("suActionMsg",errMsg(e),"err"); setBtn("suBankBtn",false,`➕ Add ${ok.length} to question bank only`); }
+}
+async function selfUploadCreateTest(){
+  const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length); if(!ok.length) return;
+  const title=val("suTitle").trim();
+  if(!title) return setMsg("suActionMsg","Add a test title first.","err");
+  setBtn("suTestBtn",true,"Creating…");
+  try{
+    const ids=await selfUploadCreateDocs();
+    const exam=val("suExam"), scope=ME.role==="master"?val("suScope"):ME.centreId;
+    const subjects=[...new Set(ok.map(q=>q.subject))];
+    await db.collection("tests").add({title,exam,type:"selfUpload",subjects,class:val("suClass"),questionIds:ids,duration:parseInt(val("suDur"))||60,scope,isPractice:false,
+      startAt:val("suStart")?firebase.firestore.Timestamp.fromDate(new Date(val("suStart"))):null,
+      endAt:val("suEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("suEnd"))):null,
+      solutionsAt:null,
+      createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    setMsg("suActionMsg",`✓ Test created with ${ids.length} question(s) (also added to your question bank).`,"ok");
+    setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="tests")loadTests();},1400);
+  }catch(e){ setMsg("suActionMsg",errMsg(e),"err"); setBtn("suTestBtn",false,`📝 Create test from ${ok.length} question${ok.length===1?"":"s"}`); }
+}
+
+
+/* ============================================================
    7. REVIEW QUEUE
    ============================================================ */
 async function pageReview(){
@@ -1081,6 +1239,7 @@ async function editReviewQ(id){
 async function saveEditQ(id){
   const correct=parseInt(document.querySelector('input[name=eCorrect]:checked').value);
   await db.collection("questions").doc(id).update({text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
+  db.collection("auditDismissed").doc(id).delete().catch(()=>{}); // content changed — an old dismissal no longer applies
   closeModal();
   if(el("revList")) loadReview();
   if(el("aud-"+id)) el("aud-"+id).remove(); // fixed via the audit tool — drop it from the flagged list
@@ -1088,8 +1247,16 @@ async function saveEditQ(id){
 
 /* ===== Answer Key Audit — flags questions where the solution's own stated conclusion doesn't
    match the saved correct-answer letter. A detection AID only: nothing is changed automatically. ===== */
-function detectStatedAnswer(solutionText){
-  if(!solutionText) return null;
+// "Which is INCORRECT / NOT true / false" style questions invert the usual "X is correct" logic:
+// the solution correctly calls the TRUE statements "correct" while explaining them, which isn't the final
+// answer for a negatively-phrased question. The regex approach can't reliably untangle that, so these are
+// excluded from automatic flagging rather than risk a confidently wrong guess.
+function isNegativeQuestion(questionText){
+  if(!questionText) return false;
+  return /\b(incorrect|in-correct|not\s+correct|not\s+true|is\s+false|are\s+false|NOT\s+TRUE|wrong\s+statement|exception|except)\b/i.test(questionText);
+}
+function detectStatedAnswer(solutionText,questionText){
+  if(!solutionText || isNegativeQuestion(questionText)) return null;
   const patterns=[
     /correct\s+answer\s+is\s*\(?([A-D])\)?\b/gi,
     /correct\s+option\s+is\s*\(?([A-D])\)?\b/gi,
@@ -1098,7 +1265,8 @@ function detectStatedAnswer(solutionText){
     /\(([A-D])\)\s+is\s+(?:the\s+)?correct/gi,
     /hence,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is/gi,
     /thus,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is/gi,
-    /so,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is\s+correct/gi
+    /so,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is\s+correct/gi,
+    /therefore,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is\s+correct/gi
   ];
   let matches=[];
   for(const re of patterns){ let m; while((m=re.exec(solutionText))){ matches.push({index:m.index,letter:m[1].toUpperCase()}); } }
@@ -1117,17 +1285,21 @@ let AUDIT_FLAGGED=[];
 async function runAnswerAudit(){
   setBtn("auditBtn",true,"Scanning…"); el("auditResults").innerHTML=""; setMsg("auditMsg","","");
   try{
-    const snap=await db.collection("questions").get();
-    let flagged=[];
+    const [snap,dismissedSnap]=await Promise.all([db.collection("questions").get(),db.collection("auditDismissed").get()]);
+    const dismissedIds=new Set(dismissedSnap.docs.map(d=>d.id));
+    let flagged=[],skippedDismissed=0;
     snap.forEach(d=>{
       const x=d.data();
-      const stated=detectStatedAnswer(x.solution);
+      const stated=detectStatedAnswer(x.solution,x.text);
       const storedLetter="ABCD"[x.correct];
-      if(stated && stated!==storedLetter) flagged.push({id:d.id,...x,statedLetter:stated,storedLetter});
+      if(stated && stated!==storedLetter){
+        if(dismissedIds.has(d.id)){ skippedDismissed++; return; }
+        flagged.push({id:d.id,...x,statedLetter:stated,storedLetter});
+      }
     });
     AUDIT_FLAGGED=flagged;
     setBtn("auditBtn",false,"🔍 Scan question bank");
-    setMsg("auditMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${flagged.length} possible mismatch${flagged.length===1?"":"es"}.`,flagged.length?"err":"ok");
+    setMsg("auditMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${flagged.length} possible mismatch${flagged.length===1?"":"es"}${skippedDismissed?` (${skippedDismissed} previously marked "not a mismatch" skipped)`:""}.`,flagged.length?"err":"ok");
     if(!flagged.length){ el("auditResults").innerHTML=`<div class="card">${emptyState("No mismatches found","Every solution's stated conclusion matches its marked correct answer.")}</div>`; return; }
     el("auditResults").innerHTML=`<div class="card" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">
         <p style="margin:0 0 4px"><b>Not sure which of these are real?</b></p>
@@ -1282,7 +1454,11 @@ async function fixAuditAnswer(id,letter){
   try{ await db.collection("questions").doc(id).update({correct:"ABCD".indexOf(letter)}); el("aud-"+id)?.remove(); }
   catch(e){ alert("Could not update: "+errMsg(e)); }
 }
-function dismissAudit(id){ el("aud-"+id)?.remove(); }
+async function dismissAudit(id){
+  try{ await db.collection("auditDismissed").doc(id).set({dismissedBy:ME.uid,dismissedByName:ME.name,dismissedAt:firebase.firestore.FieldValue.serverTimestamp()}); }
+  catch(e){ alert("Couldn't save this dismissal, so it may reappear on the next scan: "+errMsg(e)); }
+  el("aud-"+id)?.remove();
+}
 
 /* ============================================================
    7b. SYLLABUS / CHAPTER LISTS
@@ -1329,7 +1505,9 @@ async function saveSyllabus(){
 async function pageTests(){
   setView(`<h1 class="page-title">Tests</h1>
     <p class="page-sub">Schedule tests for your students. Pick the exam — subjects &amp; marking are set automatically.</p>
-    <div class="bar"><div class="spacer" style="flex:1"></div><button class="btn" onclick="openCreateTest()">+ New test</button></div>
+    <div class="bar"><div class="spacer" style="flex:1"></div>
+      <button class="btn ghost" onclick="openSelfUpload()">📄 Self Upload (Word file)</button>
+      <button class="btn" onclick="openCreateTest()">+ New test</button></div>
     <div class="card"><div id="testList" class="muted">Loading…</div></div>`);
   loadTests();
 }
