@@ -1084,14 +1084,14 @@ async function saveEditQ(id){
 function detectStatedAnswer(solutionText){
   if(!solutionText) return null;
   const patterns=[
-    /correct\s+answer\s+is\s*\(?([A-D])\)?/gi,
-    /correct\s+option\s+is\s*\(?([A-D])\)?/gi,
-    /answer\s+is\s*\(?([A-D])\)?/gi,
-    /option\s*\(?([A-D])\)?\s+is\s+(?:the\s+)?correct/gi,
+    /correct\s+answer\s+is\s*\(?([A-D])\)?\b/gi,
+    /correct\s+option\s+is\s*\(?([A-D])\)?\b/gi,
+    /answer\s+is\s*\(?([A-D])\)?\b/gi,
+    /option\s*\(?([A-D])\)?\b\s+is\s+(?:the\s+)?correct/gi,
     /\(([A-D])\)\s+is\s+(?:the\s+)?correct/gi,
-    /hence,?\s+(?:option\s*)?\(?([A-D])\)?\s+is/gi,
-    /thus,?\s+(?:option\s*)?\(?([A-D])\)?\s+is/gi,
-    /so,?\s+(?:option\s*)?\(?([A-D])\)?\s+is\s+correct/gi
+    /hence,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is/gi,
+    /thus,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is/gi,
+    /so,?\s+(?:option\s*)?\(?([A-D])\)?\b\s+is\s+correct/gi
   ];
   let matches=[];
   for(const re of patterns){ let m; while((m=re.exec(solutionText))){ matches.push({index:m.index,letter:m[1].toUpperCase()}); } }
@@ -1106,6 +1106,7 @@ function pageAnswerAudit(){
     <div class="msg" id="auditMsg" style="margin-top:10px"></div>
     <div id="auditResults" style="margin-top:16px"></div>`);
 }
+let AUDIT_FLAGGED=[];
 async function runAnswerAudit(){
   setBtn("auditBtn",true,"Scanning…"); el("auditResults").innerHTML=""; setMsg("auditMsg","","");
   try{
@@ -1117,10 +1118,16 @@ async function runAnswerAudit(){
       const storedLetter="ABCD"[x.correct];
       if(stated && stated!==storedLetter) flagged.push({id:d.id,...x,statedLetter:stated,storedLetter});
     });
+    AUDIT_FLAGGED=flagged;
     setBtn("auditBtn",false,"🔍 Scan question bank");
     setMsg("auditMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${flagged.length} possible mismatch${flagged.length===1?"":"es"}.`,flagged.length?"err":"ok");
     if(!flagged.length){ el("auditResults").innerHTML=`<div class="card">${emptyState("No mismatches found","Every solution's stated conclusion matches its marked correct answer.")}</div>`; return; }
-    el("auditResults").innerHTML=flagged.map(x=>`
+    el("auditResults").innerHTML=`<div class="card" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">
+        <p style="margin:0 0 4px"><b>Reviewed a few and they look right?</b></p>
+        <p class="muted" style="margin:0 0 10px">You can fix every remaining flagged question in one go, using each one's own solution text as the answer. Spot-check a handful below first — this applies to all ${flagged.length} at once and can't be undone in bulk.</p>
+        <button class="btn gold sm" onclick="bulkFixAudit()">✓ Fix all ${flagged.length} flagged questions</button>
+      </div>`+
+      flagged.map(x=>`
       <div class="card" style="margin-bottom:14px" id="aud-${x.id}">
         <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${x.status==="pending"?'<span class="tag pending">Pending</span>':'<span class="tag live">Live</span>'}</div>
         <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text,x.subject)}</p>
@@ -1133,6 +1140,21 @@ async function runAnswerAudit(){
           <button class="btn sm" onclick="fixAuditAnswer('${x.id}','${x.statedLetter}')">Set correct to (${x.statedLetter})</button>
         </div></div>`).join("");
   }catch(e){ el("auditResults").innerHTML=errBox(e); setBtn("auditBtn",false,"🔍 Scan question bank"); }
+}
+async function bulkFixAudit(){
+  const remaining=AUDIT_FLAGGED.filter(x=>el("aud-"+x.id)); // only ones still on screen (not already fixed/dismissed)
+  if(!remaining.length) return;
+  if(!confirm(`Set the correct answer to match the solution's own text for all ${remaining.length} remaining flagged questions?\n\nThis changes your live answer key in bulk. Make sure you've spot-checked a few above first.`)) return;
+  try{
+    for(let i=0;i<remaining.length;i+=400){
+      const batch=db.batch();
+      remaining.slice(i,i+400).forEach(x=>batch.update(db.collection("questions").doc(x.id),{correct:"ABCD".indexOf(x.statedLetter)}));
+      await batch.commit();
+    }
+    remaining.forEach(x=>el("aud-"+x.id)?.remove());
+    setMsg("auditMsg",`✓ Fixed ${remaining.length} question${remaining.length===1?"":"s"}.`,"ok");
+    const banner=el("auditResults").querySelector(".card"); if(banner) banner.remove();
+  }catch(e){ alert("Bulk fix failed partway through: "+errMsg(e)+"\nAny already-fixed questions above have been removed from this list; re-scan to see what's left."); }
 }
 async function fixAuditAnswer(id,letter){
   try{ await db.collection("questions").doc(id).update({correct:"ABCD".indexOf(letter)}); el("aud-"+id)?.remove(); }
