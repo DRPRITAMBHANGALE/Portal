@@ -1034,7 +1034,7 @@ async function doImport(){
 let SELF_UPLOAD_PARSED=[];
 function openSelfUpload(){
   modal(`<h2>📄 Self Upload — build from your own Word file</h2>
-    <p class="muted">Upload a <b>.docx</b> file laid out like your periodic tests: a numbered question paper with (a)(b)(c)(d) options, an <b>"Answer Keys"</b> section, and optionally a <b>"HINTS &amp; SOLUTION"</b> section. Legacy <b>.doc</b> files must be saved as .docx first — open the file in Word, then File → Save As → Word Document (.docx).</p>
+    <p class="muted">Upload a <b>.docx</b> file laid out like your periodic tests: a numbered question paper with (a)(b)(c)(d) options, an <b>"Answer Keys"</b> section, and optionally a <b>"HINTS &amp; SOLUTION"</b> section. Legacy <b>.doc</b> files must be saved as .docx first — open the file in Word, then File → Save As → Word Document (.docx). Ready questions are added to your bank automatically as soon as the file is read — no extra click needed.</p>
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("suExam")}</div><div><label>Class</label>${classSelect("suClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="suSubject"></select></div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="e.g. Laws of Motion &amp; Thermal Properties"/></div></div>
     <label>Difficulty (applied to every question found)</label>${difficultySelect("suDiff")}
@@ -1042,43 +1042,54 @@ function openSelfUpload(){
     <div id="suPreview"></div>
     <div class="msg" id="suMsg"></div>
     <hr class="sep"/>
-    <p class="muted" style="margin-bottom:2px">If you'll create a test now (optional if you're only adding to the bank):</p>
+    <p class="muted" style="margin-bottom:2px">Optional — also build a test right now from the questions that were added live:</p>
     <label>Test title</label><input id="suTitle" placeholder="e.g. Laws of Motion & Thermal Properties — Periodic Test"/>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="suDur" type="number" value="60"/></div>
       <div><label>Assign to</label>${ME.role==="master"?`<select id="suScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="suStart" type="datetime-local"/></div><div><label>Closes</label><input id="suEnd" type="datetime-local"/></div></div>
     <div class="msg" id="suActionMsg"></div>
     <div class="row end" style="margin-top:16px;gap:8px">
-      <button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn ghost" id="suBankBtn" onclick="selfUploadToBank()" disabled>➕ Add to question bank only</button>
-      <button class="btn" id="suTestBtn" onclick="selfUploadCreateTest()" disabled>📝 Create test now</button>
+      <button class="btn ghost" onclick="closeModal()">Close</button>
+      <button class="btn" id="suTestBtn" onclick="selfUploadCreateTest()" disabled>📝 Create test from these</button>
     </div>`,true);
   fillSubjects("suExam","suSubject",false);
   el("suExam").onchange=()=>fillSubjects("suExam","suSubject",false);
 }
+let SELF_UPLOAD_LIVE_IDS=[];
 async function handleSelfUpload(){
   const f=el("suFile").files[0]; if(!f) return;
   setMsg("suMsg","Reading file…","ok"); el("suPreview").innerHTML="";
-  el("suBankBtn").disabled=true; el("suTestBtn").disabled=true;
+  el("suTestBtn").disabled=true; SELF_UPLOAD_LIVE_IDS=[];
   try{
     if(!f.name.toLowerCase().endsWith(".docx")) throw new Error("Please upload a .docx file — legacy .doc must be saved as .docx first in Word (File → Save As → Word Document).");
     if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
     const raw=(await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value;
     const defaults={exam:val("suExam"),subject:val("suSubject"),cls:val("suClass"),topic:val("suTopic").trim()||val("suSubject"),difficulty:val("suDiff")};
     SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults);
-    const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length), bad=SELF_UPLOAD_PARSED.filter(q=>q.problems.length);
     if(!SELF_UPLOAD_PARSED.length){ setMsg("suMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err"); return; }
-    setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}: ${ok.length} ready${bad.length?`, ${bad.length} with problems (won't be imported — usually an equation-only option MathType can't be read as text, or a shared-options question group)`:""}.`, bad.length?"err":"ok");
-    el("suBankBtn").disabled=ok.length===0; el("suBankBtn").textContent=`➕ Add ${ok.length} to question bank only`;
-    el("suTestBtn").disabled=ok.length===0; el("suTestBtn").textContent=`📝 Create test from ${ok.length} question${ok.length===1?"":"s"}`;
+    const ready=SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready");
+    const fixable=SELF_UPLOAD_PARSED.filter(q=>q.tier==="fixable");
+    const skipped=SELF_UPLOAD_PARSED.filter(q=>q.tier==="skip");
+    setMsg("suMsg","Adding…","ok");
+    const {liveIds,pendingCount}=await selfUploadImport(ready,fixable);
+    SELF_UPLOAD_LIVE_IDS=liveIds;
+    setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}. `
+      +`✓ ${liveIds.length} added live to your question bank.`
+      +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — missing a bit of content (usually an equation MathType couldn't be read as text), fill it in there and approve.`:"")
+      +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or a numerical-only answer this app can't store as multiple-choice).`:""),
+      "ok");
+    el("suTestBtn").disabled=liveIds.length===0; el("suTestBtn").textContent=`📝 Create test from ${liveIds.length} question${liveIds.length===1?"":"s"}`;
     el("suPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
-      +SELF_UPLOAD_PARSED.map(q=>{const b=q.problems.length;
+      +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
-          <div style="font-size:13px">${b?"⚠️ ":"✓ "}<b>Q${q.num}.</b> ${esc(truncate(q.text||"(no text found)",70))}</div>
-          <div class="muted" style="font-size:11.5px">answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.solution?" · has solution":" · no solution text found"}${b?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
+          <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${esc(truncate(q.text||"(no text found)",70))}</div>
+          <div class="muted" style="font-size:11.5px">answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
   }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
 }
 // Split the raw mammoth text into paper / answer-key / solutions, then parse each per question number.
+// Every question is classified into a tier: "ready" (imports live), "fixable" (has text + a valid
+// answer, just missing option content — saved to Review queue for a quick manual fill-in instead of
+// being lost entirely), or "skip" (no text, or a non-A-D answer this app's MCQ format can't store).
 function parseSelfUploadDoc(raw,defaults){
   const akIdx=raw.search(/answer\s*keys?/i);
   const hsIdx=raw.search(/hints?\s*&?\s*solutions?/i);
@@ -1130,56 +1141,51 @@ function parseSelfUploadDoc(raw,defaults){
       options.forEach((o,i)=>{ if(!o) problems.push(`option ${"ABCD"[i]} looks empty (likely an equation image)`); });
     }
     if(!text) problems.push("no question text found");
-    const ansRaw=answers[num]; let correct=null;
+    const ansRaw=answers[num]; let correct=null,unstorableAnswer=false;
     if(ansRaw==null) problems.push("no answer key entry found for this question number");
     else if(/^[A-Da-d]$/.test(ansRaw)) correct="ABCD".indexOf(ansRaw.toUpperCase());
-    else problems.push(`answer key says "(${ansRaw})" — not an A/B/C/D option (numerical-answer questions aren't supported for import)`);
-    out.push({num,text,options,correct,solution:solutions[num]||"",problems,...defaults});
+    else { problems.push(`answer key says "(${ansRaw})" — not an A/B/C/D option (numerical-answer questions aren't supported for import)`); unstorableAnswer=true; }
+    // Classify: needs real text and a real A-D answer at minimum to be salvageable at all.
+    let tier;
+    if(!text || correct==null) tier="skip";
+    else if(problems.length) tier="fixable";
+    else tier="ready";
+    out.push({num,text,options,correct,solution:solutions[num]||"",problems,tier,...defaults});
   });
   return out;
 }
-// Creates the actual question documents in Firestore for every ready (no-problems) parsed question. Returns their new IDs.
-async function selfUploadCreateDocs(){
-  const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length);
-  const ids=[];
-  for(let i=0;i<ok.length;i+=400){
-    const chunk=ok.slice(i,i+400), batch=db.batch(), refs=[];
-    chunk.forEach(q=>{ const ref=db.collection("questions").doc(); refs.push(ref);
+// Creates Firestore docs for both tiers in one pass: "ready" go live immediately, "fixable" go to the
+// Review queue (status:"pending") so a quick manual edit finishes them instead of losing them outright.
+async function selfUploadImport(ready,fixable){
+  const liveIds=[]; let pendingCount=0;
+  const all=[...ready.map(q=>({q,status:"live"})),...fixable.map(q=>({q,status:"pending"}))];
+  for(let i=0;i<all.length;i+=400){
+    const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
+    chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status});
       batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
-        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status:"live",source:"selfUpload",
+        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",
         createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
     await batch.commit();
-    refs.forEach(r=>ids.push(r.id));
+    refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingCount++; });
   }
-  return ids;
-}
-async function selfUploadToBank(){
-  const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length); if(!ok.length) return;
-  setBtn("suBankBtn",true,"Adding…");
-  try{
-    const ids=await selfUploadCreateDocs();
-    setMsg("suActionMsg",`✓ Added ${ids.length} question(s) to the live question bank.`,"ok");
-    setBtn("suBankBtn",false,`➕ Add ${ok.length} to question bank only`);
-    setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="questions")loadQuestions();},1400);
-  }catch(e){ setMsg("suActionMsg",errMsg(e),"err"); setBtn("suBankBtn",false,`➕ Add ${ok.length} to question bank only`); }
+  return {liveIds,pendingCount};
 }
 async function selfUploadCreateTest(){
-  const ok=SELF_UPLOAD_PARSED.filter(q=>!q.problems.length); if(!ok.length) return;
+  if(!SELF_UPLOAD_LIVE_IDS.length) return;
   const title=val("suTitle").trim();
   if(!title) return setMsg("suActionMsg","Add a test title first.","err");
   setBtn("suTestBtn",true,"Creating…");
   try{
-    const ids=await selfUploadCreateDocs();
     const exam=val("suExam"), scope=ME.role==="master"?val("suScope"):ME.centreId;
-    const subjects=[...new Set(ok.map(q=>q.subject))];
-    await db.collection("tests").add({title,exam,type:"selfUpload",subjects,class:val("suClass"),questionIds:ids,duration:parseInt(val("suDur"))||60,scope,isPractice:false,
+    const subjects=[...new Set(SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready").map(q=>q.subject))];
+    await db.collection("tests").add({title,exam,type:"selfUpload",subjects,class:val("suClass"),questionIds:SELF_UPLOAD_LIVE_IDS,duration:parseInt(val("suDur"))||60,scope,isPractice:false,
       startAt:val("suStart")?firebase.firestore.Timestamp.fromDate(new Date(val("suStart"))):null,
       endAt:val("suEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("suEnd"))):null,
       solutionsAt:null,
       createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-    setMsg("suActionMsg",`✓ Test created with ${ids.length} question(s) (also added to your question bank).`,"ok");
+    setMsg("suActionMsg",`✓ Test created with ${SELF_UPLOAD_LIVE_IDS.length} question(s).`,"ok");
     setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="tests")loadTests();},1400);
-  }catch(e){ setMsg("suActionMsg",errMsg(e),"err"); setBtn("suTestBtn",false,`📝 Create test from ${ok.length} question${ok.length===1?"":"s"}`); }
+  }catch(e){ setMsg("suActionMsg",errMsg(e),"err"); setBtn("suTestBtn",false,`📝 Create test from ${SELF_UPLOAD_LIVE_IDS.length} question${SELF_UPLOAD_LIVE_IDS.length===1?"":"s"}`); }
 }
 
 
