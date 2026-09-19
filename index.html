@@ -1123,6 +1123,12 @@ async function runAnswerAudit(){
     setMsg("auditMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${flagged.length} possible mismatch${flagged.length===1?"":"es"}.`,flagged.length?"err":"ok");
     if(!flagged.length){ el("auditResults").innerHTML=`<div class="card">${emptyState("No mismatches found","Every solution's stated conclusion matches its marked correct answer.")}</div>`; return; }
     el("auditResults").innerHTML=`<div class="card" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">
+        <p style="margin:0 0 4px"><b>Not sure which of these are real?</b></p>
+        <p class="muted" style="margin:0 0 10px">Have the AI read each flagged question's solution and independently judge whether the marked answer actually matches it. Anything it agrees is fine gets cleared automatically; anything it confirms as a real mismatch gets marked clearly. Uses a small amount of your Anthropic API credit — roughly one short request per ~8 questions.</p>
+        <button class="btn ghost sm" id="aiVerifyBtn" onclick="aiVerifyAudit()">🤖 AI-verify these ${flagged.length} flagged questions</button>
+        <div class="msg" id="aiVerifyMsg" style="margin-top:8px"></div>
+      </div>
+      <div class="card" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">
         <p style="margin:0 0 4px"><b>Reviewed a few and they look right?</b></p>
         <p class="muted" style="margin:0 0 10px">You can fix every remaining flagged question in one go, using each one's own solution text as the answer. Spot-check a handful below first — this applies to all ${flagged.length} at once and can't be undone in bulk.</p>
         <button class="btn gold sm" onclick="bulkFixAudit()">✓ Fix all ${flagged.length} flagged questions</button>
@@ -1137,7 +1143,7 @@ async function runAnswerAudit(){
         <div class="row end" style="margin-top:14px;gap:8px">
           <button class="btn ghost sm" onclick="dismissAudit('${x.id}')">Not a mismatch</button>
           <button class="btn ghost sm" onclick="editReviewQ('${x.id}')">Edit question</button>
-          <button class="btn sm" onclick="fixAuditAnswer('${x.id}','${x.statedLetter}')">Set correct to (${x.statedLetter})</button>
+          <button class="btn sm" id="fixbtn-${x.id}" onclick="fixAuditAnswer('${x.id}','${x.statedLetter}')">Set correct to (${x.statedLetter})</button>
         </div></div>`).join("");
   }catch(e){ el("auditResults").innerHTML=errBox(e); setBtn("auditBtn",false,"🔍 Scan question bank"); }
 }
@@ -1155,6 +1161,42 @@ async function bulkFixAudit(){
     setMsg("auditMsg",`✓ Fixed ${remaining.length} question${remaining.length===1?"":"s"}.`,"ok");
     const banner=el("auditResults").querySelector(".card"); if(banner) banner.remove();
   }catch(e){ alert("Bulk fix failed partway through: "+errMsg(e)+"\nAny already-fixed questions above have been removed from this list; re-scan to see what's left."); }
+}
+async function aiVerifyAudit(){
+  const remaining=AUDIT_FLAGGED.filter(x=>el("aud-"+x.id));
+  if(!remaining.length) return;
+  setBtn("aiVerifyBtn",true,`Verifying… 0/${remaining.length}`);
+  let done=0,confirmed=0,cleared=0,failed=0;
+  for(let i=0;i<remaining.length;i+=8){
+    const batch=remaining.slice(i,i+8);
+    try{
+      const token=await auth.currentUser.getIdToken();
+      const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+        body:JSON.stringify({action:"auditQuestions",items:batch.map(x=>({id:x.id,text:x.text,options:x.options,storedLetter:x.storedLetter,solution:x.solution}))})});
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(data.error||("server returned "+res.status));
+      (data.verdicts||[]).forEach(v=>{
+        const card=el("aud-"+v.id); if(!card) return;
+        if(v.matchesMarked){ card.remove(); cleared++; }
+        else{
+          confirmed++;
+          const sug=String(v.solutionConcludes||"").toUpperCase().trim();
+          const sugValid="ABCD".includes(sug)&&sug.length===1;
+          card.style.borderColor="var(--danger)";
+          card.insertAdjacentHTML("afterbegin",`<div style="margin-bottom:8px"><span class="tag danger">🤖 AI-confirmed mismatch${sugValid?` — likely answer: (${sug})`:""}</span></div>`);
+          const fixBtn=el("fixbtn-"+v.id);
+          if(fixBtn && sugValid){
+            fixBtn.textContent=`Set correct to (${sug})`;
+            fixBtn.setAttribute("onclick",`fixAuditAnswer('${v.id}','${sug}')`);
+          }
+        }
+      });
+    }catch(e){ failed+=batch.length; }
+    done+=batch.length;
+    setBtn("aiVerifyBtn",true,`Verifying… ${done}/${remaining.length}`);
+  }
+  setBtn("aiVerifyBtn",false,`🤖 AI-verify remaining flagged questions`);
+  setMsg("aiVerifyMsg",`Done — ${confirmed} confirmed as genuine mismatches, ${cleared} cleared as false alarms${failed?`, ${failed} couldn't be checked (network/AI error — try again for those)`:""}.`,"ok");
 }
 async function fixAuditAnswer(id,letter){
   try{ await db.collection("questions").doc(id).update({correct:"ABCD".indexOf(letter)}); el("aud-"+id)?.remove(); }
