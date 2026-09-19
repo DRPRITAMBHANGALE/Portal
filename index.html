@@ -653,6 +653,7 @@ const STAFF_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
   {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
+  {id:"answeraudit",label:"Answer Key Audit",ic:"🩺"},
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
   {id:"results",label:"Results & report cards",ic:"⤓"},
@@ -678,7 +679,7 @@ function go(page){
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
-  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,students:pageStudents,
+  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,answeraudit:pageAnswerAudit,students:pageStudents,
     searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
 }
 
@@ -1073,8 +1074,71 @@ async function editReviewQ(id){
 async function saveEditQ(id){
   const correct=parseInt(document.querySelector('input[name=eCorrect]:checked').value);
   await db.collection("questions").doc(id).update({text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
-  closeModal(); loadReview();
+  closeModal();
+  if(el("revList")) loadReview();
+  if(el("aud-"+id)) el("aud-"+id).remove(); // fixed via the audit tool — drop it from the flagged list
 }
+
+/* ===== Answer Key Audit — flags questions where the solution's own stated conclusion doesn't
+   match the saved correct-answer letter. A detection AID only: nothing is changed automatically. ===== */
+function detectStatedAnswer(solutionText){
+  if(!solutionText) return null;
+  const patterns=[
+    /correct\s+answer\s+is\s*\(?([A-D])\)?/gi,
+    /correct\s+option\s+is\s*\(?([A-D])\)?/gi,
+    /answer\s+is\s*\(?([A-D])\)?/gi,
+    /option\s*\(?([A-D])\)?\s+is\s+(?:the\s+)?correct/gi,
+    /\(([A-D])\)\s+is\s+(?:the\s+)?correct/gi,
+    /hence,?\s+(?:option\s*)?\(?([A-D])\)?\s+is/gi,
+    /thus,?\s+(?:option\s*)?\(?([A-D])\)?\s+is/gi,
+    /so,?\s+(?:option\s*)?\(?([A-D])\)?\s+is\s+correct/gi
+  ];
+  let matches=[];
+  for(const re of patterns){ let m; while((m=re.exec(solutionText))){ matches.push({index:m.index,letter:m[1].toUpperCase()}); } }
+  if(!matches.length) return null;
+  matches.sort((a,b)=>a.index-b.index);
+  return matches[matches.length-1].letter; // last stated conclusion — most likely the final answer, not an eliminated option
+}
+function pageAnswerAudit(){
+  setView(`<h1 class="page-title">Answer Key Audit</h1>
+    <p class="page-sub">Scans your question bank for cases where the written solution's own conclusion doesn't match the saved correct answer — e.g. a solution that explains option B, but the marked answer is A. This is a detection aid: nothing changes until you review and confirm each one.</p>
+    <button class="btn" id="auditBtn" onclick="runAnswerAudit()">🔍 Scan question bank</button>
+    <div class="msg" id="auditMsg" style="margin-top:10px"></div>
+    <div id="auditResults" style="margin-top:16px"></div>`);
+}
+async function runAnswerAudit(){
+  setBtn("auditBtn",true,"Scanning…"); el("auditResults").innerHTML=""; setMsg("auditMsg","","");
+  try{
+    const snap=await db.collection("questions").get();
+    let flagged=[];
+    snap.forEach(d=>{
+      const x=d.data();
+      const stated=detectStatedAnswer(x.solution);
+      const storedLetter="ABCD"[x.correct];
+      if(stated && stated!==storedLetter) flagged.push({id:d.id,...x,statedLetter:stated,storedLetter});
+    });
+    setBtn("auditBtn",false,"🔍 Scan question bank");
+    setMsg("auditMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${flagged.length} possible mismatch${flagged.length===1?"":"es"}.`,flagged.length?"err":"ok");
+    if(!flagged.length){ el("auditResults").innerHTML=`<div class="card">${emptyState("No mismatches found","Every solution's stated conclusion matches its marked correct answer.")}</div>`; return; }
+    el("auditResults").innerHTML=flagged.map(x=>`
+      <div class="card" style="margin-bottom:14px" id="aud-${x.id}">
+        <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${x.status==="pending"?'<span class="tag pending">Pending</span>':'<span class="tag live">Live</span>'}</div>
+        <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text,x.subject)}</p>
+        <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o,x.subject)}</div></div>`).join("")}</div>
+        <div class="solution"><b>Solution:</b> ${fmtMath(x.solution,x.subject)}</div>
+        <div class="note" style="margin-top:10px">⚠ Marked correct answer is <b>(${x.storedLetter})</b>, but the solution's own text concludes <b>(${x.statedLetter})</b>.</div>
+        <div class="row end" style="margin-top:14px;gap:8px">
+          <button class="btn ghost sm" onclick="dismissAudit('${x.id}')">Not a mismatch</button>
+          <button class="btn ghost sm" onclick="editReviewQ('${x.id}')">Edit question</button>
+          <button class="btn sm" onclick="fixAuditAnswer('${x.id}','${x.statedLetter}')">Set correct to (${x.statedLetter})</button>
+        </div></div>`).join("");
+  }catch(e){ el("auditResults").innerHTML=errBox(e); setBtn("auditBtn",false,"🔍 Scan question bank"); }
+}
+async function fixAuditAnswer(id,letter){
+  try{ await db.collection("questions").doc(id).update({correct:"ABCD".indexOf(letter)}); el("aud-"+id)?.remove(); }
+  catch(e){ alert("Could not update: "+errMsg(e)); }
+}
+function dismissAudit(id){ el("aud-"+id)?.remove(); }
 
 /* ============================================================
    7b. SYLLABUS / CHAPTER LISTS
