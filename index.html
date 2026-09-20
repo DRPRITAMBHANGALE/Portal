@@ -68,6 +68,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);
 .msg{margin-top:14px;font-size:13.5px;padding:10px 12px;border-radius:9px;display:none}
 .msg.err{display:block;background:var(--danger-soft);color:#822f22}
 .msg.ok{display:block;background:var(--accent-soft);color:var(--accent-ink)}
+.msg.warn{display:block;background:#fbf1dc;color:#7a5410}
 
 .app{display:none;min-height:100vh}
 header.top{position:sticky;top:0;z-index:20;background:rgba(246,243,236,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:0 22px;display:flex;align-items:center;gap:16px;height:62px}
@@ -689,7 +690,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: simpler upload"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: sections fix"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1541,6 +1542,22 @@ async function tqReplaceGo(i,newId){
   catch(e){ alert(errMsg(e)); }
 }
 
+// Re-tags every question of a test (or draft) with its subject from the question-number ranges,
+// then refreshes the test's subject list. Question number = its number in the Word file (qNum),
+// or its position in the paper for papers made before question numbers were saved.
+async function applySectionsToTest(id,ranges){
+  const t0=(await db.collection("tests").doc(id).get()).data();
+  const order=(t0.qOrder&&t0.qOrder.length?t0.qOrder:t0.questionIds)||[]; const inTest=new Set(t0.questionIds||[]);
+  const qs=await Promise.all(order.map(qid=>db.collection("questions").doc(qid).get()));
+  const subjects=new Set(); const ups=[];
+  qs.forEach((d,k)=>{ if(!d.exists) return; const x=d.data(); const n=x.qNum||(k+1);
+    const sub=subjectForNum(n,ranges,x.subject); if(inTest.has(d.id)) subjects.add(sub);
+    if(sub!==x.subject) ups.push({ref:d.ref,data:{subject:sub,...(x.topic===x.subject?{topic:sub}:{})}}); });
+  for(let i=0;i<ups.length;i+=400){ const b=db.batch(); ups.slice(i,i+400).forEach(u=>b.update(u.ref,u.data)); await b.commit(); }
+  await db.collection("tests").doc(id).update({subjects:[...subjects]});
+  return ups.length;
+}
+
 let SELF_UPLOAD_PARSED=[];
 function openSelfUpload(){
   modal(`<h2>📄 Self Upload — build from your own Word file</h2>
@@ -1622,6 +1639,9 @@ async function handleSelfUpload(){
       +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or a numerical-only answer this app can't store as multiple-choice).`:""),
       "ok");
     el("suTestBtn").disabled=!SELF_UPLOAD_DRAFT_ID;
+    { const subs=new Set(SELF_UPLOAD_PARSED.map(q=>q.subject));
+      if(subs.size===1&&examSubjects(val("suExam")).length>1&&SELF_UPLOAD_PARSED.length>40)
+        setMsg("suActionMsg",(el("suActionMsg").textContent||"")+`  ⚠ All questions were filed under ${[...subs][0]}. If this is a mixed paper, fill in "② Subjects by question number" now — the subjects are corrected when you click "Save as final paper".`,"warn"); }
     el("suPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
       +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
@@ -1776,6 +1796,8 @@ async function selfUploadFinalize(){
   const fields={title:val("suTitle").trim(),class:val("suPaperClass")||val("suClass"),duration:parseInt(val("suDur"))||60,...ASG,solutionsAt:null};
   if(!fields.title) return setMsg("suActionMsg","Add a paper title first.","err");
   setBtn("suTestBtn",true,"Saving…");
+  try{ const ranges=readSectionRanges("suSec",val("suExam")); if(ranges.length) await applySectionsToTest(SELF_UPLOAD_DRAFT_ID,ranges); }
+  catch(e){ setBtn("suTestBtn",false,"✓ Save as final paper"); return setMsg("suActionMsg",errMsg(e),"err"); }
   const ok=await finalizeDraft(SELF_UPLOAD_DRAFT_ID,fields);
   if(ok){ setMsg("suActionMsg","✓ Saved as final paper. It's now in your Tests list.","ok"); setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="tests")loadTests();},1300); }
   else setBtn("suTestBtn",false,"✓ Save as final paper");
@@ -1823,6 +1845,7 @@ async function openFinalizeDraft(id){
       <div></div></div>
     <div class="grid cols-2"><div><label>Opens (common)</label><input id="fdStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="fdEnd" type="datetime-local"/></div></div>
     ${centreAssignHTML("fdA",null)}
+    <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number (for mixed PCM / PCB papers)</summary>${sectionRowsHTML("fdSec",t.exam)}</details>
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="fdSolMode" onchange="el('fdSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
       <option value="immediate">Immediately after each student submits</option>
@@ -1838,6 +1861,7 @@ async function saveFinalizeDraft(id){
     if(val("fdSolMode")==="scheduled"){ if(!val("fdSolAt")) throw new Error("Pick when solutions should be shown, or switch back to \"Immediately\".");
       solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("fdSolAt"))); }
     const ASG=readCentreAssign("fdA",val("fdStart"),val("fdEnd"));
+    const secR=readSectionRanges("fdSec",val("fdExam")); if(secR.length){ setBtn("fdBtn",true,"Setting sections…"); await applySectionsToTest(id,secR); }
     const fields={title:val("fdTitle").trim()||"Test",exam:val("fdExam"),class:val("fdClass"),duration:parseInt(val("fdDur"))||60,...ASG,solutionsAt};
     setBtn("fdBtn",true,"Saving…");
     if(await finalizeDraft(id,fields)){ closeModal(); loadTests(); } else setBtn("fdBtn",false,"✓ Save as final paper");
@@ -2258,16 +2282,7 @@ async function saveReschedule(id){
     if(el("rsSecF0")){
       const t0=(await db.collection("tests").doc(id).get()).data();
       const ranges=readSectionRanges("rsSec",t0.exam);
-      if(ranges.length){
-        const order=(t0.qOrder&&t0.qOrder.length?t0.qOrder:t0.questionIds)||[]; const inTest=new Set(t0.questionIds||[]);
-        const qs=await Promise.all(order.map(qid=>db.collection("questions").doc(qid).get()));
-        const batch=db.batch(); const subjects=new Set();
-        qs.forEach((d,k)=>{ if(!d.exists) return; const x=d.data(); const n=x.qNum||(k+1);
-          const sub=subjectForNum(n,ranges,x.subject); if(inTest.has(d.id)) subjects.add(sub);
-          if(sub!==x.subject) batch.update(d.ref,{subject:sub,...(x.topic===x.subject?{topic:sub}:{})}); });
-        await batch.commit();
-        await db.collection("tests").doc(id).update({subjects:[...subjects]});
-      }
+      if(ranges.length) await applySectionsToTest(id,ranges);
     }
     const ASG=readCentreAssign("rsA",val("rsStart"),val("rsEnd"));
     await db.collection("tests").doc(id).update({title:val("rsTitle").trim()||"Test",exam:val("rsExam"),class:val("rsClass"),
