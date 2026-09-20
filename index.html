@@ -689,7 +689,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: enrol in 11 or 12"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: simpler upload"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1371,7 +1371,7 @@ function sectionRowsHTML(prefix,exam,ranges){
       <div style="width:110px;font-weight:600;font-size:14px">${esc(sub)}</div>
       <span class="muted" style="font-size:13px">Q</span><input id="${prefix}F${i}" type="number" min="1" style="width:80px" value="${r[sub]?r[sub].from:""}" placeholder="from"/>
       <span class="muted" style="font-size:13px">to</span><input id="${prefix}T${i}" type="number" min="1" style="width:80px" value="${r[sub]?r[sub].to:""}" placeholder="to"/></div>`).join("")
-    +`<p class="muted" style="font-size:12px;margin:6px 0 0">Leave a subject blank if it isn't in the paper. Example for MHT-CET PCM: Physics 1 to 50, Chemistry 51 to 100, Mathematics 101 to 150.</p></div>`;
+    +`<p class="muted" style="font-size:12px;margin:6px 0 0">Example for MHT-CET PCM: Physics 1 to 50, Chemistry 51 to 100, Mathematics 101 to 150. Leave a subject blank if it isn't in the paper. Single-subject paper? Leave all blank and just pick its subject below.</p></div>`;
 }
 // Returns [{subject,from,to}] or throws a plain-language error.
 function readSectionRanges(prefix,exam){
@@ -1545,19 +1545,22 @@ let SELF_UPLOAD_PARSED=[];
 function openSelfUpload(){
   modal(`<h2>📄 Self Upload — build from your own Word file</h2>
     <p class="muted">Upload a <b>.docx</b> file laid out like your periodic tests: a numbered question paper with (a)(b)(c)(d) options, an <b>"Answer Keys"</b> section, and optionally a <b>"HINTS &amp; SOLUTION"</b> section. Legacy <b>.doc</b> files must be saved as .docx first — open the file in Word, then File → Save As → Word Document (.docx). Ready questions are added to your bank automatically as soon as the file is read — no extra click needed.</p>
-    <div class="grid cols-2"><div><label>Exam</label>${examSelect("suExam")}</div><div><label>Class</label>${classSelect("suClass",false)}</div></div>
-    <div class="grid cols-2"><div><label>Subject</label><select id="suSubject"></select></div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="e.g. Laws of Motion &amp; Thermal Properties"/></div></div>
-    <label>Difficulty (applied to every question found)</label>${difficultySelect("suDiff")}
-    <label>Mixed paper? Subject by question number <span class="muted" style="font-weight:400">(optional — questions outside these ranges use the Subject chosen above)</span></label>
+    <label>① Exam <span class="muted" style="font-weight:400">— sets the marking scheme and which students can see the paper</span></label>${examSelect("suExam")}
+    <label>② Subjects by question number</label>
     <div id="suSections"></div>
-    <label>Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
+    <div class="row" style="gap:8px;align-items:center;margin-top:6px"><span class="muted" style="font-size:13px">Any question not in the ranges above is:</span><select id="suSubject" style="width:auto;flex:1"></select></div>
+    <details style="margin-top:10px"><summary style="cursor:pointer;font-size:13.5px;color:var(--ink-soft)">Question bank labels (optional) — class, chapter &amp; difficulty used to file these questions in your bank</summary>
+      <div class="grid cols-2"><div><label>Class (for the question bank)</label>${classSelect("suClass",false)}</div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="Leave blank to use the subject name"/></div></div>
+      <label>Difficulty</label>${difficultySelect("suDiff")}
+    </details>
+    <label>③ Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
     <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a></p>
     <div id="suPreview"></div>
     <div class="msg" id="suMsg"></div>
     <hr class="sep"/>
     <p class="muted" style="margin-bottom:2px">📝 <b>A draft paper is made automatically</b> from this file as soon as it's read. Questions you approve later from the Review queue are added to it in their original place. When you're happy, click <b>Save as final paper</b> — here, or later from <b>Tests → Draft papers</b>.</p>
     <label>Paper title</label><input id="suTitle" placeholder="Leave blank to use the file name"/>
-    <label>Paper is for</label><select id="suPaperClass"><option value="">Same class as chosen above</option><option value="both">Class 11 &amp; 12 students</option><option value="11">Class 11 students</option><option value="12">Class 12 students</option></select>
+    <label>Paper is for</label><select id="suPaperClass"><option value="both">Class 11 &amp; 12 students</option><option value="11">Class 11 students</option><option value="12">Class 12 students</option></select>
     <label>Duration (min)</label><input id="suDur" type="number" value="60"/>
     <div class="grid cols-2"><div><label>Opens (common)</label><input id="suStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="suEnd" type="datetime-local"/></div></div>
     ${centreAssignHTML("suA")}
@@ -1567,6 +1570,7 @@ function openSelfUpload(){
       <button class="btn" id="suTestBtn" onclick="selfUploadFinalize()" disabled>✓ Save as final paper</button>
     </div>`,true);
   fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec");
+  if([...el("suDiff").options].some(o=>o.value==="Moderate")) el("suDiff").value="Moderate";
   el("suExam").onchange=()=>{ fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec"); };
 }
 let SELF_UPLOAD_LIVE_IDS=[], SELF_UPLOAD_DRAFT_ID=null;
