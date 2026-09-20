@@ -675,7 +675,7 @@ const STAFF_NAV=[
   {id:"toppers",label:"Toppers",ic:"🏆"},{id:"centreupdates",label:"Centre updates",ic:"🕘"}
 ];
 const ADMIN_NAV=[
-  {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
+  {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},{id:"review",label:"Review queue",ic:"⚑"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
   {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"}
 ];
@@ -686,7 +686,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: subject sections"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: admin self upload"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1448,7 +1448,7 @@ async function handleSelfUpload(){
       const subjects=[...new Set([...ready,...fixable].map(q=>q.subject))];
       await draftRef.set({title,exam:val("suExam"),type:"selfUpload",subjects,class:val("suPaperClass")||val("suClass"),
         questionIds:liveIds.slice(),qOrder:order,pendingIds,duration:parseInt(val("suDur"))||60,
-        scope:"draft",finalScope:ME.role==="master"?val("suScope"):ME.centreId,draft:true,isPractice:false,
+        scope:ME.role==="admin"?"draft_"+ME.centreId:"draft",finalScope:ME.role==="master"?val("suScope"):ME.centreId,draft:true,isPractice:false,
         startAt:null,endAt:null,solutionsAt:null,uploadId,uploadName:f.name,
         createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
       SELF_UPLOAD_DRAFT_ID=draftRef.id;
@@ -1576,7 +1576,9 @@ async function openSelfUploadHistory(){
   modal(`<h2>🗂 Previous Self Uploads</h2><p class="muted">Each upload is listed with how many of its questions are live and how many are waiting in the Review queue. "Delete" removes every question from that upload.</p><div id="suhList" class="muted">Loading…</div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,true);
   try{
-    const snap=await db.collection("questions").where("source","==","selfUpload").get();
+    const snap=ME.role==="admin"
+      ? await db.collection("questions").where("source","==","selfUpload").where("centreId","==",ME.centreId).get()
+      : await db.collection("questions").where("source","==","selfUpload").get();
     const groups={};
     snap.docs.forEach(d=>{ const x=d.data(); const t=x.createdAt&&x.createdAt.toDate?x.createdAt.toDate():null;
       const key=x.uploadId||("old_"+(x.createdBy||"")+"_"+(t?Math.floor(t.getTime()/120000):"0"));
@@ -1660,7 +1662,7 @@ async function openFinalizeDraft(id){
     <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="fdExam">${EXAM_KEYS.map(e=>`<option ${e===t.exam?"selected":""}>${e}</option>`).join("")}</select></div>
       <div><label>Class (who can see it)</label><select id="fdClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="fdDur" type="number" value="${t.duration||60}"/></div>
-      <div><label>Assign to</label><select id="fdScope"><option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}" ${t.finalScope===c.id?"selected":""}>${c.name}</option>`).join("")}</select></div></div>
+      <div><label>Assign to</label><select id="fdScope">${ME.role==="admin"?`<option value="${ME.centreId}">${centreName(ME.centreId)}</option>`:`<option value="all">All centres</option>${CENTRES.map(c=>`<option value="${c.id}" ${t.finalScope===c.id?"selected":""}>${c.name}</option>`).join("")}`}</select></div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="fdStart" type="datetime-local"/></div><div><label>Closes</label><input id="fdEnd" type="datetime-local"/></div></div>
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="fdSolMode" onchange="el('fdSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
@@ -1700,7 +1702,9 @@ async function pageReview(){
 }
 async function loadReview(){
   try{
-    const snap=await db.collection("questions").where("status","==","pending").orderBy("createdAt","desc").limit(50).get();
+    const snap=ME.role==="admin"
+      ? await db.collection("questions").where("status","==","pending").where("centreId","==",ME.centreId).get()
+      : await db.collection("questions").where("status","==","pending").orderBy("createdAt","desc").limit(50).get();
     if(snap.empty){ el("revList").innerHTML=`<div class="card">${emptyState("Queue is clear","No drafts waiting for approval. 🎉")}</div>`; return; }
     el("revList").innerHTML=`<div class="bar"><div class="muted grow">${snap.size} draft${snap.size===1?"":"s"} waiting${snap.size>=50?"+ (showing first 50)":""}.</div>
         <button class="btn" onclick="approveAll()">✓ Approve all</button></div>`
@@ -1710,7 +1714,9 @@ async function loadReview(){
 async function approveAll(){
   if(!confirm("Approve ALL pending questions and make them live for students?")) return;
   try{
-    const snap=await db.collection("questions").where("status","==","pending").get();
+    const snap=ME.role==="admin"
+      ? await db.collection("questions").where("status","==","pending").where("centreId","==",ME.centreId).get()
+      : await db.collection("questions").where("status","==","pending").get();
     const docs=snap.docs; if(!docs.length){ loadReview(); return; }
     for(let i=0;i<docs.length;i+=400){
       const batch=db.batch();
@@ -2041,7 +2047,8 @@ async function loadTests(){
     else{
       const own=await db.collection("tests").where("scope","==",ME.centreId).get();
       const all=await db.collection("tests").where("scope","==","all").get();
-      docs=[...own.docs,...all.docs].sort((a,b)=>(b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0));
+      const dr=await db.collection("tests").where("scope","==","draft_"+ME.centreId).get();
+      docs=[...own.docs,...all.docs,...dr.docs].sort((a,b)=>(b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0));
     }
     const drafts=docs.filter(d=>d.data().draft); docs=docs.filter(d=>!d.data().draft);
     if(el("draftCard")){ el("draftCard").style.display=drafts.length?"block":"none";
@@ -2066,7 +2073,7 @@ async function openReschedule(id){
     <div class="grid cols-2"><div><label>Opens</label><input id="rsStart" type="datetime-local" value="${toLocal(t.startAt)}"/></div>
       <div><label>Closes</label><input id="rsEnd" type="datetime-local" value="${toLocal(t.endAt)}"/></div></div>
     <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
-    ${ME.role==="master"?`<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number</summary>
+    ${ME.role!=="student"?`<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number</summary>
       <p class="muted" style="font-size:12.5px;margin:6px 0 0">Use this for a mixed paper where every question got the same subject. Numbers follow the order of the questions in this paper. Leave all empty to change nothing.</p>
       ${sectionRowsHTML("rsSec",t.exam)}</details>`:""}
     <label>When should students see the answer key &amp; solutions?</label>
@@ -2086,7 +2093,7 @@ async function saveReschedule(id){
       if(!val("rsSolAt")) throw new Error("Pick a date & time for when solutions should be shown, or switch back to \"Immediately\".");
       solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("rsSolAt")));
     }
-    if(ME.role==="master"&&el("rsSecF0")){
+    if(el("rsSecF0")){
       const t0=(await db.collection("tests").doc(id).get()).data();
       const ranges=readSectionRanges("rsSec",t0.exam);
       if(ranges.length){
