@@ -690,7 +690,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: PCMB course"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: duplicate students"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2603,11 +2603,72 @@ async function pageStudents(){
           <button class="btn gold sm" id="promBtn" onclick="promoteBatch()">🎓 Promote Class 11 → 12</button></div></div>
       <div class="msg" id="promMsg"></div></div>
     <div class="bar"><div class="spacer" style="flex:1"></div>
+      <button class="btn ghost" onclick="openDupStudents()">👥 Find duplicate students</button>
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
   loadStudents(); loadPracticeAccess();
   if(ME.role==="master") loadAdmins();
+}
+
+/* ===== Duplicate students: find people entered twice, and merge them into one login ===== */
+const nameKey=n=>String(n||"").toLowerCase().replace(/[^a-z]/g,"");
+async function allStudentDocs(){
+  let q=db.collection("users").where("role","==","student");
+  if(ME.role==="admin") q=q.where("centreId","==",ME.centreId);
+  return (await q.get()).docs.map(d=>({id:d.id,...d.data()}));
+}
+async function findSameNameStudents(name,centreId){
+  try{ const all=await allStudentDocs(); const k=nameKey(name);
+    return all.filter(s=>nameKey(s.name)===k && (!centreId||s.centreId===centreId));
+  }catch(_){ return []; }
+}
+const dupIgnored=()=>{ try{ return JSON.parse(localStorage.getItem("dupStudentsIgnored")||"[]"); }catch(_){ return []; } };
+function ignoreDupGroup(k){ try{ const l=dupIgnored(); l.push(k); localStorage.setItem("dupStudentsIgnored",JSON.stringify(l)); }catch(_){} openDupStudents(); }
+let SDUP_GROUPS=[], SDUP_ANY=false;
+async function openDupStudents(anyCentre){
+  if(anyCentre!==undefined) SDUP_ANY=!!anyCentre;
+  modal(`<h2>👥 Duplicate students</h2>
+    <p class="muted">Students whose names match, so the same person may have been added twice. ${ME.role==="master"?"Merging keeps one login, moves the other logins' test results onto it, and removes the extra logins.":"Only the master can merge duplicates — send them this list."}</p>
+    ${ME.role==="master"?`<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="dupAnyCentre" style="width:auto" ${SDUP_ANY?"checked":""} onchange="openDupStudents(this.checked)"/> Also match students in different centres</label>`:""}
+    <div id="dupList" class="muted">Loading…</div>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,true);
+  try{
+    const all=await allStudentDocs();
+    const map={}; all.forEach(s=>{ const nk=nameKey(s.name); if(!nk) return; const k=nk+(SDUP_ANY?"":"|"+s.centreId); (map[k]=map[k]||[]).push(s); });
+    const ign=dupIgnored();
+    SDUP_GROUPS=Object.keys(map).filter(k=>map[k].length>1&&!ign.includes(k)).map(k=>({key:k,students:map[k]}));
+    if(!SDUP_GROUPS.length){ el("dupList").innerHTML=emptyState("No duplicates found","Every student name appears only once. 🎉"); return; }
+    const counts={};
+    for(const g of SDUP_GROUPS) for(const st of g.students){
+      try{ let q=db.collection("attempts").where("studentUid","==",st.id); if(ME.role==="admin") q=q.where("centreId","==",ME.centreId);
+        counts[st.id]=(await q.get()).size; }catch(_){ counts[st.id]="?"; } }
+    el("dupList").innerHTML=SDUP_GROUPS.map((g,gi)=>`<div class="card" style="margin:10px 0;padding:12px 14px">
+      <div class="row" style="justify-content:space-between;align-items:center"><b>${esc(g.students[0].name)}</b>
+        <button class="btn ghost sm" onclick="ignoreDupGroup('${g.key}')">Not duplicates</button></div>
+      ${tableHTML(["Login ID","Password","Class","Course","Centre","Tests taken",""],g.students.map((st,si)=>[
+        esc(st.loginId||"—"),esc(st.pw||"—"),"Class "+esc(st.class||"—"),esc(st.stream||"—"),centreName(st.centreId),String(counts[st.id]===undefined?"—":counts[st.id]),
+        ME.role==="master"?`<button class="btn sm" onclick="mergeDupInto(${gi},${si})">Keep this one</button>`:""]))}
+      ${ME.role==="master"?`<p class="muted" style="font-size:12px;margin:6px 0 0">“Keep this one” moves every test result from the other logins onto it, then deletes those logins.</p>`:""}
+    </div>`).join("");
+  }catch(e){ el("dupList").innerHTML=errBox(e); }
+}
+async function mergeDupInto(gi,si){
+  const g=SDUP_GROUPS[gi]; if(!g) return; const keep=g.students[si], others=g.students.filter((_,i)=>i!==si);
+  if(!confirm(`Keep the login "${keep.loginId}" for ${keep.name} and merge ${others.length} other login${others.length===1?"":"s"} into it?\n\nTest results from ${others.map(o=>o.loginId).join(", ")} move onto the kept login, and those logins are removed. This can't be undone.`)) return;
+  el("dupList").innerHTML=`<p class="muted">Merging…</p>`;
+  try{
+    for(const o of others){
+      const snap=await db.collection("attempts").where("studentUid","==",o.id).get();
+      for(let i=0;i<snap.docs.length;i+=400){ const b=db.batch();
+        snap.docs.slice(i,i+400).forEach(d=>b.update(d.ref,{studentUid:keep.id,studentName:keep.name,centreId:keep.centreId,mergedFrom:o.id}));
+        await b.commit(); }
+      await db.collection("users").doc(o.id).delete();
+      logCentreUpdate("students_merged",keep.centreId,{studentName:keep.name,loginId:keep.loginId,mergedLoginId:o.loginId,movedAttempts:snap.size});
+    }
+    alert(`✓ Merged. ${keep.name} now has one login: ${keep.loginId}`);
+    openDupStudents(); if(el("stuList")) loadStudents();
+  }catch(e){ alert("Could not merge: "+errMsg(e)); openDupStudents(); }
 }
 async function loadPracticeAccess(){
   try{
@@ -2675,7 +2736,7 @@ function pageCentreUpdates(){
     <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
   loadCentreUpdates();
 }
-function cuActionLabel(a){ return {student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
+function cuActionLabel(a){ return {students_merged:"👥 Duplicate merged",student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
 async function loadCentreUpdates(){
   const centreF=val("cuCentre"),actionF=val("cuAction");
   el("cuList").innerHTML=`<div class="muted">Loading…</div>`;
@@ -2746,8 +2807,13 @@ async function addStudent(){
   const centreId=ME.role==="master"?val("sCentre"):ME.centreId;
   if(!name||!loginId||pass.length<6) return setMsg("sMsg","Name, login ID, and a 6+ char password are required.","err");
   if(/[\s@]/.test(loginId)) return setMsg("sMsg","Login ID can't contain spaces or @ — use letters/numbers like aarav01.","err");
-  setBtn("sBtn",true,"Creating…");
+  setBtn("sBtn",true,"Checking…");
   try{
+    const clash=await findSameNameStudents(name,centreId);
+    if(clash.length && !confirm(`${clash.length} student${clash.length===1?"":"s"} with this name already exist${clash.length===1?"s":""} in ${centreName(centreId)}:\n\n${clash.map(c=>`• ${c.name} — login ${c.loginId||"?"} · Class ${c.class||"?"} ${c.stream||""}`).join("\n")}\n\nAdd this student anyway?`)){
+      setBtn("sBtn",false,"Create login"); return setMsg("sMsg","Cancelled — no new login created.","err");
+    }
+    setBtn("sBtn",true,"Creating…");
     const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
     await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),pw:pass,class:val("sClass")==="12"?"12":"11",stream:val("sStream"),
       centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
@@ -2865,6 +2931,7 @@ function openBulkStudents(){
       <span class="muted" style="font-size:12px">Grab the template, fill rows, then upload it.</span></div>
     ${ME.role==="master"?`<label>Default centre (used if the Centre column is blank)</label><select id="bDefCentre">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
     <label>Enrol these students in</label><select id="bClass" onchange="bulkPreview()"><option value="11">Class 11</option><option value="12">Class 12 (direct admission)</option></select>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="bSkipDup" style="width:auto" checked onchange="bulkPreview()"/> Skip students whose name already exists in that centre</label>
     <label>Choose Excel file (.xlsx)</label><input type="file" id="bFile" accept=".xlsx,.xls" onchange="bulkPreview()"/>
     <div id="bPreview"></div>
     <div id="bProgress"></div>
@@ -2899,12 +2966,19 @@ async function bulkPreview(){
       else if(!CENTRES.find(c=>c.id===centre)) centre=""; // resolve at run time to default
       out.push({name,cls,stream,centre});
     });
-    BULK_ROWS=out;
+    try{
+      const existing=await allStudentDocs(); const seen={};
+      out.forEach(r=>{ const cid=r.centre||(ME.role==="master"?val("bDefCentre"):ME.centreId); const k=nameKey(r.name)+"|"+cid;
+        r.dup=existing.some(x=>nameKey(x.name)===nameKey(r.name)&&x.centreId===cid)?"already in the portal":(seen[k]?"repeated in this file":"");
+        seen[k]=true; });
+    }catch(_){}
+    const skipDup=!!(el("bSkipDup")&&el("bSkipDup").checked), dupCount=out.filter(r=>r.dup).length;
+    BULK_ROWS=skipDup?out.filter(r=>!r.dup):out;
     if(!out.length){ setMsg("bMsg","No student rows found. Check the column headings.","err"); return; }
-    setMsg("bMsg",`Found ${out.length} student(s) ready to create.`,"ok");
-    el("bBtn").disabled=false; el("bBtn").textContent=`Create ${out.length} login${out.length===1?"":"s"}`;
+    setMsg("bMsg",`Found ${out.length} student row(s).`+(dupCount?` ⚠ ${dupCount} look like duplicates — ${skipDup?"they will be skipped":"they will still be created"}.`:"")+` ${BULK_ROWS.length} login(s) will be created.`,dupCount?"warn":"ok");
+    el("bBtn").disabled=BULK_ROWS.length===0; el("bBtn").textContent=`Create ${BULK_ROWS.length} login${BULK_ROWS.length===1?"":"s"}`;
     el("bPreview").innerHTML=`<div style="max-height:200px;overflow:auto;margin-top:12px;border:1px solid var(--line);border-radius:10px">`+
-      tableHTML(["Name","Class","Course","Centre"],out.slice(0,50).map(r=>[esc(r.name),r.cls,r.stream,centreName(r.centre||(ME.role==="master"?val("bDefCentre"):ME.centreId))]))+`</div>`;
+      tableHTML(["Name","Class","Course","Centre","Duplicate?"],out.slice(0,50).map(r=>[esc(r.name),r.cls,r.stream,centreName(r.centre||(ME.role==="master"?val("bDefCentre"):ME.centreId)),r.dup?`<span class="tag pending">${esc(r.dup)}</span>`:"—"]))+`</div>`;
   }catch(e){ setMsg("bMsg","Could not read file: "+errMsg(e),"err"); }
 }
 function genLoginId(name){ const base=(name.toLowerCase().replace(/[^a-z]/g,"")||"student").slice(0,9); return base+Math.floor(100+Math.random()*900); }
