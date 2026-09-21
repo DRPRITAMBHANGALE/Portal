@@ -690,7 +690,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: duplicate students"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: bulk delete"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2603,6 +2603,7 @@ async function pageStudents(){
           <button class="btn gold sm" id="promBtn" onclick="promoteBatch()">🎓 Promote Class 11 → 12</button></div></div>
       <div class="msg" id="promMsg"></div></div>
     <div class="bar"><div class="spacer" style="flex:1"></div>
+      <button class="btn ghost danger" onclick="openBulkDeleteStudents()">🗑 Bulk delete students</button>
       <button class="btn ghost" onclick="openDupStudents()">👥 Find duplicate students</button>
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
@@ -2670,6 +2671,77 @@ async function mergeDupInto(gi,si){
     openDupStudents(); if(el("stuList")) loadStudents();
   }catch(e){ alert("Could not merge: "+errMsg(e)); openDupStudents(); }
 }
+
+/* ===== Bulk delete students — whole centre, or a class / course within it ===== */
+let BULK_DEL=[];
+function openBulkDeleteStudents(){
+  modal(`<h2>🗑 Bulk delete students</h2>
+    <p class="muted">Removes the students' logins so they can no longer sign in. Use this at the end of a batch year, or to clear a centre and upload a fresh list.</p>
+    <div class="note" style="margin-bottom:10px">This cannot be undone. Their report cards and results stay unless you tick the box below.</div>
+    <div class="grid cols-2">
+      <div><label>Centre</label>${ME.role==="master"?`<select id="bdCentre" onchange="bulkDeletePreview()">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div>
+      <div><label>Class</label><select id="bdClass" onchange="bulkDeletePreview()"><option value="">All classes</option><option value="11">Class 11 only</option><option value="12">Class 12 only</option></select></div>
+    </div>
+    <label>Course</label><select id="bdStream" onchange="bulkDeletePreview()"><option value="">All courses</option><option value="PCM">PCM</option><option value="PCB">PCB</option><option value="PCMB">PCMB</option></select>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="bdAttempts" style="width:auto"/> Also delete their past test results</label>
+    <div id="bdPreview" class="muted" style="margin-top:10px">Loading…</div>
+    <label>To confirm, type <b>DELETE</b> below</label><input id="bdConfirm" placeholder="DELETE"/>
+    <div id="bdProgress"></div>
+    <div class="msg" id="bdMsg"></div>
+    <div class="row end" style="margin-top:14px;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn danger" id="bdBtn" onclick="runBulkDeleteStudents()" disabled>Delete students</button></div>`);
+  bulkDeletePreview();
+}
+async function bulkDeletePreview(){
+  el("bdBtn").disabled=true; el("bdPreview").innerHTML="Checking…";
+  try{
+    const centreId=ME.role==="master"?val("bdCentre"):ME.centreId, cls=val("bdClass"), stream=val("bdStream");
+    const all=await allStudentDocs();
+    BULK_DEL=all.filter(s=>s.centreId===centreId && (!cls||String(s.class)===cls) && (!stream||s.stream===stream));
+    if(!BULK_DEL.length){ el("bdPreview").innerHTML=`<p class="muted">No students match — nothing to delete.</p>`; return; }
+    el("bdPreview").innerHTML=`<p style="margin:0 0 6px"><b>${BULK_DEL.length}</b> student${BULK_DEL.length===1?"":"s"} will be deleted from ${esc(centreName(centreId))}${cls?" · Class "+cls:""}${stream?" · "+esc(stream):""}.</p>
+      <div style="max-height:170px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13px">${BULK_DEL.map(s=>esc(s.name)+` <span class="muted">(${esc(s.loginId||"—")})</span>`).join(", ")}</div>`;
+    el("bdBtn").disabled=false;
+  }catch(e){ el("bdPreview").innerHTML=errBox(e); }
+}
+async function runBulkDeleteStudents(){
+  if(!BULK_DEL.length) return;
+  if(val("bdConfirm").trim().toUpperCase()!=="DELETE") return setMsg("bdMsg",'Type DELETE in the box to confirm.',"err");
+  const alsoResults=el("bdAttempts").checked;
+  if(!confirm(`Delete ${BULK_DEL.length} student login(s)?${alsoResults?" Their past test results will be deleted too.":" Their past results will be kept."}\n\nThis cannot be undone.`)) return;
+  setBtn("bdBtn",true,`<span class="loader"></span> Deleting…`);
+  const prog=t=>{ if(el("bdProgress")) el("bdProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">${t}</div>`; };
+  let okCount=0; const fails=[]; const names=[];
+  const centreId=ME.role==="master"?val("bdCentre"):ME.centreId;
+  try{
+    const token=await auth.currentUser.getIdToken();
+    let serverOK=true;
+    for(let i=0;i<BULK_DEL.length && serverOK;i+=40){
+      const chunk=BULK_DEL.slice(i,i+40);
+      prog(`Deleting ${i+1}–${Math.min(i+40,BULK_DEL.length)} of ${BULK_DEL.length}…`);
+      try{
+        const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+          body:JSON.stringify({action:"deleteStudents",uids:chunk.map(s=>s.id),deleteAttempts:alsoResults})});
+        if(!res.ok) throw new Error("server returned "+res.status);
+        const data=await res.json();
+        (data.results||[]).forEach(r=>{ if(r.ok){okCount++;names.push(r.name);} else fails.push(r.error||"failed"); });
+      }catch(e){ serverOK=false; prog("Server route unavailable — removing the profiles from the browser instead…"); }
+    }
+    if(!serverOK){
+      // fallback: remove the profile only (the sign-in stays but is useless without a profile)
+      for(let i=0;i<BULK_DEL.length;i++){
+        const st=BULK_DEL[i]; prog(`Deleting ${i+1} of ${BULK_DEL.length}: ${esc(st.name)}…`);
+        try{ await db.collection("users").doc(st.id).delete(); okCount++; names.push(st.name); }
+        catch(e){ fails.push(errMsg(e)); }
+      }
+    }
+    if(okCount) await logCentreUpdate("students_bulk_deleted",centreId,{count:okCount,studentNames:names.slice(0,300)});
+    prog("");
+    setMsg("bdMsg",`✓ Deleted ${okCount} student${okCount===1?"":"s"}.`+(fails.length?` ${fails.length} could not be deleted (${esc([...new Set(fails)].join("; "))}).`:""), fails.length?"err":"ok");
+    el("bdConfirm").value=""; bulkDeletePreview(); loadStudents();
+  }catch(e){ setMsg("bdMsg",errMsg(e),"err"); }
+  setBtn("bdBtn",false,"Delete students");
+}
 async function loadPracticeAccess(){
   try{
     const doc=await db.collection("settings").doc("practiceAccess").get();
@@ -2736,7 +2808,7 @@ function pageCentreUpdates(){
     <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
   loadCentreUpdates();
 }
-function cuActionLabel(a){ return {students_merged:"👥 Duplicate merged",student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
+function cuActionLabel(a){ return {students_bulk_deleted:"🗑 Bulk deleted",students_merged:"👥 Duplicate merged",student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
 async function loadCentreUpdates(){
   const centreF=val("cuCentre"),actionF=val("cuAction");
   el("cuList").innerHTML=`<div class="muted">Loading…</div>`;
@@ -2747,7 +2819,7 @@ async function loadCentreUpdates(){
     if(!docs.length){ el("cuList").innerHTML=emptyState("No updates yet","Actions by centre admins (and you) will show up here."); return; }
     el("cuList").innerHTML=tableHTML(["When","Centre","By","Action","Details"],
       docs.map(d=>{const x=d.data();
-        const details=(x.action==="students_bulk_added"||x.action==="students_promoted")
+        const details=(x.action==="students_bulk_added"||x.action==="students_bulk_deleted"||x.action==="students_promoted")
           ? `${x.count} student${x.count===1?"":"s"}: ${esc((x.studentNames||[]).slice(0,6).join(", "))}${(x.studentNames||[]).length>6?` +${x.studentNames.length-6} more`:""}`
           : x.action==="practice_toggled" ? `Practice ${x.enabled?"turned ON":"turned OFF"}`
           : `${esc(x.studentName||"—")}${x.loginId?` (${esc(x.loginId)})`:""}`;
@@ -2983,40 +3055,87 @@ async function bulkPreview(){
 }
 function genLoginId(name){ const base=(name.toLowerCase().replace(/[^a-z]/g,"")||"student").slice(0,9); return base+Math.floor(100+Math.random()*900); }
 function genPassword(){ const c="abcdefghjkmnpqrstuvwxyz23456789"; let p=""; for(let i=0;i<7;i++)p+=c[Math.floor(Math.random()*c.length)]; return p; }
-async function runBulkStudents(){
-  if(!BULK_ROWS.length) return;
+let BULK_FAILED=[];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Creates the logins on the server (Cloud Function). The browser has a low sign-up limit, which is why
+// creating hundreds of logins from the browser used to fail part-way; the server has no such limit.
+async function createStudentsOnServer(rows,defCentre){
+  const token=await auth.currentUser.getIdToken();
+  const res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+    body:JSON.stringify({action:"createStudents",domain:STUDENT_LOGIN_DOMAIN,
+      students:rows.map(r=>({name:r.name,cls:r.cls,stream:r.stream,centreId:r.centre||defCentre}))})});
+  if(!res.ok){ let m="server returned "+res.status; try{const j=await res.json(); if(j&&(j.error||j.message)) m=j.error||j.message;}catch(_){} const err=new Error(m); err.serverStatus=res.status; throw err; }
+  const data=await res.json(); return data.results||[];
+}
+async function runBulkStudents(rowsIn){
+  const rows=Array.isArray(rowsIn)?rowsIn:BULK_ROWS;
+  if(!rows.length) return;
   setBtn("bBtn",true,`<span class="loader"></span> Creating…`);
-  const created=[]; const fails=[]; const defCentre=ME.role==="master"?val("bDefCentre"):ME.centreId;
-  for(let i=0;i<BULK_ROWS.length;i++){
-    const r=BULK_ROWS[i]; const centreId=r.centre||defCentre;
-    el("bProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Creating ${i+1} of ${BULK_ROWS.length}: ${esc(r.name)}…</div>`;
-    let done=false;
-    for(let attempt=0;attempt<3 && !done;attempt++){
-      const loginId=genLoginId(r.name), pass=genPassword();
-      try{
-        const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
-        await db.collection("users").doc(cred.user.uid).set({role:"student",name:r.name,loginId,email:toLoginEmail(loginId),pw:pass,
-          class:r.cls,stream:r.stream,centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-        await secondaryApp.auth().signOut();
-        created.push({Name:r.name,"Login ID":loginId,Password:pass,Class:r.cls,Stream:r.stream,Centre:centreName(centreId)});
-        done=true;
-      }catch(e){ if(!/email-already-in-use/.test(e.code||"")){ fails.push({name:r.name,reason:errMsg(e)}); break; } }
+  const created=[], fails=[], defCentre=ME.role==="master"?val("bDefCentre"):ME.centreId;
+  const prog=t=>{ if(el("bProgress")) el("bProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">${t}</div>`; };
+  let serverOK=true;
+  // ---- fast path: 40 at a time on the server ----
+  for(let i=0;i<rows.length && serverOK;i+=40){
+    const chunk=rows.slice(i,i+40);
+    prog(`Creating ${i+1}–${Math.min(i+40,rows.length)} of ${rows.length}…`);
+    try{
+      const out=await createStudentsOnServer(chunk,defCentre);
+      out.forEach(r=>{ if(r.ok) created.push({Name:r.name,"Login ID":r.loginId,Password:r.password,Class:r.cls,Stream:r.stream,Centre:centreName(r.centreId)});
+        else fails.push({name:r.name,reason:r.error||"could not create",row:chunk.find(c=>c.name===r.name)}); });
+    }catch(e){
+      serverOK=false;
+      prog("Server route unavailable ("+errMsg(e)+") — switching to the slower browser method…");
     }
-    if(!done && !fails.find(x=>x.name===r.name)) fails.push({name:r.name,reason:"could not pick a unique login ID"});
   }
-  // build the credentials Excel
+  // ---- fallback: create from the browser, paced, waiting out the sign-up limit ----
+  if(!serverOK){
+    const doneNames=new Set(created.map(c=>c.Name));
+    const left=rows.filter(r=>!doneNames.has(r.name));
+    for(let i=0;i<left.length;i++){
+      const r=left[i], centreId=r.centre||defCentre;
+      prog(`Creating ${i+1} of ${left.length}: ${esc(r.name)}…`);
+      let done=false,lastErr="";
+      for(let attempt=0;attempt<4 && !done;attempt++){
+        const loginId=genLoginId(r.name), pass=genPassword();
+        try{
+          const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
+          await db.collection("users").doc(cred.user.uid).set({role:"student",name:r.name,loginId,email:toLoginEmail(loginId),pw:pass,
+            class:r.cls,stream:r.stream,centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+          await secondaryApp.auth().signOut();
+          created.push({Name:r.name,"Login ID":loginId,Password:pass,Class:r.cls,Stream:r.stream,Centre:centreName(centreId)});
+          done=true;
+        }catch(e){
+          lastErr=errMsg(e); const code=e.code||"";
+          if(/too-many-requests/.test(code)){ const wait=30*(attempt+1);
+            for(let s0=wait;s0>0;s0--){ prog(`Google is limiting sign-ups from this browser. Waiting ${s0}s, then carrying on (${created.length} created so far)…`); await sleep(1000); }
+          } else if(!/email-already-in-use/.test(code)) break;
+        }
+      }
+      if(!done) fails.push({name:r.name,reason:lastErr||"could not create",row:r});
+      await sleep(150);
+    }
+  }
   if(created.length){
     const ws=XLSX.utils.json_to_sheet(created,{header:["Name","Login ID","Password","Class","Stream","Centre"]});
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Logins");
     XLSX.writeFile(wb,"Student_Logins_"+new Date().toISOString().slice(0,10)+".xlsx");
-    // log one summary entry per centre involved in this bulk run
     const byCentre={};
     created.forEach(c=>{ const cid=CENTRES.find(x=>x.name===c.Centre)?.id||c.Centre; (byCentre[cid]=byCentre[cid]||[]).push(c.Name); });
     for(const cid of Object.keys(byCentre)) await logCentreUpdate("students_bulk_added",cid,{count:byCentre[cid].length,studentNames:byCentre[cid]});
   }
-  setMsg("bMsg",`✓ Created ${created.length} login(s)${fails.length?`, ${fails.length} failed (${fails.map(f=>esc(f.name)).join(", ")})`:""}. The credentials Excel has downloaded — share it with students.`, fails.length?"err":"ok");
+  BULK_FAILED=fails.map(f=>f.row).filter(Boolean);
+  prog("");
+  // group the reasons so it's clear WHY they failed
+  const reasons={}; fails.forEach(f=>{ const k=/too-many-requests/i.test(f.reason)?"Google's sign-up limit for this browser was reached":f.reason; reasons[k]=(reasons[k]||0)+1; });
+  setMsg("bMsg",`✓ Created ${created.length} login(s)`+(fails.length?`. ${fails.length} failed — ${Object.entries(reasons).map(([k,n])=>`${n}× ${k}`).join("; ")}`:". ")+(created.length?" The credentials Excel has downloaded — share it with students.":""), fails.length?"err":"ok");
+  if(fails.length&&el("bPreview")){
+    el("bPreview").innerHTML=`<div style="max-height:220px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px">`
+      +tableHTML(["Not created","Reason"],fails.slice(0,200).map(f=>[esc(f.name),esc(f.reason)]))+`</div>`
+      +`<div class="row" style="margin-top:10px"><button class="btn" onclick="retryFailedBulk()">↻ Try these ${BULK_FAILED.length} again</button></div>`;
+  }
   setBtn("bBtn",false,"Create logins"); loadStudents();
 }
+function retryFailedBulk(){ const rows=BULK_FAILED.slice(); if(!rows.length) return; BULK_FAILED=[]; runBulkStudents(rows); }
 // Records who (which admin/master) added/removed which student(s), for the master-only Centre updates log
 async function logCentreUpdate(action,centreId,detail){
   try{
