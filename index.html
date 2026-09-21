@@ -423,19 +423,19 @@ const MOTIVATIONAL_QUOTES=[
 function todaysQuote(){ return MOTIVATIONAL_QUOTES[Math.floor(Math.random()*MOTIVATIONAL_QUOTES.length)]; }
 const EXAMS = {
   "MHT-CET": {
-    streams:{ PCM:["Physics","Chemistry","Mathematics"], PCB:["Physics","Chemistry","Biology"] },
+    streams:{ PCM:["Physics","Chemistry","Mathematics"], PCB:["Physics","Chemistry","Biology"], PCMB:["Physics","Chemistry","Mathematics","Biology"] },
     marks:{Physics:1,Chemistry:1,Mathematics:2,Biology:1}, negative:0,
     full:{Physics:50,Chemistry:50,Mathematics:50,Biology:50}, fullDuration:180,
     note:"No negative marking · Maths 2 marks, Physics/Chemistry/Biology 1 mark each"
   },
   "JEE Main": {
-    streams:{ PCM:["Physics","Chemistry","Mathematics"] },
+    streams:{ PCM:["Physics","Chemistry","Mathematics"], PCMB:["Physics","Chemistry","Mathematics"] },
     marks:{Physics:4,Chemistry:4,Mathematics:4}, negative:1,
     full:{Physics:25,Chemistry:25,Mathematics:25}, fullDuration:180,
     note:"+4 for correct, −1 for wrong, 0 if skipped"
   },
   "NEET": {
-    streams:{ PCB:["Physics","Chemistry","Botany","Zoology"] },
+    streams:{ PCB:["Physics","Chemistry","Botany","Zoology"], PCMB:["Physics","Chemistry","Botany","Zoology"] },
     marks:{Physics:4,Chemistry:4,Botany:4,Zoology:4}, negative:1,
     full:{Physics:45,Chemistry:45,Botany:45,Zoology:45}, fullDuration:200,
     note:"+4 for correct, −1 for wrong, 0 if skipped"
@@ -690,7 +690,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: sections fix"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: PCMB course"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2701,8 +2701,26 @@ async function loadStudents(){
     el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
       :tableHTML(["Name","Login ID","Password","Class","Stream","Centre",""],
         snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.loginId||s.email||"—"),esc(s.pw||"—"),"Class "+s.class,s.stream||"—",centreName(s.centreId),
-          `<button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
+          `${ME.role==="master"?`<button class="btn ghost sm" onclick='openEditStudent("${d.id}")'>Class / course</button> `:""}<button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
   }catch(e){ el("stuList").innerHTML=errBox(e); }
+}
+// Master can correct a student's class or course (e.g. a PCM student who is really PCMB)
+async function openEditStudent(uid){
+  const x=(await db.collection("users").doc(uid).get()).data()||{};
+  modal(`<h2>Class &amp; course</h2><p class="muted">${esc(x.name||"")} · ${centreName(x.centreId)}</p>
+    <label>Class</label><select id="esClass"><option value="11" ${x.class==="11"?"selected":""}>Class 11</option><option value="12" ${x.class==="12"?"selected":""}>Class 12</option></select>
+    <label>Course</label><select id="esStream">
+      <option value="PCM" ${x.stream==="PCM"?"selected":""}>PCM — JEE Main &amp; MHT-CET (PCM)</option>
+      <option value="PCB" ${x.stream==="PCB"?"selected":""}>PCB — NEET &amp; MHT-CET (PCB)</option>
+      <option value="PCMB" ${x.stream==="PCMB"?"selected":""}>PCMB — JEE, NEET &amp; MHT-CET (both)</option></select>
+    <div class="msg" id="esMsg"></div>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="esBtn" onclick="saveEditStudent('${uid}')">Save</button></div>`);
+}
+async function saveEditStudent(uid){
+  setBtn("esBtn",true,"Saving…");
+  try{ await db.collection("users").doc(uid).update({class:val("esClass"),stream:val("esStream")}); closeModal(); loadStudents(); }
+  catch(e){ setMsg("esMsg",errMsg(e),"err"); setBtn("esBtn",false,"Save"); }
 }
 function openAddStudent(){
   modal(`<h2>Add student</h2>
@@ -2713,7 +2731,8 @@ function openAddStudent(){
     <label>Enrol in</label><select id="sClass"><option value="11">Class 11</option><option value="12">Class 12 (direct admission)</option></select>
     <label>Course</label><select id="sStream" onchange="sStreamNote()">
       <option value="PCM">PCM — JEE Main &amp; MHT-CET (PCM)</option>
-      <option value="PCB">PCB — NEET &amp; MHT-CET (PCB)</option></select>
+      <option value="PCB">PCB — NEET &amp; MHT-CET (PCB)</option>
+      <option value="PCMB">PCMB — JEE, NEET &amp; MHT-CET (both)</option></select>
     <div class="note" id="sNote"></div>
     ${ME.role==="master"?`<label>Centre</label><select id="sCentre">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
     <div class="msg" id="sMsg"></div>
@@ -2839,7 +2858,7 @@ function openBulkStudents(){
   modal(`<h2>⬆ Upload students (Excel)</h2>
     <p class="muted">Upload an Excel list of students. The app creates each login automatically and gives you back an Excel of their Login IDs &amp; passwords to share.</p>
     <div class="note" style="color:var(--ink-soft);background:#eef3ee;border-color:#cfe0d7">Your Excel needs these column headings in row 1:
-      <b>Name</b>, <b>Course</b> (PCM or PCB)${ME.role==="master"?`, <b>Centre</b> (one of: ${CENTRES.map(c=>c.id).join(", ")})`:""}.
+      <b>Name</b>, <b>Course</b> (PCM, PCB or PCMB)${ME.role==="master"?`, <b>Centre</b> (one of: ${CENTRES.map(c=>c.id).join(", ")})`:""}.
       Choose below whether this list is enrolled in <b>Class 11</b> or <b>Class 12</b>. (Optional: add a <b>Class</b> column with 11 or 12 to set it per student — it overrides the choice below.)
       Login IDs &amp; passwords are generated for you — don't add those columns.</div>
     <div class="row" style="margin-top:12px;margin-bottom:2px"><button class="btn ghost sm" onclick="downloadStudentTemplate()">⬇ Download Excel template</button>
@@ -2856,8 +2875,8 @@ function openBulkStudents(){
 function downloadStudentTemplate(){
   const headers = ME.role==="master" ? ["Name","Course","Centre"] : ["Name","Course"];
   const sample = ME.role==="master"
-    ? [["Aarav Shah","PCM","AMB"],["Diya Patil","PCB","KW"]]
-    : [["Aarav Shah","PCM"],["Diya Patil","PCB"]];
+    ? [["Aarav Shah","PCM","AMB"],["Diya Patil","PCB","KW"],["Ishan Rao","PCMB","AMB"]]
+    : [["Aarav Shah","PCM"],["Diya Patil","PCB"],["Ishan Rao","PCMB"]];
   const ws=XLSX.utils.aoa_to_sheet([headers,...sample]);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Students");
   XLSX.writeFile(wb,"Students_Upload_Template.xlsx");
@@ -2874,7 +2893,7 @@ async function bulkPreview(){
       const get=k=>{const key=Object.keys(r).find(x=>x.trim().toLowerCase()===k); return key?String(r[key]).trim():"";};
       const name=get("name"); if(!name) return;
       const colCls=(get("class")||"").replace(/[^0-9]/g,""); const cls=colCls==="12"?"12":(colCls==="11"?"11":(val("bClass")==="12"?"12":"11"));
-      let stream=(get("course")||get("stream")).toUpperCase(); if(stream!=="PCM"&&stream!=="PCB")stream="PCM";
+      let stream=(get("course")||get("stream")).toUpperCase().replace(/[^A-Z]/g,""); if(!["PCM","PCB","PCMB"].includes(stream))stream="PCM";
       let centre=get("centre").toUpperCase();
       if(ME.role==="admin") centre=ME.centreId;
       else if(!CENTRES.find(c=>c.id===centre)) centre=""; // resolve at run time to default
