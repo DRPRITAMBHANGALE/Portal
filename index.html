@@ -167,6 +167,7 @@ tr:last-child td{border-bottom:none}
 .legend .dot{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 .solution{margin-top:16px;padding:16px;border-radius:11px;background:var(--accent-soft);border:1px solid #cfe0d7;font-size:14.5px;line-height:1.55;white-space:pre-line}
 .qfig{display:block;max-width:100%;max-height:320px;height:auto;margin:8px 0;border-radius:6px;background:#fff}
+.opt .qfig{max-height:150px}
 body.exam-guard #examScreen{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #examScreen.shielded #qCard,#examScreen.shielded #palette{filter:blur(18px);opacity:.15}
 @media print{body.exam-guard *{display:none!important}}
@@ -690,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: bulk delete"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: option pictures"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1500,12 +1501,16 @@ function tqEdit(i){
   el("tqBody").innerHTML=`<h3 style="margin-top:0">Edit Q${i+1}</h3>
     <p class="muted" style="font-size:12.5px">Equations are written between $ signs — leave them as they are unless you are fixing them. Changes also apply to this question in the question bank.</p>
     <label>Question</label><textarea id="tqText" rows="4">${esc(x.text)}</textarea>
+    ${imgPickerHTML("tqText","the question")}
     ${[0,1,2,3].map(k=>`<label>Option ${"ABCD"[k]}</label><div class="row"><input id="tqOpt${k}" style="flex:1" value="${esc(x.options[k]||"")}"/>
-      <label style="margin:0;display:flex;gap:5px"><input type="radio" name="tqCorrect" value="${k}" style="width:auto" ${k===x.correct?"checked":""}/> correct</label></div>`).join("")}
+      <label style="margin:0;display:flex;gap:5px"><input type="radio" name="tqCorrect" value="${k}" style="width:auto" ${k===x.correct?"checked":""}/> correct</label></div>
+      ${imgPickerHTML("tqOpt"+k,"option "+"ABCD"[k])}`).join("")}
     <label>Solution</label><textarea id="tqSol" rows="4">${esc(x.solution||"")}</textarea>
+    ${imgPickerHTML("tqSol","the solution")}
     <div class="msg" id="tqMsg"></div>
     <div class="row end" style="gap:8px;margin-top:12px"><button class="btn ghost" onclick="openTestQuestions('${TQ.id}')">Back</button>
       <button class="btn" id="tqSave" onclick="tqEditSave(${i})">Save question</button></div>`;
+  initFieldPics(["tqText","tqOpt0","tqOpt1","tqOpt2","tqOpt3","tqSol"]);
 }
 async function tqEditSave(i){
   const x=TQ.ordered[i]; setBtn("tqSave",true,"Saving…");
@@ -1924,6 +1929,43 @@ async function approveQ(id){ const ref=db.collection("questions").doc(id); const
   await syncDraftPapers([{id,draftTestId:x.draftTestId}],true); el("rev-"+id)?.remove(); loadReview(); }
 async function rejectQ(id){ if(!confirm("Reject and delete this draft?"))return; const ref=db.collection("questions").doc(id); const x=(await ref.get()).data()||{};
   await ref.delete(); await syncDraftPapers([{id,draftTestId:x.draftTestId}],false); el("rev-"+id)?.remove(); loadReview(); }
+
+/* ===== Add a picture (diagram / graph) to a question, an option or a solution =====
+   The picture is shrunk and stored inside the question itself as [[img:…]], so it shows up
+   everywhere the question is shown — review queue, exam screen and printed papers. */
+function imgPickerHTML(fieldId,what){
+  return `<div class="row" style="gap:8px;align-items:center;margin:4px 0 2px;flex-wrap:wrap">
+    <label class="btn ghost sm" style="margin:0;cursor:pointer">🖼 Add picture${what?" to "+what:""}
+      <input type="file" accept="image/png,image/jpeg" style="display:none" onchange="addPicToField(this,'${fieldId}')"/></label>
+    <span class="muted" style="font-size:12px">PNG or JPG — diagrams, graphs</span>
+    <span id="${fieldId}Pics"></span></div>`;
+}
+async function addPicToField(input,fieldId){
+  const f=input.files&&input.files[0]; if(!f) return;
+  const box=el(fieldId+"Pics"); if(box) box.innerHTML=`<span class="muted" style="font-size:12px">Adding…</span>`;
+  try{
+    const dataUrl=await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=()=>rej(new Error("Could not read that file.")); fr.readAsDataURL(f); });
+    const small=await shrinkPicture(dataUrl,640);
+    if(small.length>700000) throw new Error("That picture is too big even after shrinking — save it smaller and try again.");
+    const fld=el(fieldId); fld.value=(fld.value.trim()+" [[img:"+small+"]]").trim();
+    renderFieldPics(fieldId);
+  }catch(e){ if(box) box.innerHTML=`<span style="color:var(--danger);font-size:12px">${esc(errMsg(e))}</span>`; }
+  input.value="";
+}
+function renderFieldPics(fieldId){
+  const box=el(fieldId+"Pics"), fld=el(fieldId); if(!box||!fld) return;
+  const pics=(fld.value.match(/\[\[img:[^\]]*\]\]/g)||[]);
+  box.innerHTML=pics.map((p,i)=>`<span style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:8px;padding:2px 4px;margin-right:6px">
+    <img src="${p.slice(6,-2)}" style="height:34px;width:auto;border-radius:4px"/>
+    <button class="btn ghost sm danger" style="padding:1px 7px" onclick="removePicFromField('${fieldId}',${i})">✕</button></span>`).join("");
+}
+function removePicFromField(fieldId,idx){
+  const fld=el(fieldId); const pics=(fld.value.match(/\[\[img:[^\]]*\]\]/g)||[]);
+  if(!pics[idx]) return;
+  fld.value=fld.value.replace(pics[idx],"").replace(/\s{2,}/g," ").trim();
+  renderFieldPics(fieldId);
+}
+function initFieldPics(ids){ ids.forEach(renderFieldPics); }
 async function editReviewQ(id){
   const x=(await db.collection("questions").doc(id).get()).data();
   modal(`<h2>Edit question</h2>
@@ -1933,12 +1975,16 @@ async function editReviewQ(id){
       <div><label>Topic / chapter</label><input id="eTopic" value="${esc(x.topic||"")}"/></div></div>
     <label>Difficulty</label><select id="eDiff">${DIFFICULTIES.map(d=>`<option ${d===x.difficulty?"selected":""}>${d}</option>`).join("")}</select>
     <label>Question</label><textarea id="eText" rows="3">${esc(x.text)}</textarea>
+    ${imgPickerHTML("eText","the question")}
     ${[0,1,2,3].map(i=>`<label>Option ${"ABCD"[i]}</label><div class="row"><input id="eOpt${i}" style="flex:1" value="${esc(x.options[i]||"")}"/>
-      <label style="margin:0;display:flex;gap:5px"><input type="radio" name="eCorrect" value="${i}" style="width:auto" ${i===x.correct?"checked":""}/> correct</label></div>`).join("")}
+      <label style="margin:0;display:flex;gap:5px"><input type="radio" name="eCorrect" value="${i}" style="width:auto" ${i===x.correct?"checked":""}/> correct</label></div>
+      ${imgPickerHTML("eOpt"+i,"option "+"ABCD"[i])}`).join("")}
     <label>Solution</label><textarea id="eSol" rows="3">${esc(x.solution||"")}</textarea>
+    ${imgPickerHTML("eSol","the solution")}
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" onclick="saveEditQ('${id}')">Save &amp; approve</button></div>`);
   eFillSubjects(x.subject);
+  initFieldPics(["eText","eOpt0","eOpt1","eOpt2","eOpt3","eSol"]);
 }
 function eFillSubjects(preselect){
   fillSubjects("eExam","eSubject",false);
