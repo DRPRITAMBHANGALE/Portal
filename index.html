@@ -691,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: numeric answers"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: test status"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1424,7 +1424,8 @@ function readCentreAssign(p,commonStart,commonEnd){
   return {scope:"multi",centres:ids,windows,startAt,endAt};
 }
 // The time window that applies to one centre (its own window if set, otherwise the common one)
-function effWindow(t,centre){ const w=t&&t.windows&&t.windows[centre]; return w?{...t,startAt:w.startAt||t.startAt,endAt:w.endAt||t.endAt}:t; }
+function effWindow(t,centre){ if(!t) return t; const w=t.windows&&t.windows[centre];
+  const o={...t,startAt:(w&&w.startAt)||t.startAt,endAt:(w&&w.endAt)||t.endAt}; delete o.windows; return o; }
 function scopeLabel(t){
   if(t.draft) return "Draft";
   if(t.scope==="all") return "All centres";
@@ -1863,17 +1864,38 @@ function parseSelfUploadDoc(raw,defaults,W){
   });
 
   function findOptionMarks(text){
-    return findMarks(text,false)||findMarks(text,true);
+    return findMarks(text,false,"ABCD")||findMarks(text,true,"ABCD")||findMarks(text,false,"1234")||findMarks(text,true,"1234");
   }
-  // strict: "(a)"; loose (fallback): also "a)" when it stands on its own, e.g. "a) 0.2  (b) 0.4"
-  function findMarks(text,loose){
+  // strict: "(a)"; loose (fallback): also "a)" when it stands on its own, e.g. "a) 0.2  (b) 0.4".
+  // Papers that number the options (1)(2)(3)(4) instead of (a)(b)(c)(d) are read the same way.
+  function findMarks(text,loose,set){
+    const L=(set||"ABCD").split("");
     const find=(letter,from)=>{ const re=loose?new RegExp("(?:\\(|(?<=^|\\s))"+letter+"\\)(?=\\s)","i"):new RegExp("\\("+letter+"\\)","i");
       const mm=re.exec(text.slice(from)); if(!mm) return -1; const idx=from+mm.index; return mm[0].startsWith("(")?idx:idx-1; };
-    const aIdx=find("A",0); if(aIdx===-1) return null;
-    const bIdx=find("B",aIdx+3); if(bIdx===-1) return null;
-    const cIdx=find("C",bIdx+3); if(cIdx===-1) return null;
-    const dIdx=find("D",cIdx+3); if(dIdx===-1) return null;
+    const aIdx=find(L[0],0); if(aIdx===-1) return null;
+    const bIdx=find(L[1],aIdx+3); if(bIdx===-1) return null;
+    const cIdx=find(L[2],bIdx+3); if(cIdx===-1) return null;
+    const dIdx=find(L[3],cIdx+3); if(dIdx===-1) return null;
     return {aIdx,bIdx,cIdx,dIdx};
+  }
+  // Some papers typeset the option label inside the equation itself ("(a) 7/3 m" is one Equation
+  // Editor object), so the plain text holds no "(a)" at all. When the four labels can't be found,
+  // pull any (a)…(d) / (1)…(4) out of the equations and try once more.
+  function splitLabelEqs(s){
+    if(!W||!W.eqs) return s;
+    return s.replace(/\u27e6E(\d+)\u27e7/g,(tok,i)=>{
+      const tex=W.eqs[+i]||""; const LBL=/(?:\\left)?\(\s*(?:\\(?:mathrm|mathit|mathbf|text|textit|rm|it)\s*\{\s*)?([a-dA-D1-4])\s*\}?\s*(?:\\right)?\)/g;
+      let out="",pos=0,mm,found=0;
+      while((mm=LBL.exec(tex))){
+        const before=tex.slice(pos,mm.index).trim();
+        if(before){ W.eqs.push(before); out+=" \u27e6E"+(W.eqs.length-1)+"\u27e7 "; }
+        out+=" ("+mm[1]+") "; pos=mm.index+mm[0].length; found++;
+      }
+      if(!found) return tok;
+      const tail=tex.slice(pos).trim();
+      if(tail){ W.eqs.push(tail); out+=" \u27e6E"+(W.eqs.length-1)+"\u27e7 "; }
+      return out;
+    });
   }
   const clean=s=>(s||"").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
   const fix=(s,problems)=>{ if(!W) return s; const r=restoreWordTokens(s,W); r.problems.forEach(p=>{ if(!problems.includes(p)) problems.push(p); }); return r.s; };
@@ -1881,8 +1903,9 @@ function parseSelfUploadDoc(raw,defaults,W){
   const out=[];
   numberedChunks(paperText,/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/).forEach(c=>{
     const num=c.num;
-    const rest=[c.body,...c.paras].join("\n\n");
-    const marks=findOptionMarks(rest);
+    let rest=[c.body,...c.paras].join("\n\n");
+    let marks=findOptionMarks(rest);
+    if(!marks){ const alt=splitLabelEqs(rest), am=findOptionMarks(alt); if(am){ rest=alt; marks=am; } }
     const problems=[]; let text="",options=["","","",""];
     if(!marks){ problems.push("couldn't find 4 options (a)(b)(c)(d) — may share options with a question group, or have picture-based options"); text=clean(rest); }
     else{
@@ -4261,7 +4284,21 @@ function numAnswerCorrect(q,typed){
 }
 const numAnswerLabel=q=>(q.numAnswer===undefined||q.numAnswer===null)?"—":String(q.numAnswer);
 function testStatus(t){const now=Date.now();const s=t.startAt?.toDate?.().getTime(),e=t.endAt?.toDate?.().getTime();if(s&&now<s)return"scheduled";if(e&&now>e)return"closed";return"open";}
-function testStatusTag(t){const st=testStatus(t);return `<span class="tag ${st}">${st}</span>`;}
+// every window this test runs in: one per centre when per-centre timings are set, else just the one
+function testWindowList(t){
+  const ws=(t&&t.windows)?Object.keys(t.windows):[];
+  if(!ws.length) return [{centre:null,startAt:t&&t.startAt,endAt:t&&t.endAt}];
+  const list=ws.map(c=>({centre:c,startAt:t.windows[c].startAt||t.startAt,endAt:t.windows[c].endAt||t.endAt}));
+  (t.centres||[]).filter(c=>!ws.includes(c)).forEach(c=>list.push({centre:c,startAt:t.startAt,endAt:t.endAt}));
+  return list;
+}
+function testStatusTag(t){
+  const list=testWindowList(t), sts=list.map(testStatus);
+  const st=sts.includes("open")?"open":(sts.includes("scheduled")?"scheduled":"closed");
+  const mixed=list.length>1&&sts.some(x=>x!==sts[0]);
+  const tip=mixed?list.map((w,i)=>centreName(w.centre)+": "+sts[i]).join(" \u00b7 "):"";
+  return `<span class="tag ${st}"${tip?` title="${esc(tip)}"`:""}>${st}${mixed?" *":""}</span>`;
+}
 function prettyAuthErr(e){const m={"auth/invalid-credential":"Wrong email or password.","auth/user-not-found":"No account with that email.","auth/wrong-password":"Incorrect password.","auth/invalid-email":"That email looks invalid.","auth/too-many-requests":"Too many tries — wait a moment."};return m[e.code]||e.message;}
 
 /* ============================================================
