@@ -691,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: full question list"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: add questions"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1468,6 +1468,10 @@ async function openTestQuestions(id){
     const {ordered}=await testPaperGroups(t);
     TQ={id,t,ordered}; TQ_SHOW=60;
     el("tqBody").innerHTML=`<p class="muted" style="margin-top:0">${esc(t.title)} · ${ordered.length} questions. Find a question by its <b>number</b> (e.g. 57) or by <b>typing words</b> from it.</p>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <button class="btn ghost sm" onclick="tqAddManual()">➕ Type a new question</button>
+        <button class="btn ghost sm" onclick="tqAddWord()">⬆ Add from Word file</button>
+        <button class="btn ghost sm" onclick="tqAddBank()">🔎 Add from question bank</button></div>
       <input id="tqFind" placeholder="Question number or keywords…" oninput="tqFindChanged()"/>
       <div id="tqList" style="max-height:60vh;overflow:auto;margin-top:10px"></div>
       <div class="row end" style="margin-top:12px"><button class="btn ghost" onclick="closeModal();if(CURRENT_PAGE==='tests')loadTests();">Close</button></div>`;
@@ -1495,6 +1499,136 @@ function renderTQList(reset){
 }
 function tqShowMore(n){ TQ_SHOW+=n; renderTQList(); }
 function tqFindChanged(){ TQ_SHOW=60; renderTQList(); }
+
+/* ---- Add questions to a test: typed in, from a Word file, or from the question bank ---- */
+// New questions are saved to the bank as well, so they can be reused in later papers.
+function tqNewQuestionDoc(q){
+  return {exam:TQ.t.exam,subject:q.subject,topic:q.topic||q.subject,class:(TQ.t.class==="12"?"12":"11"),
+    difficulty:q.difficulty||"Moderate",text:q.text,options:q.options,correct:q.correct,solution:q.solution||"",
+    year:null,numerical:false,status:"live",source:"selfUpload",addedVia:q.addedVia||"manual",addedToTest:TQ.id,
+    uploadName:q.uploadName||"",createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
+    createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+}
+async function tqAppendIds(ids,subjects){
+  const newIds=(TQ.t.questionIds||[]).concat(ids);
+  const upd={questionIds:newIds}; if(TQ.t.qOrder) upd.qOrder=(TQ.t.qOrder||[]).concat(ids);
+  if(subjects&&subjects.length) upd.subjects=[...new Set((TQ.t.subjects||[]).concat(subjects))];
+  await db.collection("tests").doc(TQ.id).update(upd);
+  TQ.t.questionIds=newIds; if(upd.subjects) TQ.t.subjects=upd.subjects;
+}
+function tqSubjectSelect(id,sel){
+  return `<select id="${id}">${examSubjects(TQ.t.exam).map(x=>`<option ${x===sel?"selected":""}>${esc(x)}</option>`).join("")}</select>`;
+}
+// ---- 1. type a new question ----
+function tqAddManual(){
+  el("tqBody").innerHTML=`<h3 style="margin-top:0">➕ New question for this paper</h3>
+    <div class="grid cols-2"><div><label>Subject</label>${tqSubjectSelect("tnSubject",(TQ.ordered[TQ.ordered.length-1]||{}).subject)}</div>
+      <div><label>Chapter / topic (optional)</label><input id="tnTopic" placeholder="Leave blank to use the subject"/></div></div>
+    <label>Question</label><textarea id="tnText" rows="3"></textarea>
+    ${imgPickerHTML("tnText","the question")}
+    ${[0,1,2,3].map(k=>`<label>Option ${"ABCD"[k]}</label><div class="row"><input id="tnOpt${k}" style="flex:1"/>
+      <label style="margin:0;display:flex;gap:5px"><input type="radio" name="tnCorrect" value="${k}" style="width:auto" ${k===0?"checked":""}/> correct</label></div>
+      ${imgPickerHTML("tnOpt"+k,"option "+"ABCD"[k])}`).join("")}
+    <label>Solution (optional)</label><textarea id="tnSol" rows="3"></textarea>
+    ${imgPickerHTML("tnSol","the solution")}
+    <div class="msg" id="tnMsg"></div>
+    <div class="row end" style="gap:8px;margin-top:12px"><button class="btn ghost" onclick="openTestQuestions('${TQ.id}')">Back</button>
+      <button class="btn" id="tnSave" onclick="tqAddManualSave()">Add to paper</button></div>`;
+  initFieldPics(["tnText","tnOpt0","tnOpt1","tnOpt2","tnOpt3","tnSol"]);
+}
+async function tqAddManualSave(){
+  const text=val("tnText").trim(), options=[0,1,2,3].map(k=>val("tnOpt"+k).trim());
+  if(!text) return setMsg("tnMsg","Type the question first.","err");
+  if(options.some(o=>!o)) return setMsg("tnMsg","All four options are needed.","err");
+  setBtn("tnSave",true,"Adding…");
+  try{
+    const ref=await db.collection("questions").add(tqNewQuestionDoc({subject:val("tnSubject"),topic:val("tnTopic").trim(),
+      text,options,correct:parseInt(document.querySelector('input[name=tnCorrect]:checked').value),solution:val("tnSol").trim(),addedVia:"manual"}));
+    await tqAppendIds([ref.id],[val("tnSubject")]);
+    openTestQuestions(TQ.id);
+  }catch(e){ setMsg("tnMsg",errMsg(e),"err"); setBtn("tnSave",false,"Add to paper"); }
+}
+// ---- 2. add from a Word file (same reader as Self Upload) ----
+let TQ_WORD=[];
+function tqAddWord(){
+  el("tqBody").innerHTML=`<h3 style="margin-top:0">⬆ Add questions from a Word file</h3>
+    <p class="muted" style="font-size:13px">Same layout as Self Upload: numbered questions with (a)(b)(c)(d) options, an <b>"Answer Keys"</b> section and optionally <b>"HINTS &amp; SOLUTION"</b>. Equations and diagrams come through as usual.</p>
+    <div class="grid cols-2"><div><label>Subject for these questions</label>${tqSubjectSelect("twSubject")}</div>
+      <div><label>Chapter / topic (optional)</label><input id="twTopic"/></div></div>
+    <label>Choose file (.docx only)</label><input type="file" id="twFile" accept=".docx" onchange="tqWordRead()"/>
+    <div id="twList" style="max-height:40vh;overflow:auto;margin-top:10px"></div>
+    <div class="msg" id="twMsg"></div>
+    <div class="row end" style="gap:8px;margin-top:12px"><button class="btn ghost" onclick="openTestQuestions('${TQ.id}')">Back</button>
+      <button class="btn" id="twAdd" onclick="tqWordAdd()" disabled>Add ticked questions</button></div>`;
+}
+async function tqWordRead(){
+  const f=el("twFile").files[0]; if(!f) return;
+  setMsg("twMsg","Reading file and converting equations…","ok"); el("twAdd").disabled=true; TQ_WORD=[];
+  try{
+    if(!f.name.toLowerCase().endsWith(".docx")) throw new Error("Please choose a .docx file (save a .doc as .docx in Word first).");
+    const buf=await f.arrayBuffer(); let W=null,raw;
+    try{ W=await readWordWithEquations(buf); raw=W.raw; }catch(err){ console.warn(err); W=null; }
+    if(!W){ if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
+      raw=(await mammoth.extractRawText({arrayBuffer:buf})).value; }
+    const parsed=parseSelfUploadDoc(raw,{exam:TQ.t.exam,subject:val("twSubject"),cls:TQ.t.class==="12"?"12":"11",
+      topic:val("twTopic").trim()||val("twSubject"),difficulty:"Moderate"},W).filter(q=>q.tier!=="skip");
+    TQ_WORD=parsed;
+    if(!parsed.length){ setMsg("twMsg","No questions found in that file. Check it has numbered questions and an \"Answer Keys\" section.","err"); el("twList").innerHTML=""; return; }
+    setMsg("twMsg",`Found ${parsed.length} question${parsed.length===1?"":"s"}`+(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted)`:"")+". Untick any you don't want.","ok");
+    el("twList").innerHTML=parsed.map((q,i)=>`<div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px">
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:0"><input type="checkbox" class="twPick" data-i="${i}" style="width:auto;margin-top:3px" checked/>
+        <span><span class="muted" style="font-size:12px">Q${q.num} · answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.problems.length?` · <span style="color:var(--danger)">${esc(q.problems.join("; "))}</span>`:""}</span>
+        <div style="font-size:13.5px">${fmtMath(truncate(q.text,220),q.subject)}</div></span></label></div>`).join("");
+    el("twAdd").disabled=false;
+  }catch(e){ setMsg("twMsg",errMsg(e),"err"); }
+}
+async function tqWordAdd(){
+  const picks=[...document.querySelectorAll(".twPick:checked")].map(c=>TQ_WORD[+c.dataset.i]).filter(Boolean);
+  if(!picks.length) return setMsg("twMsg","Tick at least one question.","err");
+  setBtn("twAdd",true,"Adding…");
+  try{
+    const ids=[];
+    for(let i=0;i<picks.length;i+=400){
+      const chunk=picks.slice(i,i+400), batch=db.batch(), refs=[];
+      chunk.forEach(q=>{ const ref=db.collection("questions").doc(); refs.push(ref);
+        batch.set(ref,tqNewQuestionDoc({subject:q.subject,topic:q.topic,text:q.text,options:q.options,correct:q.correct,
+          solution:q.solution,addedVia:"word",uploadName:(el("twFile").files[0]||{}).name||""})); });
+      await batch.commit(); refs.forEach(r=>ids.push(r.id));
+    }
+    await tqAppendIds(ids,[...new Set(picks.map(q=>q.subject))]);
+    openTestQuestions(TQ.id);
+  }catch(e){ setMsg("twMsg",errMsg(e),"err"); setBtn("twAdd",false,"Add ticked questions"); }
+}
+// ---- 3. add from the question bank ----
+async function tqAddBank(){
+  el("tqBody").innerHTML=`<h3 style="margin-top:0">🔎 Add from the question bank</h3>
+    <div class="grid cols-2"><div><label>Subject</label>${tqSubjectSelect("tbSubject")}</div>
+      <div><label>Search words</label><input id="tbFind" placeholder="Keywords…" oninput="renderTQBank()"/></div></div>
+    <div id="tbList" class="muted" style="max-height:45vh;overflow:auto;margin-top:10px">Loading…</div>
+    <div class="row end" style="margin-top:12px"><button class="btn ghost" onclick="openTestQuestions('${TQ.id}')">Back</button></div>`;
+  el("tbSubject").onchange=loadTQBank; loadTQBank();
+}
+async function loadTQBank(){
+  el("tbList").innerHTML="Loading…";
+  try{
+    const snap=await db.collection("questions").where("exam","==",TQ.t.exam).where("subject","==",val("tbSubject")).where("status","==","live").limit(600).get();
+    const inTest=new Set(TQ.ordered.map(q=>q.id));
+    TQ.pool=snap.docs.map(d=>({id:d.id,...d.data()})).filter(q=>!inTest.has(q.id));
+    renderTQBank();
+  }catch(e){ el("tbList").innerHTML=errBox(e); }
+}
+function renderTQBank(){
+  const f=(val("tbFind")||"").trim().toLowerCase();
+  const rows=(TQ.pool||[]).filter(q=>!f||(plainQ(q.text)+" "+(q.topic||"")).toLowerCase().includes(f)).slice(0,40);
+  el("tbList").innerHTML=rows.length?rows.map(q=>`<div style="border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px">
+      <div class="muted" style="font-size:12px">${esc(q.topic||"")} · ${esc(q.difficulty||"")} · class ${esc(q.class||"")}</div>
+      <div style="font-size:13.5px;margin:3px 0">${fmtMath(truncate(q.text,220),q.subject)}</div>
+      <div class="row end"><button class="btn sm" onclick="tqBankAdd('${q.id}')">Add to paper</button></div></div>`).join("")
+    :`<p class="muted">No matching question in the bank.</p>`;
+}
+async function tqBankAdd(qid){
+  try{ const q=(TQ.pool||[]).find(x=>x.id===qid); await tqAppendIds([qid],q?[q.subject]:[]); openTestQuestions(TQ.id); }catch(e){ alert(errMsg(e)); }
+}
 async function saveTQOrder(newIds){
   const upd={questionIds:newIds}; if(TQ.t.qOrder) upd.qOrder=newIds.concat((TQ.t.pendingIds||[]).filter(x=>!newIds.includes(x)));
   await db.collection("tests").doc(TQ.id).update(upd);
