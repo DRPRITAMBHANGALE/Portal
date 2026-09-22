@@ -691,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: add questions"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: numeric answers"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1467,7 +1467,9 @@ async function openTestQuestions(id){
     const t=(await db.collection("tests").doc(id).get()).data();
     const {ordered}=await testPaperGroups(t);
     TQ={id,t,ordered}; TQ_SHOW=60;
+    const gaps=missingWordNumbers(ordered);
     el("tqBody").innerHTML=`<p class="muted" style="margin-top:0">${esc(t.title)} · ${ordered.length} questions. Find a question by its <b>number</b> (e.g. 57) or by <b>typing words</b> from it.</p>
+      ${gaps.length?`<div class="note" style="margin-bottom:8px">⚠ Missing from the uploaded Word file: <b>Q${gaps.join(", Q")}</b> — ${gaps.length===1?"it is":"they are"} most likely still in the <b>Review queue</b> (something in ${gaps.length===1?"it":"them"} couldn't be read). Approve ${gaps.length===1?"it":"them"} there${t.draft?" — they join this draft automatically once approved":" — then add them here with “Add from question bank”"}.</div>`:""}
       <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
         <button class="btn ghost sm" onclick="tqAddManual()">➕ Type a new question</button>
         <button class="btn ghost sm" onclick="tqAddWord()">⬆ Add from Word file</button>
@@ -1486,7 +1488,7 @@ function renderTQList(reset){
   const rows=TQ.ordered.map((q,i)=>({q,i})).filter(({q,i})=>!f||(String(n)===f?i+1===n:(plainQ(q.text)+" "+q.options.map(plainQ).join(" ")+" "+(q.text||"")).toLowerCase().includes(f)));
   const shown=Math.min(TQ_SHOW,rows.length), left=rows.length-shown;
   el("tqList").innerHTML=rows.length?rows.slice(0,shown).map(({q,i})=>`<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
-      <div class="muted" style="font-size:12px">Q${i+1} · ${esc(q.subject)} · answer ${"ABCD"[q.correct]||"—"}</div>
+      <div class="muted" style="font-size:12px">Q${i+1} · ${esc(q.subject)} · answer ${isNumericQ(q)?esc(numAnswerLabel(q))+" (typed)":("ABCD"[q.correct]||"—")}</div>
       <div style="font-size:14px;margin:4px 0">${fmtMath(q.text,q.subject)}</div>
       <div class="row" style="gap:6px;justify-content:flex-end"><button class="btn ghost sm" onclick="tqEdit(${i})">Edit</button>
         <button class="btn ghost sm" onclick="tqReplace(${i})">Replace from bank</button><button class="btn ghost sm danger" onclick="tqRemove(${i})">Remove</button></div></div>`).join("")
@@ -1504,10 +1506,20 @@ function tqFindChanged(){ TQ_SHOW=60; renderTQList(); }
 // New questions are saved to the bank as well, so they can be reused in later papers.
 function tqNewQuestionDoc(q){
   return {exam:TQ.t.exam,subject:q.subject,topic:q.topic||q.subject,class:(TQ.t.class==="12"?"12":"11"),
-    difficulty:q.difficulty||"Moderate",text:q.text,options:q.options,correct:q.correct,solution:q.solution||"",
-    year:null,numerical:false,status:"live",source:"selfUpload",addedVia:q.addedVia||"manual",addedToTest:TQ.id,
+    difficulty:q.difficulty||"Moderate",text:q.text,options:q.options,correct:q.correct===undefined?null:q.correct,solution:q.solution||"",
+    answerType:q.answerType||"mcq",numAnswer:(q.numAnswer===undefined?null:q.numAnswer),
+    year:null,numerical:q.answerType==="numeric",status:"live",source:"selfUpload",addedVia:q.addedVia||"manual",addedToTest:TQ.id,
     uploadName:q.uploadName||"",createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
     createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+}
+
+// Which question numbers from the uploaded Word file are not in this paper (e.g. 119 and 131 of 150)
+function missingWordNumbers(list){
+  const nums=list.map(q=>q.qNum).filter(n=>typeof n==="number"&&n>0);
+  if(nums.length<5) return [];   // not a Word-file paper, or numbers weren't saved
+  const have=new Set(nums), max=Math.max(...nums), out=[];
+  for(let i=1;i<=max;i++) if(!have.has(i)) out.push(i);
+  return out.length>20?[]:out;   // a wildly different numbering — don't guess
 }
 async function tqAppendIds(ids,subjects){
   const newIds=(TQ.t.questionIds||[]).concat(ids);
@@ -1526,9 +1538,12 @@ function tqAddManual(){
       <div><label>Chapter / topic (optional)</label><input id="tnTopic" placeholder="Leave blank to use the subject"/></div></div>
     <label>Question</label><textarea id="tnText" rows="3"></textarea>
     ${imgPickerHTML("tnText","the question")}
+    <label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="tnNumeric" style="width:auto" onchange="tnNumericToggle()"/> Numerical answer (the student types a number, no options)</label>
+    <div id="tnNumRow" style="display:none"><label>Correct number</label><input id="tnNumAns" style="max-width:240px;font-family:'Courier New',monospace" placeholder="e.g. -4 or 12.5"/></div>
+    <div id="tnOptRows">
     ${[0,1,2,3].map(k=>`<label>Option ${"ABCD"[k]}</label><div class="row"><input id="tnOpt${k}" style="flex:1"/>
       <label style="margin:0;display:flex;gap:5px"><input type="radio" name="tnCorrect" value="${k}" style="width:auto" ${k===0?"checked":""}/> correct</label></div>
-      ${imgPickerHTML("tnOpt"+k,"option "+"ABCD"[k])}`).join("")}
+      ${imgPickerHTML("tnOpt"+k,"option "+"ABCD"[k])}`).join("")}</div>
     <label>Solution (optional)</label><textarea id="tnSol" rows="3"></textarea>
     ${imgPickerHTML("tnSol","the solution")}
     <div class="msg" id="tnMsg"></div>
@@ -1536,14 +1551,19 @@ function tqAddManual(){
       <button class="btn" id="tnSave" onclick="tqAddManualSave()">Add to paper</button></div>`;
   initFieldPics(["tnText","tnOpt0","tnOpt1","tnOpt2","tnOpt3","tnSol"]);
 }
+function tnNumericToggle(){ const on=el("tnNumeric").checked; el("tnNumRow").style.display=on?"block":"none"; el("tnOptRows").style.display=on?"none":"block"; }
 async function tqAddManualSave(){
-  const text=val("tnText").trim(), options=[0,1,2,3].map(k=>val("tnOpt"+k).trim());
+  const numeric=el("tnNumeric")&&el("tnNumeric").checked;
+  const text=val("tnText").trim(), options=numeric?["","","",""]:[0,1,2,3].map(k=>val("tnOpt"+k).trim());
+  const numAnswer=numeric?parseNumAnswer(val("tnNumAns")):null;
   if(!text) return setMsg("tnMsg","Type the question first.","err");
-  if(options.some(o=>!o)) return setMsg("tnMsg","All four options are needed.","err");
+  if(numeric&&numAnswer===null) return setMsg("tnMsg","Type the correct number (for example -4 or 12.5).","err");
+  if(!numeric&&options.some(o=>!o)) return setMsg("tnMsg","All four options are needed.","err");
   setBtn("tnSave",true,"Adding…");
   try{
     const ref=await db.collection("questions").add(tqNewQuestionDoc({subject:val("tnSubject"),topic:val("tnTopic").trim(),
-      text,options,correct:parseInt(document.querySelector('input[name=tnCorrect]:checked').value),solution:val("tnSol").trim(),addedVia:"manual"}));
+      text,options,correct:numeric?null:parseInt(document.querySelector('input[name=tnCorrect]:checked').value),
+      answerType:numeric?"numeric":"mcq",numAnswer,solution:val("tnSol").trim(),addedVia:"manual"}));
     await tqAppendIds([ref.id],[val("tnSubject")]);
     openTestQuestions(TQ.id);
   }catch(e){ setMsg("tnMsg",errMsg(e),"err"); setBtn("tnSave",false,"Add to paper"); }
@@ -1639,15 +1659,19 @@ async function tqRemove(i){
   const q=TQ.ordered[i]; if(!confirm(`Remove Q${i+1} from this test? (It stays in the question bank.)`)) return;
   try{ TQ.ordered.splice(i,1); await saveTQOrder(TQ.ordered.map(x=>x.id)); renderTQList(); }catch(e){ alert(errMsg(e)); }
 }
+function tqNumericToggle(){ const on=el("tqNumeric").checked; el("tqNumRow").style.display=on?"block":"none"; el("tqOptRows").style.display=on?"none":"block"; }
 function tqEdit(i){
   const x=TQ.ordered[i];
   el("tqBody").innerHTML=`<h3 style="margin-top:0">Edit Q${i+1}</h3>
     <p class="muted" style="font-size:12.5px">Equations are written between $ signs — leave them as they are unless you are fixing them. Changes also apply to this question in the question bank.</p>
     <label>Question</label><textarea id="tqText" rows="4">${esc(x.text)}</textarea>
     ${imgPickerHTML("tqText","the question")}
+    <label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="tqNumeric" style="width:auto" ${isNumericQ(x)?"checked":""} onchange="tqNumericToggle()"/> Numerical answer (the student types a number, no options)</label>
+    <div id="tqNumRow" style="display:${isNumericQ(x)?"block":"none"}"><label>Correct number</label><input id="tqNumAns" style="max-width:240px;font-family:'Courier New',monospace" value="${esc(x.numAnswer===undefined||x.numAnswer===null?"":String(x.numAnswer))}"/></div>
+    <div id="tqOptRows" style="display:${isNumericQ(x)?"none":"block"}">
     ${[0,1,2,3].map(k=>`<label>Option ${"ABCD"[k]}</label><div class="row"><input id="tqOpt${k}" style="flex:1" value="${esc(x.options[k]||"")}"/>
       <label style="margin:0;display:flex;gap:5px"><input type="radio" name="tqCorrect" value="${k}" style="width:auto" ${k===x.correct?"checked":""}/> correct</label></div>
-      ${imgPickerHTML("tqOpt"+k,"option "+"ABCD"[k])}`).join("")}
+      ${imgPickerHTML("tqOpt"+k,"option "+"ABCD"[k])}`).join("")}</div>
     <label>Solution</label><textarea id="tqSol" rows="4">${esc(x.solution||"")}</textarea>
     ${imgPickerHTML("tqSol","the solution")}
     <div class="msg" id="tqMsg"></div>
@@ -1657,7 +1681,12 @@ function tqEdit(i){
 }
 async function tqEditSave(i){
   const x=TQ.ordered[i]; setBtn("tqSave",true,"Saving…");
-  try{ const upd={text:val("tqText").trim(),options:[0,1,2,3].map(k=>val("tqOpt"+k).trim()),correct:parseInt(document.querySelector('input[name=tqCorrect]:checked').value),solution:val("tqSol").trim()};
+  const numeric=el("tqNumeric")&&el("tqNumeric").checked;
+  const numAnswer=numeric?parseNumAnswer(val("tqNumAns")):null;
+  if(numeric&&numAnswer===null){ setBtn("tqSave",false,"Save question"); return setMsg("tqMsg","Type the correct number (for example -4 or 12.5).","err"); }
+  try{ const pickedR=document.querySelector('input[name=tqCorrect]:checked');
+    const upd={text:val("tqText").trim(),options:numeric?["","","",""]:[0,1,2,3].map(k=>val("tqOpt"+k).trim()),
+      correct:numeric?null:(pickedR?parseInt(pickedR.value):null),answerType:numeric?"numeric":"mcq",numAnswer,numerical:!!numeric,solution:val("tqSol").trim()};
     await db.collection("questions").doc(x.id).update(upd); Object.assign(x,upd); openTestQuestions(TQ.id);
   }catch(e){ setMsg("tqMsg",(ME.role==="admin"?"You can only edit questions your centre uploaded. Use “Replace from bank” instead. ":"")+errMsg(e),"err"); setBtn("tqSave",false,"Save question"); }
 }
@@ -1784,7 +1813,7 @@ async function handleSelfUpload(){
       +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
       +`✓ ${liveIds.length} added live to your question bank.`
       +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — something in them couldn't be read (see the red notes below); fix it there and approve.`:"")
-      +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or a numerical-only answer this app can't store as multiple-choice).`:""),
+      +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or no usable answer key entry).`:""),
       "ok");
     el("suTestBtn").disabled=!SELF_UPLOAD_DRAFT_ID;
     { const subs=new Set(SELF_UPLOAD_PARSED.map(q=>q.subject));
@@ -1794,7 +1823,7 @@ async function handleSelfUpload(){
       +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
           <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
-          <div class="muted" style="font-size:11.5px">${esc(q.subject)} · answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
+          <div class="muted" style="font-size:11.5px">${esc(q.subject)} · answer ${q.answerType==="numeric"?esc(String(q.numAnswer))+" (typed)":(q.correct!=null?"ABCD"[q.correct]:"—")}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
   }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
 }
 // Split the raw mammoth text into paper / answer-key / solutions, then parse each per question number.
@@ -1864,18 +1893,23 @@ function parseSelfUploadDoc(raw,defaults,W){
       options[3]=clean(rest.slice(marks.dIdx+3));
       options.forEach((o,i)=>{ if(!o) problems.push(`option ${"ABCD"[i]} looks empty (likely an equation image)`); });
     }
+    const ansRaw=answers[num]; let correct=null, answerType="mcq", numAnswer=null;
+    if(ansRaw==null) problems.push("no answer key entry found for this question number");
+    else if(/^[A-Da-d]$/.test(ansRaw)) correct="ABCD".indexOf(ansRaw.toUpperCase());
+    else { const n=parseNumAnswer(ansRaw);
+      if(n!==null){ answerType="numeric"; numAnswer=n;
+        // a numerical question needs no options — drop any "missing option" notes and keep the whole text
+        for(let k=problems.length-1;k>=0;k--) if(/option/i.test(problems[k])) problems.splice(k,1);
+        if(!marks) text=clean(rest); options=["","","",""];
+      } else problems.push(`answer key says "(${ansRaw})" — not an A/B/C/D option and not a number`); }
     if(!text) problems.push("no question text found");
     text=fix(text,problems); options=options.map(o=>fix(o,problems));
     const solution=fix(solutions[num]||"",problems);
-    const ansRaw=answers[num]; let correct=null;
-    if(ansRaw==null) problems.push("no answer key entry found for this question number");
-    else if(/^[A-Da-d]$/.test(ansRaw)) correct="ABCD".indexOf(ansRaw.toUpperCase());
-    else problems.push(`answer key says "(${ansRaw})" — not an A/B/C/D option (numerical-answer questions aren't supported for import)`);
     let tier;
-    if(!text || correct==null) tier="skip";
+    if(!text || (correct==null && answerType!=="numeric")) tier="skip";
     else if(problems.length) tier="fixable";
     else tier="ready";
-    out.push({num,text,options,correct,solution,problems,tier,...defaults});
+    out.push({num,text,options,correct,answerType,numAnswer,solution,problems,tier,...defaults});
   });
   return out;
 }
@@ -1889,7 +1923,7 @@ async function selfUploadImport(ready,fixable,fileName,draftTestId){
     const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
     chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status}); byNum.push({num:q.num,id:ref.id});
       batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
-        text:q.text,options:q.options,correct:q.correct,solution:q.solution,year:null,numerical:false,status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,qNum:q.num,
+        text:q.text,options:q.options,correct:q.correct,answerType:q.answerType||"mcq",numAnswer:(q.numAnswer===undefined?null:q.numAnswer),solution:q.solution,year:null,numerical:q.answerType==="numeric",status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,qNum:q.num,
         createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
     await batch.commit();
     refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingIds.push(r.ref.id); });
@@ -2059,9 +2093,10 @@ async function approveAll(){
 }
 function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
-    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''} ${x.draftTestId?'<span class="tag pending">📝 joins its draft paper when approved</span>':''}</div>
+    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''} ${x.qNum?`<span class="tag">Q${x.qNum}${x.uploadName?" · "+esc(x.uploadName):""}</span>`:''} ${x.draftTestId?'<span class="tag pending">📝 joins its draft paper when approved</span>':''}</div>
     <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text,x.subject)}</p>
-    <div>${x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o,x.subject)}</div></div>`).join("")}</div>
+    <div>${isNumericQ(x)?`<div class="opt correct" style="cursor:default;padding:9px 13px;display:block">Numerical answer: <b style="font-family:'Courier New',monospace">${esc(numAnswerLabel(x))}</b> <span class="muted" style="font-size:12px">— the student types this number</span></div>`
+      :x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o,x.subject)}</div></div>`).join("")}</div>
     ${x.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(x.solution,x.subject)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
     <div class="row end" style="margin-top:14px"><button class="btn danger sm" onclick="rejectQ('${id}')">Reject</button>
       <button class="btn ghost sm" onclick="editReviewQ('${id}')">Edit</button>
@@ -2119,9 +2154,12 @@ async function editReviewQ(id){
     <label>Difficulty</label><select id="eDiff">${DIFFICULTIES.map(d=>`<option ${d===x.difficulty?"selected":""}>${d}</option>`).join("")}</select>
     <label>Question</label><textarea id="eText" rows="3">${esc(x.text)}</textarea>
     ${imgPickerHTML("eText","the question")}
+    <label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="eNumeric" style="width:auto" ${isNumericQ(x)?"checked":""} onchange="eNumericToggle()"/> Numerical answer (the student types a number, no options)</label>
+    <div id="eNumRow" style="display:${isNumericQ(x)?"block":"none"}"><label>Correct number</label><input id="eNumAns" style="max-width:240px;font-family:'Courier New',monospace" value="${esc(x.numAnswer===undefined||x.numAnswer===null?"":String(x.numAnswer))}"/></div>
+    <div id="eOptRows" style="display:${isNumericQ(x)?"none":"block"}">
     ${[0,1,2,3].map(i=>`<label>Option ${"ABCD"[i]}</label><div class="row"><input id="eOpt${i}" style="flex:1" value="${esc(x.options[i]||"")}"/>
       <label style="margin:0;display:flex;gap:5px"><input type="radio" name="eCorrect" value="${i}" style="width:auto" ${i===x.correct?"checked":""}/> correct</label></div>
-      ${imgPickerHTML("eOpt"+i,"option "+"ABCD"[i])}`).join("")}
+      ${imgPickerHTML("eOpt"+i,"option "+"ABCD"[i])}`).join("")}</div>
     <label>Solution</label><textarea id="eSol" rows="3">${esc(x.solution||"")}</textarea>
     ${imgPickerHTML("eSol","the solution")}
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -2133,10 +2171,17 @@ function eFillSubjects(preselect){
   fillSubjects("eExam","eSubject",false);
   if(preselect && [...el("eSubject").options].some(o=>o.value===preselect)) el("eSubject").value=preselect;
 }
+function eNumericToggle(){ const on=el("eNumeric").checked; el("eNumRow").style.display=on?"block":"none"; el("eOptRows").style.display=on?"none":"block"; }
 async function saveEditQ(id){
-  const correct=parseInt(document.querySelector('input[name=eCorrect]:checked').value);
+  const numeric=el("eNumeric")&&el("eNumeric").checked;
+  const numAnswer=numeric?parseNumAnswer(val("eNumAns")):null;
+  if(numeric&&numAnswer===null){ alert("Type the correct number for this question (for example -4 or 12.5)."); return; }
+  const picked=document.querySelector('input[name=eCorrect]:checked');
+  const correct=numeric?null:(picked?parseInt(picked.value):null);
   await db.collection("questions").doc(id).update({exam:val("eExam"),subject:val("eSubject"),class:val("eClass"),topic:val("eTopic").trim(),difficulty:val("eDiff"),
-    text:val("eText").trim(),options:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    text:val("eText").trim(),options:numeric?["","","",""]:[0,1,2,3].map(i=>val("eOpt"+i).trim()),correct,
+    answerType:numeric?"numeric":"mcq",numAnswer,numerical:!!numeric,
+    solution:val("eSol").trim(),status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
   db.collection("auditDismissed").doc(id).delete().catch(()=>{}); // content changed — an old dismissal no longer applies
   { const x=(await db.collection("questions").doc(id).get()).data()||{}; await syncDraftPapers([{id,draftTestId:x.draftTestId}],true); }
   closeModal();
@@ -2596,8 +2641,9 @@ function buildPaperDoc(meta,groups,withSolutions){
     if(groups.length>1) body+=`<h2 class="sec">${esc(g.subject)}</h2>`;
     g.qs.forEach(q=>{ n++;
       body+=`<div class="q"><div class="qh"><b>Q${n}.</b> <span>${fmtMath(q.text,q.subject)}</span><span class="mk">[${examMarks(meta.exam,q.subject)}]</span></div>
-        <div class="opts">${q.options.map((o,k)=>`<div class="op ${withSolutions&&k===q.correct?'ok':''}">(${"ABCD"[k]}) ${fmtMath(o,q.subject)}</div>`).join("")}</div>`;
-      if(withSolutions){ body+=`<div class="ans"><b>Answer: (${"ABCD"[q.correct]})</b>${q.year?` &nbsp;<i>[${q.year}]</i>`:""}${q.solution?`<div class="sol">${fmtMath(q.solution,q.subject)}</div>`:""}</div>`; }
+        ${isNumericQ(q)?`<div class="opts" style="grid-template-columns:1fr"><div class="op"><i>Numerical answer — write the value:</i> ______________</div></div>`
+          :`<div class="opts">${q.options.map((o,k)=>`<div class="op ${withSolutions&&k===q.correct?'ok':''}">(${"ABCD"[k]}) ${fmtMath(o,q.subject)}</div>`).join("")}</div>`}`;
+      if(withSolutions){ body+=`<div class="ans"><b>Answer: ${isNumericQ(q)?esc(numAnswerLabel(q)):"("+"ABCD"[q.correct]+")"}</b>${q.year?` &nbsp;<i>[${q.year}]</i>`:""}${q.solution?`<div class="sol">${fmtMath(q.solution,q.subject)}</div>`:""}</div>`; }
       body+=`</div>`;
     });
   });
@@ -3971,7 +4017,7 @@ function renderSubjectTabs(){
   bar.style.display="flex";
   const activeIdx=currentBlockIdx();
   bar.innerHTML=EXAM.subjectBlocks.map((b,i)=>{
-    const answeredCount=Array.from({length:b.count},(_,k)=>b.start+k).filter(gi=>EXAM.answers[gi]!==undefined).length;
+    const answeredCount=Array.from({length:b.count},(_,k)=>b.start+k).filter(gi=>EXAM.answers[gi]!==undefined&&EXAM.answers[gi]!=="").length;
     return `<button class="subj-tab ${i===activeIdx?'active':''}" onclick="switchSubjectTab(${i})">${esc(b.subject)}<span class="cnt">${answeredCount}/${b.count}</span></button>`;
   }).join("");
 }
@@ -3982,17 +4028,30 @@ function renderQ(){
   const localNum=block?(i-block.start+1):(i+1), localTotal=block?block.count:EXAM.questions.length;
   el("qCard").innerHTML=`<div class="q-meta">Question ${localNum} of ${localTotal} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
     <p class="q-text">${qLabel(q)}</p>
-    <div id="opts">${q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
+    <div id="opts">${isNumericQ(q)
+      ? `<div class="opt" style="cursor:default;display:block;padding:14px 16px">
+           <div class="muted" style="font-size:13px;margin-bottom:6px">Type your answer as a number (use a minus sign for negatives, and a dot for decimals).</div>
+           <input id="numAns" type="text" inputmode="decimal" autocomplete="off" value="${esc(sel===undefined?"":String(sel))}"
+             style="font-size:18px;font-family:'Courier New',monospace;max-width:220px" oninput="pickNum(this.value)"/>
+         </div>`
+      : q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
   el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review";
   renderSubjectTabs(); renderPalette();
 }
 function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
+// typed answers must not redraw the box (that would lose the cursor) — just keep the palette in step
+function pickNum(v){
+  const t=String(v||"").trim();
+  if(t==="") delete EXAM.answers[EXAM.cur]; else EXAM.answers[EXAM.cur]=t;
+  renderSubjectTabs(); renderPalette();
+  const box=el("numAns"); if(box) box.focus();
+}
 function navQ(d){ const n=EXAM.cur+d; if(n>=0&&n<EXAM.questions.length){EXAM.cur=n;renderQ();} }
 function toggleReview(){ EXAM.review.has(EXAM.cur)?EXAM.review.delete(EXAM.cur):EXAM.review.add(EXAM.cur); renderQ(); }
 function renderPalette(){
   const block=EXAM.subjectBlocks[currentBlockIdx()]||{start:0,count:EXAM.questions.length};
   el("palette").innerHTML=Array.from({length:block.count},(_,k)=>block.start+k).map(i=>{
-    const answered=EXAM.answers[i]!==undefined, reviewed=EXAM.review.has(i);
+    const answered=EXAM.answers[i]!==undefined&&EXAM.answers[i]!=="", reviewed=EXAM.review.has(i);
     let cls=answered?"answered":(reviewed?"review":"");
     if(answered&&reviewed) cls+=" review-mark";
     if(i===EXAM.cur) cls+=" cur";
@@ -4011,8 +4070,8 @@ async function submitExam(auto,disqualify){
   const order=EXAM.questions.map(q=>q.id);
   const answers=EXAM.questions.map((q,i)=>EXAM.answers[i]===undefined?null:EXAM.answers[i]);
   EXAM.questions.forEach((q,i)=>{const sel=EXAM.answers[i],m=examMarks(exam,q.subject);
-    if(sel===undefined){unattempted++;}
-    else if(sel===q.correct){score+=m;correct++;}
+    if(sel===undefined||sel===""){unattempted++;}
+    else if(isNumericQ(q)?numAnswerCorrect(q,sel):(sel===q.correct)){score+=m;correct++;}
     else{score-=neg;wrong++;}});
   const total=EXAM.questions.reduce((s,q)=>s+examMarks(exam,q.subject),0);
   // every attempt is saved (practice too) so answers can be reviewed later
@@ -4055,7 +4114,11 @@ function showResult(r){
   el("solList").innerHTML=EXAM.questions.map((q,i)=>{const sel=EXAM.answers[i];
     return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${q.subject}${q.topic?" · "+q.topic:""}</div>
       <p class="q-text" style="font-size:16px;margin:6px 0 14px">${qLabel(q)}</p>
-      ${q.options.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
+      ${isNumericQ(q)
+        ? `<div class="opt ${sel===undefined||sel===""?"":(numAnswerCorrect(q,sel)?"correct":"wrong")}" style="cursor:default;padding:10px 14px;margin-bottom:8px;display:block">
+             <div>Your answer: <b style="font-family:'Courier New',monospace">${sel===undefined||sel===""?"— not attempted":esc(String(sel))}</b></div>
+             <div style="margin-top:4px">Correct answer: <b style="font-family:'Courier New',monospace">${esc(numAnswerLabel(q))}</b></div></div>`
+        : q.options.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
         return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
       ${q.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(q.solution,q.subject)}</div>`:""}</div>`;}).join("");
 }
@@ -4179,6 +4242,24 @@ function windowLabel(t){
   const others=(t.centres||[]).filter(c=>!ws.includes(c));
   return ws.map(c=>`<div><b>${esc(centreName(c))}:</b> ${one(t.windows[c])}</div>`).join("")+(others.length?`<div><b>Others:</b> ${one(t)}</div>`:"");
 }
+
+/* ---- Numerical-answer questions (the student types a number instead of picking A/B/C/D) ---- */
+const isNumericQ=q=>!!q&&q.answerType==="numeric";
+// "(-4)", "(– 4)", "12.50", "1/2" → a number, or null when it isn't one
+function parseNumAnswer(v){
+  if(v===null||v===undefined) return null;
+  let t=String(v).replace(/[‒–—−]/g,"-").replace(/[(),\s]/g,"").replace(/^ans\.?:?/i,"");
+  if(/^-?\d+(\.\d+)?\/-?\d+(\.\d+)?$/.test(t)){ const p=t.split("/"); const d=parseFloat(p[1]); if(d) return parseFloat(p[0])/d; }
+  if(!/^-?\d+(\.\d+)?$/.test(t)) return null;
+  const n=parseFloat(t); return isFinite(n)?n:null;
+}
+// A typed answer counts as correct within a small tolerance (0.01, or the question's own numTol)
+function numAnswerCorrect(q,typed){
+  const a=parseNumAnswer(typed); if(a===null) return false;
+  const tol=(typeof q.numTol==="number"&&q.numTol>0)?q.numTol:0.01;
+  return Math.abs(a-Number(q.numAnswer))<=tol+1e-9;
+}
+const numAnswerLabel=q=>(q.numAnswer===undefined||q.numAnswer===null)?"—":String(q.numAnswer);
 function testStatus(t){const now=Date.now();const s=t.startAt?.toDate?.().getTime(),e=t.endAt?.toDate?.().getTime();if(s&&now<s)return"scheduled";if(e&&now>e)return"closed";return"open";}
 function testStatusTag(t){const st=testStatus(t);return `<span class="tag ${st}">${st}</span>`;}
 function prettyAuthErr(e){const m={"auth/invalid-credential":"Wrong email or password.","auth/user-not-found":"No account with that email.","auth/wrong-password":"Incorrect password.","auth/invalid-email":"That email looks invalid.","auth/too-many-requests":"Too many tries — wait a moment."};return m[e.code]||e.message;}
