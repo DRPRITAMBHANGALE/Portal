@@ -691,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: test status"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: numeric import"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1840,8 +1840,11 @@ function parseSelfUploadDoc(raw,defaults,W){
   const solText=hsIdx>=0?raw.slice(hsIdx):"";
 
   const answers={};
-  const akRe=/(\d{1,3})\s*\.?\s*\(([^)]{1,6})\)/g; let m;
+  const akRe=/(\d{1,3})\s*[.)]?\s*\(([^)]{1,12})\)/g; let m;
   while((m=akRe.exec(akText))) answers[parseInt(m[1])]=m[2].trim();
+  // numerical-answer keys are often written without brackets — "23. 6", "24) -4", "25. Ans : 12.5"
+  const akNum=/(\d{1,3})\s*[.):]\s*(?:ans\.?\s*:?\s*)?([-\u2212\u2013\u2014]?\d+(?:\.\d+)?(?:\s*\/\s*\d+)?)(?![\d.])/gi;
+  while((m=akNum.exec(akText))){ const k=parseInt(m[1]); if(answers[k]==null) answers[k]=m[2].trim(); }
 
   // Split a section into numbered chunks. A paragraph starts a new item when it begins with a number
   // ("12." / "12.<tab>" / "12<tab>") that comes just after the previous one — so stray numbers inside
@@ -1917,7 +1920,13 @@ function parseSelfUploadDoc(raw,defaults,W){
       options.forEach((o,i)=>{ if(!o) problems.push(`option ${"ABCD"[i]} looks empty (likely an equation image)`); });
     }
     const ansRaw=answers[num]; let correct=null, answerType="mcq", numAnswer=null;
-    if(ansRaw==null) problems.push("no answer key entry found for this question number");
+    if(ansRaw==null){
+      if(!marks&&text){ // no options in the paper either — treat it as a numerical-answer question
+        answerType="numeric"; numAnswer=null; options=["","","",""];
+        for(let k=problems.length-1;k>=0;k--) if(/option/i.test(problems[k])) problems.splice(k,1);
+        problems.push("numerical-answer question — type the correct value here, then approve");
+      } else problems.push("no answer key entry found for this question number");
+    }
     else if(/^[A-Da-d]$/.test(ansRaw)) correct="ABCD".indexOf(ansRaw.toUpperCase());
     else { const n=parseNumAnswer(ansRaw);
       if(n!==null){ answerType="numeric"; numAnswer=n;
@@ -1930,7 +1939,7 @@ function parseSelfUploadDoc(raw,defaults,W){
     const solution=fix(solutions[num]||"",problems);
     let tier;
     if(!text || (correct==null && answerType!=="numeric")) tier="skip";
-    else if(problems.length) tier="fixable";
+    else if(problems.length||(answerType==="numeric"&&numAnswer===null)) tier="fixable";
     else tier="ready";
     out.push({num,text,options,correct,answerType,numAnswer,solution,problems,tier,...defaults});
   });
@@ -2104,7 +2113,12 @@ async function approveAll(){
     const snap=ME.role==="admin"
       ? await db.collection("questions").where("status","==","pending").where("centreId","==",ME.centreId).get()
       : await db.collection("questions").where("status","==","pending").get();
-    const docs=snap.docs; if(!docs.length){ loadReview(); return; }
+    let docs=snap.docs; if(!docs.length){ loadReview(); return; }
+    // a numerical question with no value yet can't go live — leave it in the queue
+    const noVal=docs.filter(d=>{const x=d.data();return x.answerType==="numeric"&&(x.numAnswer===null||x.numAnswer===undefined);});
+    docs=docs.filter(d=>!noVal.includes(d));
+    if(noVal.length) alert(noVal.length+" numerical question"+(noVal.length===1?" was":"s were")+" left in the queue because no correct value has been typed in yet.");
+    if(!docs.length){ loadReview(); return; }
     for(let i=0;i<docs.length;i+=400){
       const batch=db.batch();
       docs.slice(i,i+400).forEach(d=>batch.update(d.ref,{status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()}));
@@ -2118,7 +2132,9 @@ function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
     <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''} ${x.qNum?`<span class="tag">Q${x.qNum}${x.uploadName?" · "+esc(x.uploadName):""}</span>`:''} ${x.draftTestId?'<span class="tag pending">📝 joins its draft paper when approved</span>':''}</div>
     <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text,x.subject)}</p>
-    <div>${isNumericQ(x)?`<div class="opt correct" style="cursor:default;padding:9px 13px;display:block">Numerical answer: <b style="font-family:'Courier New',monospace">${esc(numAnswerLabel(x))}</b> <span class="muted" style="font-size:12px">— the student types this number</span></div>`
+    <div>${isNumericQ(x)?((x.numAnswer===null||x.numAnswer===undefined)
+        ?`<div class="opt" style="cursor:default;padding:9px 13px;display:block;border-color:var(--danger)">Numerical answer: <b>not set</b> <span class="muted" style="font-size:12px">— click Edit and type the correct number</span></div>`
+        :`<div class="opt correct" style="cursor:default;padding:9px 13px;display:block">Numerical answer: <b style="font-family:'Courier New',monospace">${esc(numAnswerLabel(x))}</b> <span class="muted" style="font-size:12px">— the student types this number</span></div>`)
       :x.options.map((o,i)=>`<div class="opt ${i===x.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath(o,x.subject)}</div></div>`).join("")}</div>
     ${x.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(x.solution,x.subject)}</div>`:'<div class="note">No solution provided — consider editing before approving.</div>'}
     <div class="row end" style="margin-top:14px"><button class="btn danger sm" onclick="rejectQ('${id}')">Reject</button>
@@ -2126,6 +2142,7 @@ function reviewCard(id,x){
       <button class="btn sm" onclick="approveQ('${id}')">✓ Approve &amp; go live</button></div></div>`;
 }
 async function approveQ(id){ const ref=db.collection("questions").doc(id); const x=(await ref.get()).data()||{};
+  if(isNumericQ(x)&&(x.numAnswer===null||x.numAnswer===undefined)){ alert("This is a numerical-answer question with no value yet.\n\nClick Edit, type the correct number, and save — that approves it."); return; }
   await ref.update({status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
   await syncDraftPapers([{id,draftTestId:x.draftTestId}],true); el("rev-"+id)?.remove(); loadReview(); }
 async function rejectQ(id){ if(!confirm("Reject and delete this draft?"))return; const ref=db.collection("questions").doc(id); const x=(await ref.get()).data()||{};
