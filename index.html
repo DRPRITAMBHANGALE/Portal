@@ -691,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: option pictures"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: single slips"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2649,6 +2649,7 @@ async function pageStudents(){
           <button class="btn gold sm" id="promBtn" onclick="promoteBatch()">🎓 Promote Class 11 → 12</button></div></div>
       <div class="msg" id="promMsg"></div></div>
     <div class="bar"><div class="spacer" style="flex:1"></div>
+      <button class="btn ghost" onclick="openLoginSlips()">🖨 Print login slips</button>
       <button class="btn ghost danger" onclick="openBulkDeleteStudents()">🗑 Bulk delete students</button>
       <button class="btn ghost" onclick="openDupStudents()">👥 Find duplicate students</button>
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
@@ -2788,6 +2789,75 @@ async function runBulkDeleteStudents(){
   }catch(e){ setMsg("bdMsg",errMsg(e),"err"); }
   setBtn("bdBtn",false,"Delete students");
 }
+
+
+// Prints one student's slip (same size as the 48-per-sheet layout) — for a replacement slip
+async function printStudentSlip(uid){
+  try{
+    const d=await db.collection("users").doc(uid).get();
+    if(!d.exists) throw new Error("Student not found.");
+    const st={id:d.id,...d.data()};
+    slipWindow([st],`${st.name} · ${centreName(st.centreId)}${st.class?" · Class "+st.class:""}`);
+  }catch(e){ alert("Could not print the slip: "+errMsg(e)); }
+}
+// Builds and opens the print view for any list of students, 48 slips to an A4 sheet
+function slipWindow(list,head){
+  const pages=[]; for(let i=0;i<list.length;i+=48) pages.push(list.slice(i,i+48));
+  const body=pages.map((p,pi)=>`<section class="page"><div class="hdr">${esc(head)}${pages.length>1?` — sheet ${pi+1} of ${pages.length}`:""}</div><div class="grid">`
+    +p.map(st=>`<div class="slip"><div class="nm">${esc(st.name||"—")}</div>
+      <div class="kv"><span>ID</span><b>${esc(st.loginId||"—")}</b></div>
+      <div class="kv"><span>PW</span><b>${esc(st.pw||"—")}</b></div></div>`).join("")
+    +Array.from({length:Math.max(0,48-p.length)},()=>`<div class="slip"></div>`).join("")+`</div></section>`).join("");
+  openPaperWindow(`<!doctype html><html><head><meta charset="utf-8"><title>Login slips — ${esc(head)}</title><style>
+    @page{size:A4;margin:8mm}
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#15201c}
+    .page{width:194mm;height:281mm;page-break-after:always;display:flex;flex-direction:column}
+    .hdr{font-size:7.5pt;color:#7b8a82;margin-bottom:1.5mm}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;flex:1}
+    .slip{border:1px dashed #b9c4bd;padding:1.6mm 2.2mm;display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+    .nm{font-size:9pt;font-weight:700;line-height:1.15;margin-bottom:.8mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .kv{display:flex;gap:1.6mm;align-items:baseline;line-height:1.3}
+    .kv span{color:#6b7a72;font-size:7pt;width:6mm;flex:none}
+    .kv b{font-family:"Courier New",monospace;font-size:9.5pt;letter-spacing:.3px}
+    @media print{.page{page-break-after:always}}
+  </style></head><body>${body}
+  <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
+}
+/* ===== Printable login slips — 48 small slips per A4, cut and hand out individually ===== */
+let SLIP_ROWS=[];
+function openLoginSlips(){
+  modal(`<h2>🖨 Print login slips</h2>
+    <p class="muted">One small slip per student with their name, login ID and password — 48 to an A4 sheet. Print, cut along the dashed lines and hand each student their own slip.</p>
+    <div class="grid cols-2">
+      <div><label>Centre</label>${ME.role==="master"?`<select id="slCentre" onchange="slipsPreview()">${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div>
+      <div><label>Class</label><select id="slClass" onchange="slipsPreview()"><option value="">All classes</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
+    </div>
+    <label>Course</label><select id="slStream" onchange="slipsPreview()"><option value="">All courses</option><option value="PCM">PCM</option><option value="PCB">PCB</option><option value="PCMB">PCMB</option></select>
+    <div id="slPreview" class="muted" style="margin-top:10px">Loading…</div>
+    <div class="msg" id="slMsg"></div>
+    <div class="row end" style="margin-top:14px;gap:8px"><button class="btn ghost" onclick="closeModal()">Close</button>
+      <button class="btn" id="slBtn" onclick="printLoginSlips()" disabled>Open print view</button></div>`);
+  slipsPreview();
+}
+async function slipsPreview(){
+  el("slBtn").disabled=true; el("slPreview").innerHTML="Checking…";
+  try{
+    const centreId=ME.role==="master"?val("slCentre"):ME.centreId, cls=val("slClass"), stream=val("slStream");
+    const all=await allStudentDocs();
+    SLIP_ROWS=all.filter(s=>s.centreId===centreId&&(!cls||String(s.class)===cls)&&(!stream||s.stream===stream))
+      .sort((a,b)=>String(a.name||"").toLowerCase().localeCompare(String(b.name||"").toLowerCase()));
+    if(!SLIP_ROWS.length){ el("slPreview").innerHTML=`<p class="muted">No students match this choice.</p>`; return; }
+    const sheets=Math.ceil(SLIP_ROWS.length/48);
+    el("slPreview").innerHTML=`<p style="margin:0"><b>${SLIP_ROWS.length}</b> slip${SLIP_ROWS.length===1?"":"s"} · ${sheets} A4 sheet${sheets===1?"":"s"} · ${esc(centreName(centreId))}${cls?" · Class "+cls:""}${stream?" · "+esc(stream):""} · in alphabetical order</p>`;
+    el("slBtn").disabled=false;
+  }catch(e){ el("slPreview").innerHTML=errBox(e); }
+}
+function printLoginSlips(){
+  if(!SLIP_ROWS.length) return;
+  const centreId=ME.role==="master"?val("slCentre"):ME.centreId, cls=val("slClass"), stream=val("slStream");
+  slipWindow(SLIP_ROWS,`${centreName(centreId)}${cls?" · Class "+cls:""}${stream?" · "+stream:""} · ${SLIP_ROWS.length} students`);
+  setMsg("slMsg","✓ The print view opened in a new tab — choose “Save as PDF” or print directly.","ok");
+}
 async function loadPracticeAccess(){
   try{
     const doc=await db.collection("settings").doc("practiceAccess").get();
@@ -2880,7 +2950,7 @@ async function loadStudents(){
     el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
       :tableHTML(["Name","Login ID","Password","Class","Stream","Centre",""],
         snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.loginId||s.email||"—"),esc(s.pw||"—"),"Class "+s.class,s.stream||"—",centreName(s.centreId),
-          `${ME.role==="master"?`<button class="btn ghost sm" onclick='openEditStudent("${d.id}")'>Class / course</button> `:""}<button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
+          `<button class="btn ghost sm" onclick='printStudentSlip("${d.id}")'>🖨 Slip</button> ${ME.role==="master"?`<button class="btn ghost sm" onclick='openEditStudent("${d.id}")'>Class / course</button> `:""}<button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
   }catch(e){ el("stuList").innerHTML=errBox(e); }
 }
 // Master can correct a student's class or course (e.g. a PCM student who is really PCMB)
@@ -2898,7 +2968,11 @@ async function openEditStudent(uid){
 }
 async function saveEditStudent(uid){
   setBtn("esBtn",true,"Saving…");
-  try{ await db.collection("users").doc(uid).update({class:val("esClass"),stream:val("esStream")}); closeModal(); loadStudents(); }
+  try{ await db.collection("users").doc(uid).update({class:val("esClass"),stream:val("esStream")}); closeModal();
+    if(el("stuList")) loadStudents();
+    if(el("ssResult")){ const c=(SS_STUDENTS||[]).find(x=>x.id===uid);
+      if(c){ c.class=val("esClass"); c.stream=val("esStream"); ssSelectStudent(uid); } }
+  }
   catch(e){ setMsg("esMsg",errMsg(e),"err"); setBtn("esBtn",false,"Save"); }
 }
 function openAddStudent(){
@@ -3030,6 +3104,8 @@ async function ssSelectStudent(uid){
         ["Last practice test given",lastPractice?fmtDate(lastPractice):"Never"]
       ])}
       <div class="row" style="gap:8px;margin-top:14px">
+        <button class="btn ghost sm" onclick='printStudentSlip("${uid}")'>🖨 Print slip</button>
+        ${ME.role==="master"?`<button class="btn ghost sm" onclick='openEditStudent("${uid}")'>Class / course</button>`:""}
         <button class="btn ghost sm" onclick='openResetPassword("${uid}","${esc(stu.name)}")'>Reset password</button>
         <button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>
         <button class="btn ghost sm danger" onclick="delStudent('${uid}')">Delete student</button>
