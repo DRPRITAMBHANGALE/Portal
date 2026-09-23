@@ -685,13 +685,13 @@ const ADMIN_NAV=[
   {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"}
 ];
 const NAV={ master:STAFF_NAV, admin:ADMIN_NAV,
-  student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"history",label:"My results",ic:"⤓"}] };
+  student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"pasttests",label:"Test history",ic:"▤"},{id:"history",label:"My results",ic:"⤓"}] };
 function buildNav(){
   const wrap=el("sideNav"); wrap.innerHTML="";
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: solutions read"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: test history"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -700,7 +700,7 @@ function go(page){
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
   ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
-    searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,history:pageHistory})[page]();
+    searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,pasttests:pagePastTests,history:pageHistory})[page]();
 }
 
 /* ============================================================
@@ -3786,9 +3786,11 @@ async function pageStudentHome(){
     const seenT=new Set();
     const docs=[...own.docs,...all.docs,...multi].filter(d=>!seenT.has(d.id)&&seenT.add(d.id)).filter(d=>testClassMatches(d.data(),ME.class)&&myExams.includes(d.data().exam));
     const done=new Set(att.docs.map(d=>d.data().testId));
+    // the dashboard shows only what the student can still do — finished and closed tests move to Test history
+    const liveDocs=docs.filter(d=>!done.has(d.id)&&testStatus(effWindow(d.data(),ME.centreId))!=="closed");
     let html="";
-    if(docs.length){
-      html+=`<div class="grid cols-2">`+docs.map(d=>{const t=effWindow(d.data(),ME.centreId);const st=testStatus(t);const taken=done.has(d.id);
+    if(liveDocs.length){
+      html+=`<div class="grid cols-2">`+liveDocs.map(d=>{const t=effWindow(d.data(),ME.centreId);const st=testStatus(t);const taken=done.has(d.id);
         return `<div class="card"><div class="row" style="justify-content:space-between"><h3>${esc(t.title)}</h3>${testStatusTag(t)}</div>
           <p class="muted">${examTag(t.exam)} ${subjChips(t.subjects)} · ${(t.questionIds||[]).length} Q · ${t.duration} min · Class ${clsLabel(t.class)}</p>
           <p class="muted" style="font-size:12.5px">${windowLabel(t)} · ${EXAMS[t.exam]?.note||""}</p>
@@ -3797,7 +3799,7 @@ async function pageStudentHome(){
             :st==="scheduled"?`<button class="btn ghost full" disabled>Opens ${fmtDate(t.startAt)}</button>`
             :`<button class="btn ghost full" disabled>Closed</button>`}</div>`;}).join("")+`</div>`;
     }
-    const pdocs=prac.docs.sort((a,b)=>(a.data().startAt?.seconds||0)-(b.data().startAt?.seconds||0));
+    const pdocs=prac.docs.filter(d=>!done.has(d.id)).sort((a,b)=>(a.data().startAt?.seconds||0)-(b.data().startAt?.seconds||0));
     if(pdocs.length){
       html+=`<h3 class="serif" style="font-size:18px;margin:22px 0 8px">Your scheduled practice</h3><div class="grid cols-2">`+
         pdocs.map(d=>{const t=d.data();const open=!t.startAt||t.startAt.toDate().getTime()<=Date.now();const taken=done.has(d.id);
@@ -3808,7 +3810,7 @@ async function pageStudentHome(){
               :open?`<button class="btn full" onclick="startScheduledPractice('${d.id}')">Start</button>`
               :`<button class="btn ghost full" disabled>Opens ${fmtDate(t.startAt)}</button>`}</div>`;}).join("")+`</div>`;
     }
-    el("myTests").innerHTML=html||`<div class="card">${emptyState("No tests scheduled","Use the Practice tab to build your own.")}</div>`;
+    el("myTests").innerHTML=html||`<div class="card">${emptyState("Nothing scheduled right now","Tests you have already taken, and tests that have closed, are under <b>Test history</b>. Use the Practice tab to build your own.")}</div>`;
   }catch(e){ el("myTests").innerHTML=errBox(e); }
 }
 async function pagePractice(){
@@ -3954,6 +3956,41 @@ async function startScheduledPractice(id){
   launchExam({id,title:t.title,exam:t.exam,subjects:[],questionIds:t.questionIds,duration:t.duration,isPractice:true},true);
 }
 async function delScheduledPractice(id){ if(!confirm("Remove this scheduled practice?"))return; await db.collection("practiceTests").doc(id).delete(); loadScheduledPractice(); }
+// Every test that is over for this student — already taken, or its window has closed.
+async function pagePastTests(){
+  setView(`<h1 class="page-title">Test history</h1>
+    <p class="page-sub">Tests you have already taken, and tests whose time has passed.</p>
+    <div class="card"><div id="pastList" class="muted">Loading…</div></div>`);
+  try{
+    const [own,all,att,prac]=await Promise.all([
+      db.collection("tests").where("scope","==",ME.centreId).where("isPractice","==",false).get(),
+      db.collection("tests").where("scope","==","all").where("isPractice","==",false).get(),
+      db.collection("attempts").where("studentUid","==",ME.uid).get(),
+      db.collection("practiceTests").where("ownerUid","==",ME.uid).get()]);
+    const multi=(await db.collection("tests").where("centres","array-contains",ME.centreId).get()).docs.filter(d=>!d.data().isPractice&&!d.data().draft);
+    const myExams=examsForStream(ME.stream||"PCM");
+    const seenT=new Set();
+    const tests=[...own.docs,...all.docs,...multi].filter(d=>!seenT.has(d.id)&&seenT.add(d.id))
+      .filter(d=>testClassMatches(d.data(),ME.class)&&myExams.includes(d.data().exam));
+    const byTest={}; att.docs.forEach(d=>{ const a=d.data(); byTest[a.testId]={id:d.id,...a}; });
+    const rows=[...tests,...prac.docs.filter(d=>byTest[d.id])]
+      .map(d=>({id:d.id,t:effWindow(d.data(),ME.centreId),a:byTest[d.id]||null}))
+      .filter(x=>x.a||testStatus(x.t)==="closed")
+      .sort((x,y)=>{const A=(x.a&&x.a.submittedAt&&x.a.submittedAt.seconds)||(x.t.endAt&&x.t.endAt.seconds)||0,
+                     B=(y.a&&y.a.submittedAt&&y.a.submittedAt.seconds)||(y.t.endAt&&y.t.endAt.seconds)||0; return B-A;});
+    el("pastList").innerHTML=!rows.length
+      ? emptyState("Nothing here yet","Tests you take, and tests that close, will be listed here.")
+      : tableHTML(["Test","Exam","Ended","Result",""],rows.map(x=>{
+          const a=x.a, ended=x.t.endAt?fmtDate(x.t.endAt):(a&&a.submittedAt?fmtDate(a.submittedAt):"—");
+          if(!a) return [`<b>${esc(x.t.title)}</b><br><span class="muted">${(x.t.questionIds||[]).length} Q · ${x.t.duration} min</span>`,
+            examTag(x.t.exam),ended,`<span class="tag">Not attempted</span>`,""];
+          if(a.disqualified) return [`<b>${esc(a.testTitle||x.t.title)}</b>`,examTag(a.exam||x.t.exam),ended,
+            `<span class="tag danger">Disqualified</span>`,`<button class="btn ghost sm" onclick='reviewAttempt("${a.id}")'>Check answers</button>`];
+          return [`<b>${esc(a.testTitle||x.t.title)}</b>`,examTag(a.exam||x.t.exam),ended,
+            `<b>${a.score}/${a.total}</b> · ${pct(a.score,a.total)}%`,
+            `<button class="btn ghost sm" onclick='reviewAttempt("${a.id}")'>Check answers</button>`];}));
+  }catch(e){ el("pastList").innerHTML=errBox(e); }
+}
 async function pageHistory(){
   setView(`<h1 class="page-title">My results</h1><p class="page-sub">Every test you've completed.</p>
     <div class="card"><div id="histList" class="muted">Loading…</div></div>`);
