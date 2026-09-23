@@ -691,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: numeric import"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: solutions read"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1814,7 +1814,10 @@ async function handleSelfUpload(){
       +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
       +`✓ ${liveIds.length} added live to your question bank.`
       +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — something in them couldn't be read (see the red notes below); fix it there and approve.`:"")
-      +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or no usable answer key entry).`:""),
+      +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or no usable answer key entry).`:"")
+      +(SU_SOL_STATS.sectionFound
+        ?` 📘 Solutions read for ${SU_SOL_STATS.count} question${SU_SOL_STATS.count===1?"":"s"}.`
+        :` 📘 No solutions section found in this file — students will see the right answer but no explanation. (The reader looks for a heading such as "Hints & Solutions" or "Solutions", then items starting "1. Ans. (b)".)`),
       "ok");
     el("suTestBtn").disabled=!SELF_UPLOAD_DRAFT_ID;
     { const subs=new Set(SELF_UPLOAD_PARSED.map(q=>q.subject));
@@ -1827,13 +1830,17 @@ async function handleSelfUpload(){
           <div class="muted" style="font-size:11.5px">${esc(q.subject)} · answer ${q.answerType==="numeric"?esc(String(q.numAnswer))+" (typed)":(q.correct!=null?"ABCD"[q.correct]:"—")}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
   }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
 }
+let SU_SOL_STATS={sectionFound:false,count:0};
 // Split the raw mammoth text into paper / answer-key / solutions, then parse each per question number.
 // Every question is classified into a tier: "ready" (imports live), "fixable" (has text + a valid
 // answer, just missing option content — saved to Review queue for a quick manual fill-in instead of
 // being lost entirely), or "skip" (no text, or a non-A-D answer this app's MCQ format can't store).
 function parseSelfUploadDoc(raw,defaults,W){
   const akIdx=raw.search(/answer\s*keys?/i);
-  const hsIdx=raw.search(/hints?\s*&?\s*solutions?/i);
+  // "HINTS & SOLUTION", "Hints and Solutions", "SOLUTIONS", "Explanations", "Answers with solutions"
+  let hsIdx=raw.search(/hints?\s*(?:&|and|\+)?\s*solutions?/i);
+  if(hsIdx<0) hsIdx=raw.search(/^[^\S\n]*(?:detailed\s+)?(?:solutions?|explanations?)(?:\s*(?:&|and)\s*(?:hints?|answers?))?[^\S\n]*$/im);
+  if(hsIdx<0) hsIdx=raw.search(/answers?\s*(?:&|and|with)\s*solutions?/i);
   const paperEnd=akIdx>=0?akIdx:(hsIdx>=0?hsIdx:raw.length);
   const paperText=raw.slice(0,paperEnd);
   const akText=akIdx>=0?raw.slice(akIdx,(hsIdx>=0&&hsIdx>akIdx)?hsIdx:raw.length):"";
@@ -1859,10 +1866,15 @@ function parseSelfUploadDoc(raw,defaults,W){
     return chunks;
   }
   const solutions={};
-  numberedChunks(solText,/^\s*(\d{1,3})\s*\.?\s*Ans\.?\s*:?\s*\(([^)]*)\)/i).forEach(c=>{
+  // "1.Ans.: (b)" · "1. Ans : b" · "1. (b)" · "1) Sol." — a bare "1." is not enough, so a numbered
+  // line inside a solution body can't be mistaken for the start of the next solution.
+  numberedChunks(solText,/^\s*(\d{1,3})\s*[.)]?\s*(?:(?:Ans(?:wer)?|Sol(?:ution)?)\s*\.?\s*:?\s*(?:\(([^)]{1,12})\))?|\(([^)]{1,12})\))/i).forEach(c=>{
     let body=[c.body,...c.paras].join("\n").replace(/^\s*solution\s*:?/im,"");
     body=body.split("\n").map(l=>l.replace(/[\t ]+/g," ").trim()).filter(l=>l&&!/^solution\s*:?$/i.test(l)).join("\n")
-      .replace(/^\s*solution\s*:?\s*/i,"").trim();
+      .replace(/^\s*solution\s*:?\s*/i,"")
+      .replace(/^[ \t]*\(?[A-Da-d]\)?[ \t]*\n/,"")            // a stray answer letter on its own line
+      .replace(/^[ \t]*\(?-?\d+(?:\.\d+)?\)?[ \t]*\n(?=\S)/,"")  // …or a stray answer value
+      .trim();
     if(body) solutions[c.num]=body;
   });
 
@@ -1903,6 +1915,7 @@ function parseSelfUploadDoc(raw,defaults,W){
   const clean=s=>(s||"").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
   const fix=(s,problems)=>{ if(!W) return s; const r=restoreWordTokens(s,W); r.problems.forEach(p=>{ if(!problems.includes(p)) problems.push(p); }); return r.s; };
 
+  SU_SOL_STATS={sectionFound:hsIdx>=0,count:Object.keys(solutions).length};
   const out=[];
   numberedChunks(paperText,/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/).forEach(c=>{
     const num=c.num;
