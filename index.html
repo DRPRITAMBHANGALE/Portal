@@ -691,7 +691,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: test history"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: own copy edit"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1688,8 +1688,27 @@ async function tqEditSave(i){
   try{ const pickedR=document.querySelector('input[name=tqCorrect]:checked');
     const upd={text:val("tqText").trim(),options:numeric?["","","",""]:[0,1,2,3].map(k=>val("tqOpt"+k).trim()),
       correct:numeric?null:(pickedR?parseInt(pickedR.value):null),answerType:numeric?"numeric":"mcq",numAnswer,numerical:!!numeric,solution:val("tqSol").trim()};
-    await db.collection("questions").doc(x.id).update(upd); Object.assign(x,upd); openTestQuestions(TQ.id);
-  }catch(e){ setMsg("tqMsg",(ME.role==="admin"?"You can only edit questions your centre uploaded. Use “Replace from bank” instead. ":"")+errMsg(e),"err"); setBtn("tqSave",false,"Save question"); }
+    try{ await db.collection("questions").doc(x.id).update(upd); Object.assign(x,upd); }
+    catch(err){
+      // A question another centre (or the head office) uploaded can't be changed in the shared bank.
+      // Save the edit as this centre's own copy and put that copy into this paper instead.
+      if(!/permission|insufficient|denied/i.test(errMsg(err))) throw err;
+      await tqSaveAsOwnCopy(i,upd);
+      alert("This question belongs to another centre's upload, so the shared copy can't be changed.\n\nYour edit has been saved as your own copy and put into this paper in the same place. Other centres' papers are not affected.");
+    }
+    openTestQuestions(TQ.id);
+  }catch(e){ setMsg("tqMsg",errMsg(e),"err"); setBtn("tqSave",false,"Save question"); }
+}
+// Saves the edited question as a new question owned by this centre and swaps it into the paper.
+async function tqSaveAsOwnCopy(i,upd){
+  const x=TQ.ordered[i];
+  const doc=tqNewQuestionDoc({subject:x.subject,topic:x.topic,difficulty:x.difficulty,
+    text:upd.text,options:upd.options,correct:upd.correct,answerType:upd.answerType,
+    numAnswer:upd.numAnswer,solution:upd.solution,addedVia:"edited copy"});
+  doc.qNum=x.qNum||null; doc.copyOf=x.id;
+  const ref=await db.collection("questions").add(doc);
+  TQ.ordered[i]={...doc,id:ref.id,createdAt:null};
+  await saveTQOrder(TQ.ordered.map(q=>q.id));
 }
 async function tqReplace(i){
   const x=TQ.ordered[i];
