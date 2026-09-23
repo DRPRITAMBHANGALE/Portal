@@ -129,9 +129,10 @@ tr:last-child td{border-bottom:none}
 .modal .x{float:right;background:none;border:none;font-size:22px;color:var(--ink-soft);line-height:1;margin-top:-6px}
 
 .exam{display:none;position:fixed;inset:0;background:var(--paper);z-index:80;overflow:auto}
-.exam .ebar{position:sticky;top:0;background:var(--accent);color:#fff;padding:0 22px;height:60px;display:flex;align-items:center;gap:18px;z-index:5}
-.exam .ebar h2{margin:0;font-size:17px;color:#fff}
-.subject-tabs{position:sticky;top:60px;background:var(--accent-ink);display:flex;gap:0;overflow-x:auto;z-index:4;padding:0 12px}
+.exam-head{position:sticky;top:0;z-index:6}
+.exam .ebar{background:var(--accent);color:#fff;padding:0 22px;height:60px;display:flex;align-items:center;gap:18px;flex-wrap:nowrap}
+.exam .ebar h2{margin:0;font-size:17px;color:#fff;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subject-tabs{background:var(--accent-ink);display:flex;gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 12px}
 .subject-tabs .subj-tab{background:transparent;border:none;color:rgba(255,255,255,.72);padding:11px 18px;font-family:'Spectral';font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent}
 .subject-tabs .subj-tab.active{color:#fff;border-bottom-color:var(--gold)}
 .subject-tabs .subj-tab .cnt{font-size:11.5px;font-weight:400;opacity:.8;margin-left:5px}
@@ -213,10 +214,10 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
   .card{padding:16px;overflow-x:auto}
   table{font-size:13px} th,td{padding:8px 8px}
   .modal{padding:18px}
-  .exam .ebar{padding:0 12px;gap:10px;height:54px}
-  .subject-tabs{top:54px}
-  .subject-tabs .subj-tab{padding:9px 13px;font-size:13px}
+  .exam .ebar{padding:6px 12px;gap:10px;height:auto;min-height:52px}
+  .subject-tabs .subj-tab{padding:11px 15px;font-size:13px}
   .exam .ebar h2{font-size:14px}
+  .exam .ebar .lt-txt{display:none}
   .timer{font-size:18px;padding:4px 10px}
   .exam-body{flex-direction:column;gap:16px;padding:14px 12px}
   .q-side{width:100%}
@@ -230,6 +231,25 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
   .btn{padding:10px 14px}
   nav.side a{font-size:13.5px;padding:9px 11px}
 }
+/* ---------- Phone held sideways: keep the paper and the question palette side by side ---------- */
+@media(orientation:landscape) and (max-height:560px){
+  .exam .ebar{height:46px;min-height:0;padding:0 12px}
+  .exam .ebar h2{font-size:13px}
+  .timer{font-size:16px;padding:3px 9px}
+  .subject-tabs .subj-tab{padding:8px 14px;font-size:12.5px}
+  .exam-body{flex-direction:row;gap:14px;padding:12px 14px}
+  .q-side{width:200px;flex:none}
+  .palette{position:static;padding:12px}
+  .pgrid{grid-template-columns:repeat(5,1fr)}
+  .q-card{padding:16px}
+  .q-text{font-size:15.5px}
+  .opt{padding:10px 12px;margin-bottom:8px}
+}
+/* ---------- Ask for landscape on phones held upright ---------- */
+.rotate-ask{display:none;position:fixed;inset:0;background:var(--paper);z-index:120;align-items:center;justify-content:center;text-align:center;padding:26px}
+.rotate-ask>div{max-width:420px}
+@media(orientation:portrait) and (max-width:900px){ #rotateAsk{display:flex} }
+body.rotate-ok #rotateAsk{display:none!important}
 </style>
 </head>
 <body>
@@ -266,17 +286,27 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
 
 <!-- ============ EXAM SCREEN ============ -->
 <div class="exam" id="examScreen">
-  <div class="ebar"><h2 id="examTitle">Test</h2><div class="spacer"></div>
-    <button class="btn ghost sm" style="color:#fff;border-color:rgba(255,255,255,.5)" onclick="openLogTables()">📊 Log Tables</button>
+  <div class="exam-head">
+  <div class="ebar"><h2 id="examTitle">Test</h2>
+    <button class="btn ghost sm" style="color:#fff;border-color:rgba(255,255,255,.5)" onclick="openLogTables()">📊<span class="lt-txt"> Log Tables</span></button>
     <div class="timer" id="examTimer">--:--</div>
     <button class="btn gold sm" id="submitBtn" onclick="confirmSubmit()">Submit test</button></div>
   <div class="subject-tabs" id="subjectTabs" style="display:none"></div>
+  </div>
+  <div class="rotate-ask" id="rotateAsk"><div>
+    <div style="font-size:44px;line-height:1">📱</div>
+    <h2 class="serif" style="margin:10px 0 6px;font-size:22px">Please turn your phone sideways</h2>
+    <p class="muted" style="margin:0 0 16px">The test is much easier to read in landscape. Rotate your phone — if rotation is locked on your phone, turn auto-rotate on, or carry on in this view.</p>
+    <button class="btn ghost" onclick="dismissRotate()">Continue in this view</button>
+  </div></div>
   <div class="exam-body">
     <div class="q-main">
       <div class="q-card" id="qCard"></div>
-      <div class="row" style="margin-top:18px;justify-content:space-between">
-        <button class="btn ghost" onclick="navQ(-1)">‹ Previous</button>
-        <div class="row">
+      <div class="row" style="margin-top:18px;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div class="row" style="gap:8px">
+          <button class="btn ghost" onclick="navQ(-1)">‹ Previous</button>
+          <button class="btn ghost" id="clearBtn" onclick="clearAnswer()">Clear selection</button></div>
+        <div class="row" style="gap:8px">
           <button class="btn ghost" id="reviewBtn" onclick="toggleReview()">Mark for review</button>
           <button class="btn" onclick="navQ(1)">Save &amp; Next ›</button></div></div>
     </div>
@@ -691,7 +721,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: own copy edit"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: clear selection"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -4049,11 +4079,14 @@ async function launchExam(test,isPractice){
   EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,disqualified:false,live:true};
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
+  document.body.classList.remove("rotate-ok"); askLandscape();
   renderSubjectTabs(); renderPalette(); renderQ(); startTimer();
   attachCheatGuard();
 }
-// One shared strike counter for tab switching AND screenshot / screen-recording attempts:
-// strike 1 = warning, strike 2 = final warning, strike 3 = auto-submit as malpractice.
+// One shared strike counter for leaving the test AND screenshot / print attempts.
+// A notification banner, an incoming call or any other window coming on top only BLURS the paper —
+// it is never a warning, because the student hasn't left the test and can't stop those popping up.
+// strike 1 = warning, strike 2 = second warning, strike 3 = final warning, strike 4 = auto-submit as malpractice.
 // (A web page can't fully block screenshots or recorders; it detects the common signs, hides the
 // question while the window isn't in front, and blocks copy / print / right-click.)
 let GUARD={};
@@ -4061,15 +4094,35 @@ function examStrike(reason){
   if(!EXAM||!EXAM.live||EXAM.disqualified) return;
   const now=Date.now(); if(now-(EXAM.lastStrike||0)<3000) return; // one action = one strike
   EXAM.lastStrike=now; EXAM.violations=(EXAM.violations||0)+1; EXAM.lastReason=reason;
-  if(EXAM.violations>=3){ EXAM.disqualified=true; submitExam(false,true); return; }
+  if(EXAM.violations>=4){ EXAM.disqualified=true; submitExam(false,true); return; }
   if(!document.hidden) showStrikeWarning(); else EXAM.warnPending=true;
 }
 function showStrikeWarning(){
   EXAM.warnPending=false;
-  const what="Switching tabs, opening a new tab or window, taking a screenshot, or screen recording";
-  if(EXAM.violations===1) warnModal("Warning 1 of 2",`${what} isn't allowed during a test. One more time and you'll get a final warning — a third time auto-submits your test as malpractice.`);
-  else if(EXAM.violations===2) warnModal("Final warning (2 of 2)",`This is your last warning. ${what} again will auto-submit your test immediately and mark it as malpractice.`);
+  const what="Leaving the test — switching to another tab or app — or trying to take a screenshot or print the paper";
+  if(EXAM.violations===1) warnModal("Warning 1 of 3",`${what} isn't allowed during a test. You have two more warnings — after that your test is auto-submitted as malpractice.`);
+  else if(EXAM.violations===2) warnModal("Warning 2 of 3",`${what} isn't allowed during a test. One more warning after this, then your test is auto-submitted as malpractice.`);
+  else if(EXAM.violations===3) warnModal("Final warning (3 of 3)",`This is your last warning. ${what} again will auto-submit your test immediately and mark it as malpractice.`);
 }
+// Phones: ask the browser for landscape (works on most Android browsers; iPhones ignore it, so the
+// "turn your phone sideways" card is shown instead until the student rotates or taps continue).
+function askLandscape(){
+  try{
+    if(!(navigator.maxTouchPoints>0)||!window.matchMedia("(max-width:900px)").matches) return;
+    const root=document.documentElement;
+    const lock=()=>{ try{ screen.orientation.lock("landscape").catch(()=>{}); }catch(_){} };
+    if(screen.orientation&&screen.orientation.lock){
+      if(document.fullscreenElement) lock();
+      else if(root.requestFullscreen) root.requestFullscreen().then(lock).catch(()=>{});
+      else lock();
+    }
+  }catch(_){}
+}
+function releaseLandscape(){
+  try{ if(screen.orientation&&screen.orientation.unlock) screen.orientation.unlock(); }catch(_){}
+  try{ if(document.fullscreenElement&&document.exitFullscreen) document.exitFullscreen().catch(()=>{}); }catch(_){}
+}
+function dismissRotate(){ document.body.classList.add("rotate-ok"); }
 function shieldExam(on){ const s=el("examScreen"); if(s) s.classList.toggle("shielded",!!on); }
 function attachCheatGuard(){
   detachCheatGuard();
@@ -4077,8 +4130,9 @@ function attachCheatGuard(){
     if(document.hidden){ shieldExam(true); examStrike("tab"); }
     else { shieldExam(false); if(EXAM.warnPending&&!EXAM.disqualified) showStrikeWarning(); } };
   // window loses focus but tab still visible: snipping tool, screen-recorder controls, another app on top
-  GUARD.blur=()=>{ if(!EXAM||!EXAM.live) return; shieldExam(true);
-    clearTimeout(GUARD.blurT); GUARD.blurT=setTimeout(()=>{ if(!document.hidden&&!document.hasFocus()) examStrike("focus"); },1500); };
+  // window lost focus but the test is still on screen (notification, incoming call, snipping tool,
+  // recorder controls): hide the question while it lasts, but don't count it against the student.
+  GUARD.blur=()=>{ if(!EXAM||!EXAM.live) return; shieldExam(true); };
   GUARD.focus=()=>{ clearTimeout(GUARD.blurT); if(!document.hidden) shieldExam(false); if(EXAM&&EXAM.warnPending&&!EXAM.disqualified) showStrikeWarning(); };
   GUARD.key=e=>{ if(!EXAM||!EXAM.live) return;
     const k=(e.key||"").toLowerCase(), mod=e.ctrlKey||e.metaKey;
@@ -4099,7 +4153,7 @@ function attachCheatGuard(){
 }
 function detachCheatGuard(){
   if(GUARD.vis) document.removeEventListener("visibilitychange",GUARD.vis);
-  if(GUARD.blur){ window.removeEventListener("blur",GUARD.blur); window.removeEventListener("focus",GUARD.focus); clearTimeout(GUARD.blurT); }
+  if(GUARD.blur){ window.removeEventListener("blur",GUARD.blur); window.removeEventListener("focus",GUARD.focus); }
   if(GUARD.key){ document.removeEventListener("keydown",GUARD.key,true); document.removeEventListener("keyup",GUARD.key,true); }
   if(GUARD.block) ["contextmenu","copy","cut","dragstart","selectstart"].forEach(ev=>document.removeEventListener(ev,GUARD.block,true));
   if(GUARD.print) window.removeEventListener("beforeprint",GUARD.print);
@@ -4145,6 +4199,7 @@ function renderQ(){
          </div>`
       : q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
   el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review";
+  { const c=el("clearBtn"); if(c){ const has=sel!==undefined&&sel!==""; c.disabled=!has; c.style.opacity=has?"1":".45"; } }
   renderSubjectTabs(); renderPalette();
 }
 function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
@@ -4156,6 +4211,8 @@ function pickNum(v){
   const box=el("numAns"); if(box) box.focus();
 }
 function navQ(d){ const n=EXAM.cur+d; if(n>=0&&n<EXAM.questions.length){EXAM.cur=n;renderQ();} }
+// Unanswer the current question — it goes back to "not attempted", so no negative marking applies.
+function clearAnswer(){ delete EXAM.answers[EXAM.cur]; renderQ(); }
 function toggleReview(){ EXAM.review.has(EXAM.cur)?EXAM.review.delete(EXAM.cur):EXAM.review.add(EXAM.cur); renderQ(); }
 function renderPalette(){
   const block=EXAM.subjectBlocks[currentBlockIdx()]||{start:0,count:EXAM.questions.length};
@@ -4193,7 +4250,7 @@ async function submitExam(auto,disqualify){
   if(disqualify) showMalpracticeResult(); else showResult({score,total,correct,wrong,unattempted});
 }
 function showMalpracticeResult(){
-  el("examScreen").style.display="none"; document.body.style.overflow="";
+  el("examScreen").style.display="none"; document.body.style.overflow=""; releaseLandscape();
   setView(`<div class="card" style="max-width:520px;margin:40px auto;text-align:center;border-color:var(--danger)">
     <div style="font-size:44px;margin-bottom:6px">⚠</div>
     <h2 class="serif" style="color:#822f22;font-size:22px;margin-bottom:8px">Test auto-submitted due to malpractice</h2>
@@ -4202,7 +4259,7 @@ function showMalpracticeResult(){
 }
 function showResult(r){
   const p=pct(r.score,r.total);
-  el("examScreen").style.display="none"; document.body.style.overflow="";
+  el("examScreen").style.display="none"; document.body.style.overflow=""; releaseLandscape();
   setView(`${r.disqualified?`<div class="card" style="border-color:var(--danger);background:var(--danger-soft);margin-bottom:14px"><b style="color:#822f22">⚠ Disqualified</b> <span class="muted">— this attempt was auto-submitted for tab-switching and is not counted in your results. Shown below for reference only.</span></div>`:""}
     <div class="score-hero">
       <div class="muted" style="text-transform:uppercase;letter-spacing:1px;font-weight:700;font-size:12px">${esc(EXAM.test.title)}${EXAM.isPractice?" · Practice":""}</div>
