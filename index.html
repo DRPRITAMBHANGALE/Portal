@@ -499,7 +499,7 @@ function warnModal(title,message){
 }
 function scopeClasses(v){return v==="both"?["11","12"]:[v];}
 // Pull live question IDs for one subject across given classes & chapters.
-async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerical}){
+async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerical,pyq,yrFrom,yrTo}){
   let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject);
   if(classes.length===1) q=q.where("class","==",classes[0]);
   const snap=await q.get();
@@ -509,6 +509,10 @@ async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerica
     if(diffs && diffs.length && !diffs.includes(x.difficulty)) return false;
     if(numerical==="only" && !x.numerical) return false;
     if(numerical==="none" && x.numerical) return false;
+    const isPYQ=!!(x.pyq||x.year);                       // tagged as a past paper, or carrying a year
+    if(pyq==="only" && !isPYQ) return false;
+    if(pyq==="none" && isPYQ) return false;
+    if(pyq==="only"){ const y=parseInt(x.year); if(yrFrom&&(!y||y<yrFrom)) return false; if(yrTo&&(!y||y>yrTo)) return false; }
     return true;});
   return shuffle(docs.map(d=>d.id)).slice(0,count);
 }
@@ -522,8 +526,8 @@ async function pullWeighted(base,count,weights){
   return shuffle(ids).slice(0,count);
 }
 // handle numerical include/exclude/only/% for Physics & Chemistry, with difficulty weights
-async function pullForSubject({exam,subject,classes,chapters,count,weights,numMode,numPct}){
-  const base={exam,subject,classes,chapters};
+async function pullForSubject({exam,subject,classes,chapters,count,weights,numMode,numPct,pyq,yrFrom,yrTo}){
+  const base={exam,subject,classes,chapters,pyq,yrFrom,yrTo};
   const isPC=subject==="Physics"||subject==="Chemistry";
   if(!isPC||!numMode||numMode==="any") return pullWeighted({...base,numerical:"any"},count,weights);
   if(numMode==="exclude") return pullWeighted({...base,numerical:"none"},count,weights);
@@ -540,6 +544,22 @@ function numericalControl(p){return `<label>Numerical questions (Physics &amp; C
     <option value="any">Include — any mix</option><option value="include">Include — set %</option>
     <option value="exclude">Exclude numericals</option><option value="only">Only numericals</option></select>
   <div id="${p}PctRow" class="row" style="display:none;gap:8px;margin-top:6px"><span class="muted" style="font-size:13px">Numerical %</span><input id="${p}Pct" type="number" min="0" max="100" value="30" style="width:84px"/></div>`;}
+// Previous-year (PYQ) picker used by the test builder and by student practice
+const PYQ_FIRST_YEAR=2012;
+function pyqYearOptions(sel){ const now=new Date().getFullYear(); let o="";
+  for(let y=now;y>=PYQ_FIRST_YEAR;y--) o+=`<option value="${y}" ${String(sel)===String(y)?"selected":""}>${y}</option>`;
+  return o; }
+function pyqControl(p){ const now=new Date().getFullYear();
+  return `<label>Previous-year questions <span class="muted" style="font-weight:400">— papers you have uploaded and tagged with a year</span></label>
+  <select id="${p}Mode" onchange="el('${p}YrRow').style.display=this.value==='only'?'flex':'none'">
+    <option value="any">Any question (past papers included)</option>
+    <option value="only">Only previous-year questions</option>
+    <option value="none">Exclude previous-year questions</option></select>
+  <div id="${p}YrRow" class="row" style="display:none;gap:8px;margin-top:6px;align-items:center">
+    <span class="muted" style="font-size:13px">From</span><select id="${p}From" style="width:auto">${pyqYearOptions(PYQ_FIRST_YEAR)}</select>
+    <span class="muted" style="font-size:13px">to</span><select id="${p}To" style="width:auto">${pyqYearOptions(now)}</select></div>`; }
+function readPyq(p){ const mode=val(p+"Mode")||"any";
+  return {pyq:mode,yrFrom:mode==="only"?parseInt(val(p+"From"))||null:null,yrTo:mode==="only"?parseInt(val(p+"To"))||null:null}; }
 // Convert sqrt(...) / cbrt(...) to a real radical (√ glyph + overlined content), handling nesting
 function radicals(s){
   const re=/(sqrt|cbrt)\s*\(/i; let m;
@@ -721,7 +741,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: toppers dates"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: past papers"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1834,6 +1854,11 @@ function openSelfUpload(){
       <div class="grid cols-2"><div><label>Class (for the question bank)</label>${classSelect("suClass",false)}</div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="Leave blank to use the subject name"/></div></div>
       <label>Difficulty</label>${difficultySelect("suDiff")}
     </details>
+    <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="suPyq" style="width:auto" onchange="el('suPyqRow').style.display=this.checked?'grid':'none'"/> This file is a previous-year paper</label>
+    <div id="suPyqRow" class="grid cols-2" style="display:none">
+      <div><label>Year of the paper</label><select id="suYear">${pyqYearOptions(new Date().getFullYear())}</select></div>
+      <div><label>Paper label <span class="muted" style="font-weight:400">— optional</span></label><input id="suPaper" placeholder="e.g. Session 1 · Shift 2, or Code E1"/></div>
+    </div>
     <label>③ Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
     <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a></p>
     <div id="suPreview"></div>
@@ -1869,7 +1894,9 @@ async function handleSelfUpload(){
       if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
       raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
     }
-    const defaults={exam:val("suExam"),subject:val("suSubject"),cls:val("suClass"),topic:val("suTopic").trim()||val("suSubject"),difficulty:val("suDiff")};
+    const isPyq=el("suPyq")&&el("suPyq").checked;
+    const defaults={exam:val("suExam"),subject:val("suSubject"),cls:val("suClass"),topic:val("suTopic").trim()||val("suSubject"),difficulty:val("suDiff"),
+      pyq:!!isPyq,year:isPyq?(parseInt(val("suYear"))||null):null,paperName:isPyq?val("suPaper").trim():""};
     const ranges=readSectionRanges("suSec",val("suExam"));
     SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults,W);
     SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.num,ranges,q.subject); if(!val("suTopic").trim()) q.topic=q.subject; });
@@ -2095,8 +2122,8 @@ async function selfUploadImport(ready,fixable,fileName,draftTestId){
   for(let i=0;i<all.length;i+=400){
     const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
     chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status}); byNum.push({num:q.num,id:ref.id});
-      batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
-        text:q.text,options:q.options,correct:q.correct,answerType:q.answerType||"mcq",numAnswer:(q.numAnswer===undefined?null:q.numAnswer),solution:q.solution,year:null,numerical:q.answerType==="numeric",status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,qNum:q.num,
+      batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,pyq:!!q.pyq,paperName:q.paperName||"",
+        text:q.text,options:q.options,correct:q.correct,answerType:q.answerType||"mcq",numAnswer:(q.numAnswer===undefined?null:q.numAnswer),solution:q.solution,year:(q.year===undefined?null:q.year),numerical:q.answerType==="numeric",status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,qNum:q.num,
         createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
     await batch.commit();
     refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingIds.push(r.ref.id); });
@@ -2276,7 +2303,7 @@ async function approveAll(){
 }
 function reviewCard(id,x){
   return `<div class="card" style="margin-bottom:14px" id="rev-${id}">
-    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''} ${x.qNum?`<span class="tag">Q${x.qNum}${x.uploadName?" · "+esc(x.uploadName):""}</span>`:''} ${x.draftTestId?'<span class="tag pending">📝 joins its draft paper when approved</span>':''}</div>
+    <div>${examTag(x.exam)} ${subjTag(x.subject)} ${tag(x.topic||"—")} ${tag("Class "+x.class)} ${tag(x.difficulty)} ${x.year?tag("Year "+x.year):""} ${x.pyq?tag("Past paper"+(x.paperName?" · "+esc(x.paperName):"")):""} ${x.numerical?tag("Numerical"):""} ${x.source==="ai"?'<span class="tag pending">✦ AI draft</span>':''} ${x.qNum?`<span class="tag">Q${x.qNum}${x.uploadName?" · "+esc(x.uploadName):""}</span>`:''} ${x.draftTestId?'<span class="tag pending">📝 joins its draft paper when approved</span>':''}</div>
     <p class="q-text" style="font-size:16px;margin:12px 0">${fmtMath(x.text,x.subject)}</p>
     <div>${isNumericQ(x)?((x.numAnswer===null||x.numAnswer===undefined)
         ?`<div class="opt" style="cursor:default;padding:9px 13px;display:block;border-color:var(--danger)">Numerical answer: <b>not set</b> <span class="muted" style="font-size:12px">— click Edit and type the correct number</span></div>`
@@ -2739,6 +2766,7 @@ function pagePapers(){
       <label>Difficulty mix — set % per level (leave all 0 for any mix)</label>
       <div id="ppDiffs" style="margin-bottom:6px">${difficultyPctRows("ppdiffpct")}</div>
       ${numericalControl("ppNum")}
+      ${pyqControl("ppPyq")}
       <label>Time allowed (minutes, shown on paper)</label><input id="ppTime" type="number" value="60"/>
       <div class="msg" id="ppMsg"></div>
       <div class="row" style="gap:10px;margin-top:6px">
@@ -2786,6 +2814,7 @@ let LAST_PAPER=null;
 async function generatePaper(){
   const type=val("ppType"),exam=val("ppExam");
   const weights=gatherWeights(".ppdiffpct"),numMode=val("ppNumMode"),numPct=parseFloat(val("ppNumPct"))||0;
+  const PY=readPyq("ppPyq");
   setBtn("ppBtnQ",true,"Building…");
   try{
     let groups=[],short=[],cls="";
@@ -2793,18 +2822,18 @@ async function generatePaper(){
       const subject=val("ppSubj"),chapters=[...document.querySelectorAll(".ppchap:checked")].map(c=>c.value);
       const count=Math.max(1,parseInt(val("ppCount"))||20);
       if(!chapters.length) throw new Error("Tick at least one chapter.");
-      const ids=await pullForSubject({exam,subject,classes:[val("ppCls")],chapters,count,weights,numMode,numPct});
+      const ids=await pullForSubject({exam,subject,classes:[val("ppCls")],chapters,count,weights,numMode,numPct,...PY});
       if(ids.length<count) short.push(`${subject}: ${ids.length}/${count}`);
       groups.push({subject,qs:await fetchQs(ids)}); cls=val("ppCls");
     } else if(type==="subject"){
       const subject=val("ppSubj"),classes=scopeClasses(val("ppScopeCls")),count=Math.max(1,parseInt(val("ppCount"))||30);
-      const ids=await pullForSubject({exam,subject,classes,count,weights,numMode,numPct});
+      const ids=await pullForSubject({exam,subject,classes,count,weights,numMode,numPct,...PY});
       if(ids.length<count) short.push(`${subject}: ${ids.length}/${count}`);
       groups.push({subject,qs:await fetchQs(ids)}); cls=val("ppScopeCls");
     } else {
       const classes=scopeClasses(val("ppScopeCls")),full=EXAMS[exam].full;
       for(const s of Object.keys(full)){
-        const ids=await pullForSubject({exam,subject:s,classes,count:full[s],weights,numMode,numPct});
+        const ids=await pullForSubject({exam,subject:s,classes,count:full[s],weights,numMode,numPct,...PY});
         if(ids.length<full[s]) short.push(`${s}: ${ids.length}/${full[s]}`);
         groups.push({subject:s,qs:await fetchQs(ids)});
       }
@@ -2888,6 +2917,7 @@ function openCreateTest(){
     <label>Difficulty mix — set % per level (leave all 0 for any mix)</label>
     <div id="tDiffs" style="margin-bottom:6px">${difficultyPctRows("tdiffpct")}</div>
     ${numericalControl("tNum")}
+    ${pyqControl("tPyq")}
     <label>Duration (min)</label><input id="tDur" type="number" value="30"/>
     <div class="grid cols-2"><div><label>Opens (common)</label><input id="tStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="tEnd" type="datetime-local"/></div></div>
     ${centreAssignHTML("tA")}
@@ -2966,6 +2996,7 @@ async function createTest(){
   setBtn("tSaveBtn",true,"Building…");
   try{
     const weights=gatherWeights(".tdiffpct"), numMode=val("tNumMode"), numPct=parseFloat(val("tNumPct"))||0;
+    const PY=readPyq("tPyq");
     let questionIds=[],subjects=[],cls="",short=[];
     if(type==="chapter"){
       const subjOn=[...document.querySelectorAll(".tSubjOn:checked")].map(cb=>cb.dataset.subject);
@@ -2975,19 +3006,19 @@ async function createTest(){
         const chapters=[...document.querySelectorAll(`.tchap[data-subject="${CSS.escape(subject)}"]:checked`)].map(c=>c.value);
         const count=Math.max(1,parseInt(document.querySelector(`.tSubjCount[data-subject="${CSS.escape(subject)}"]`).value)||10);
         if(!chapters.length) throw new Error(`Tick at least one chapter for ${subject}, or untick that subject.`);
-        const ids=await pullForSubject({exam,subject,classes:classesForPull,chapters,count,weights,numMode,numPct});
+        const ids=await pullForSubject({exam,subject,classes:classesForPull,chapters,count,weights,numMode,numPct,...PY});
         if(ids.length<count) short.push(`${subject}: ${ids.length}/${count}`);
         questionIds.push(...ids); subjects.push(subject);
       }
     } else if(type==="subject"){
       const subject=val("tSubj"),classes=scopeClasses(val("tScopeCls")),count=Math.max(1,parseInt(val("tQcount"))||30);
-      questionIds=await pullForSubject({exam,subject,classes,count,weights,numMode,numPct});
+      questionIds=await pullForSubject({exam,subject,classes,count,weights,numMode,numPct,...PY});
       if(questionIds.length<count) short.push(`${subject}: ${questionIds.length}/${count}`);
       subjects=[subject]; cls=val("tScopeCls");
     } else {
       const classes=scopeClasses(val("tScopeCls")),full=EXAMS[exam].full;
       for(const s of Object.keys(full)){
-        const ids=await pullForSubject({exam,subject:s,classes,count:full[s],weights,numMode,numPct});
+        const ids=await pullForSubject({exam,subject:s,classes,count:full[s],weights,numMode,numPct,...PY});
         if(ids.length<full[s]) short.push(`${s}: ${ids.length}/${full[s]}`);
         questionIds.push(...ids); subjects.push(s);
       }
@@ -4062,6 +4093,7 @@ async function pagePractice(){
       <label>Difficulty mix — set % per level (leave all 0 for any mix)</label>
       <div id="pDiffs" style="margin-bottom:6px">${difficultyPctRows("pdiffpct")}</div>
       ${numericalControl("pNum")}
+      ${pyqControl("pPyq")}
       <label>Time limit (min)</label><input id="pDur" type="number" value="20"/>
       <label>When</label>
       <select id="pWhen" onchange="el('pSchedRow').style.display=this.value==='later'?'block':'none'">
@@ -4119,6 +4151,7 @@ function pSubjToggle(cb){
 }
 async function startPractice(){
   const type=val("pType"),exam=val("pExam"),weights=gatherWeights(".pdiffpct"),numMode=val("pNumMode"),numPct=parseFloat(val("pNumPct"))||0;
+  const PY=readPyq("pPyq");
   setBtn("pBtn",true,"Building…");
   try{
     let questionIds=[],title="",dur=parseInt(val("pDur"))||20;
@@ -4130,17 +4163,17 @@ async function startPractice(){
         const chapters=[...document.querySelectorAll(`.pchap[data-subject="${CSS.escape(subject)}"]:checked`)].map(c=>c.value);
         const count=Math.max(1,parseInt(document.querySelector(`.pSubjCount[data-subject="${CSS.escape(subject)}"]`).value)||10);
         if(!chapters.length) throw new Error(`Tick at least one chapter for ${subject}, or untick that subject.`);
-        questionIds.push(...await pullForSubject({exam,subject,classes:[ME.class],chapters,count,weights,numMode,numPct}));
+        questionIds.push(...await pullForSubject({exam,subject,classes:[ME.class],chapters,count,weights,numMode,numPct,...PY}));
         names.push(subject);
       }
       title=`Practice · ${exam} · ${names.join(" + ")}`;
     } else if(type==="subject"){
       const subject=val("pSubj"),count=Math.min(90,Math.max(10,parseInt(val("pCount"))||30));
-      questionIds=await pullForSubject({exam,subject,classes:[ME.class],count,weights,numMode,numPct});
+      questionIds=await pullForSubject({exam,subject,classes:[ME.class],count,weights,numMode,numPct,...PY});
       title=`Practice · ${exam} · ${subject} (full)`;
     } else {
       const full=EXAMS[exam].full;
-      for(const s of Object.keys(full)){ questionIds.push(...await pullForSubject({exam,subject:s,classes:["11","12"],count:full[s],weights,numMode,numPct})); }
+      for(const s of Object.keys(full)){ questionIds.push(...await pullForSubject({exam,subject:s,classes:["11","12"],count:full[s],weights,numMode,numPct,...PY})); }
       title=`Practice · ${exam} full mock`; dur=EXAMS[exam].fullDuration;
     }
     questionIds=[...new Set(questionIds)]; // safety net: guarantee no question appears twice in one practice test
