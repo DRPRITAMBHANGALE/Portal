@@ -721,7 +721,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: paper log"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: shared options"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1930,7 +1930,7 @@ function parseSelfUploadDoc(raw,defaults,W){
   if(hsIdx<0) hsIdx=raw.search(/^[^\S\n]*(?:detailed\s+)?(?:solutions?|explanations?)(?:\s*(?:&|and)\s*(?:hints?|answers?))?[^\S\n]*$/im);
   if(hsIdx<0) hsIdx=raw.search(/answers?\s*(?:&|and|with)\s*solutions?/i);
   const paperEnd=akIdx>=0?akIdx:(hsIdx>=0?hsIdx:raw.length);
-  const paperText=raw.slice(0,paperEnd);
+  let paperText=raw.slice(0,paperEnd);
   const akText=akIdx>=0?raw.slice(akIdx,(hsIdx>=0&&hsIdx>akIdx)?hsIdx:raw.length):"";
   const solText=hsIdx>=0?raw.slice(hsIdx):"";
 
@@ -2001,9 +2001,42 @@ function parseSelfUploadDoc(raw,defaults,W){
     });
   }
   const clean=s=>(s||"").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
+  // The four standard choices for an assertion–reason question, used when the paper doesn't spell
+  // them out in a Direction block of its own.
+  const AR_OPTIONS=["Both A and R are true and R is the correct explanation of A",
+    "Both A and R are true, but R is not the correct explanation of A",
+    "A is true, but R is false",
+    "A is false, but R is true"];
+  const isAssertionReason=t=>/\bassertion\b/i.test(t)&&/\breason\b/i.test(t);
   const fix=(s,problems)=>{ if(!W) return s; const r=restoreWordTokens(s,W); r.problems.forEach(p=>{ if(!problems.includes(p)) problems.push(p); }); return r.s; };
 
   SU_SOL_STATS={sectionFound:hsIdx>=0,count:Object.keys(solutions).length};
+  // ---- "Direction (Q. Nos. 1-10) … (a) … (b) … (c) … (d) …" — one set of options shared by a run of
+  // questions (assertion–reason papers do this). The block is lifted out of the paper text so it can't
+  // stick to the previous question, and its options are given to every question in that range.
+  const sharedOpts=[];
+  paperText=paperText.replace(/direction[s]?\b[^\n]{0,60}?\(?\s*q\.?\s*(?:nos?\.?)?\s*(\d{1,3})\s*(?:-|–|—|to)\s*(\d{1,3})[\s\S]*?(?=\n\s*\d{1,3}\s*(?:\.|\t|\)| {2}))/gi,
+    (blk,a,b)=>{
+      const m=findBlockOptionMarks(blk);
+      if(!m) return blk;                                    // not an options block — leave it alone
+      sharedOpts.push({from:parseInt(a),to:parseInt(b),options:[
+        clean(blk.slice(m.aIdx+3,m.bIdx)),clean(blk.slice(m.bIdx+3,m.cIdx)),
+        clean(blk.slice(m.cIdx+3,m.dIdx)),clean(blk.slice(m.dIdx+3))]});
+      return "\n\n";
+    });
+  // inside a Direction block the labels stand at the start of their own line — that keeps "(A)" in
+  // "Assertion (A)" from being mistaken for option A
+  function findBlockOptionMarks(text){
+    const at=(L,from)=>{ const re=new RegExp("(?:^|[\\n\\t])[ \\t]*\\("+L+"\\)","i"); const mm=re.exec(text.slice(from));
+      return mm?from+mm.index+mm[0].indexOf("("):-1; };
+    const a=at("A",0); if(a<0) return findOptionMarks(text);
+    const b=at("B",a+3); if(b<0) return findOptionMarks(text);
+    const c=at("C",b+3); if(c<0) return findOptionMarks(text);
+    const d=at("D",c+3); if(d<0) return findOptionMarks(text);
+    return {aIdx:a,bIdx:b,cIdx:c,dIdx:d};
+  }
+  const sharedFor=n=>{ const x=sharedOpts.find(o=>n>=o.from&&n<=o.to); return x?x.options.slice():null; };
+
   const out=[];
   numberedChunks(paperText,/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/).forEach(c=>{
     const num=c.num;
@@ -2011,7 +2044,14 @@ function parseSelfUploadDoc(raw,defaults,W){
     let marks=findOptionMarks(rest);
     if(!marks){ const alt=splitLabelEqs(rest), am=findOptionMarks(alt); if(am){ rest=alt; marks=am; } }
     const problems=[]; let text="",options=["","","",""];
-    if(!marks){ problems.push("couldn't find 4 options (a)(b)(c)(d) — may share options with a question group, or have picture-based options"); text=clean(rest); }
+    if(!marks){
+      text=clean(rest);
+      const sh=sharedFor(num);
+      if(sh){ options=sh; }                                  // options came from the group's Direction block
+      else if(isAssertionReason(text)){ options=AR_OPTIONS.slice();
+        problems.push("assertion–reason question — the four standard choices were filled in; check they match this paper's instructions"); }
+      else problems.push("couldn't find 4 options (a)(b)(c)(d) — may share options with a question group, or have picture-based options");
+    }
     else{
       text=clean(rest.slice(0,marks.aIdx));
       options[0]=clean(rest.slice(marks.aIdx+3,marks.bIdx));
@@ -3803,10 +3843,7 @@ function pageToppers(){
     <p class="page-sub">Ranked test by test — each scheduled test has its own list. Practice attempts are not counted.</p>
     <div class="card" style="max-width:680px">
       <div class="grid cols-2">
-        <div><label>Exam</label><select id="tpExam"><option value="">All exams</option>${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
         <div><label>Class</label><select id="tpClass"><option value="">Both 11 &amp; 12</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
-      </div>
-      <div class="grid cols-2">
         <div><label>Centre</label>${ME.role==="master"?`<select id="tpCentre"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div>
         <div><label>Show top</label><select id="tpTopN"><option value="10">Top 10</option><option value="20">Top 20</option><option value="50">Top 50</option><option value="all">All ranked students</option></select></div>
       </div>
@@ -3840,7 +3877,7 @@ async function tpFillTests(){
 }
 let LAST_TOPPERS=null;
 async function loadToppers(){
-  const examF=val("tpExam"),clsF=val("tpClass"),centreF=ME.role==="master"?val("tpCentre"):ME.centreId,topN=val("tpTopN"),testF=val("tpTest");
+  const clsF=val("tpClass"),centreF=ME.role==="master"?val("tpCentre"):ME.centreId,topN=val("tpTopN"),testF=val("tpTest");
   setBtn("tpBtn",true,"Calculating…"); el("tpPrintBtn").style.display="none"; LAST_TOPPERS=null;
   try{
     if(!TP_ATTEMPTS){
@@ -3856,7 +3893,6 @@ async function loadToppers(){
     const groups={};
     TP_ATTEMPTS.forEach(a=>{
       if(a.disqualified) return;
-      if(examF&&a.exam!==examF) return;
       if(testF&&a.testId!==testF) return;
       const stu=stuMap[a.studentUid]; if(!stu) return;       // only current, in-scope students
       if(clsF&&stu.class!==clsF) return;
@@ -3875,7 +3911,7 @@ async function loadToppers(){
       g.entries=g.rows.length;
       if(topN!=="all") g.rows=g.rows.slice(0,parseInt(topN));
     });
-    const meta={exam:examF||"All exams",cls:clsF?clsLabel(clsF):"Class 11 & 12",centre:ME.role==="master"?(centreF?centreName(centreF):"All centres"):centreName(ME.centreId)};
+    const meta={cls:clsF?clsLabel(clsF):"Class 11 & 12",centre:ME.role==="master"?(centreF?centreName(centreF):"All centres"):centreName(ME.centreId)};
     LAST_TOPPERS={meta,list};
     setBtn("tpBtn",false,"Show toppers");
     if(!list.length){ el("tpResults").innerHTML=`<div class="card">${emptyState("No ranked results yet","No matching class-test attempts found for this filter.")}</div>`; return; }
