@@ -499,6 +499,15 @@ function warnModal(title,message){
 }
 function scopeClasses(v){return v==="both"?["11","12"]:[v];}
 // Pull live question IDs for one subject across given classes & chapters.
+// While one paper is being built, every question already taken is remembered by its WORDING, not just
+// by its id — so two separate copies of the same question (uploaded twice) can't both land in the paper.
+let PULL_SEEN=null;
+function startPull(){ PULL_SEEN=new Set(); }
+function pullKey(x){
+  const t=normalizeQText(String(x.text||"").replace(/\[\[img:[^\]]*\]\]/g," "));
+  if(t.length<12) return "";                       // picture-only or very short: can't judge, keep it
+  return (x.subject||"")+"|"+t;
+}
 async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerical}){
   let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject);
   if(classes.length===1) q=q.where("class","==",classes[0]);
@@ -510,7 +519,13 @@ async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerica
     if(numerical==="only" && !x.numerical) return false;
     if(numerical==="none" && x.numerical) return false;
     return true;});
-  return shuffle(docs.map(d=>d.id)).slice(0,count);
+  const picked=[];
+  for(const d of shuffle(docs)){
+    if(picked.length>=count) break;
+    if(PULL_SEEN){ const k=pullKey(d.data()); if(k){ if(PULL_SEEN.has(k)) continue; PULL_SEEN.add(k); } }
+    picked.push(d.id);
+  }
+  return picked;
 }
 // distribute a count across difficulty levels by their % weights
 async function pullWeighted(base,count,weights){
@@ -721,7 +736,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: upload solutions time"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: no repeats"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2797,6 +2812,7 @@ function ppToggleAllChaps(){
 async function fetchQs(ids){ const docs=await Promise.all(ids.map(id=>db.collection("questions").doc(id).get())); return docs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()})); }
 let LAST_PAPER=null;
 async function generatePaper(){
+  startPull();
   const type=val("ppType"),exam=val("ppExam");
   const weights=gatherWeights(".ppdiffpct"),numMode=val("ppNumMode"),numPct=parseFloat(val("ppNumPct"))||0;
   setBtn("ppBtnQ",true,"Building…");
@@ -2973,6 +2989,7 @@ function tSubjToggle(cb){
   document.querySelector(`.tSubjCount[data-subject="${CSS.escape(s)}"]`).disabled=!on;
 }
 async function createTest(){
+  startPull();
   const title=val("tTitle").trim(),exam=val("tExam"),type=val("tType");
   if(!title) return setMsg("tMsg","Add a title.","err");
   let ASG; try{ ASG=readCentreAssign("tA",val("tStart"),val("tEnd")); }catch(e){ return setMsg("tMsg",errMsg(e),"err"); }
@@ -4131,6 +4148,7 @@ function pSubjToggle(cb){
   document.querySelector(`.pSubjCount[data-subject="${CSS.escape(s)}"]`).disabled=!on;
 }
 async function startPractice(){
+  startPull();
   const type=val("pType"),exam=val("pExam"),weights=gatherWeights(".pdiffpct"),numMode=val("pNumMode"),numPct=parseFloat(val("pNumPct"))||0;
   setBtn("pBtn",true,"Building…");
   try{
