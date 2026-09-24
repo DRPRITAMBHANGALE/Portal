@@ -721,7 +721,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: powers fixed"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: toppers stats"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -3775,12 +3775,19 @@ async function loadToppers(){
       const stu=stuMap[a.studentUid]; if(!stu) return; // only current, in-scope students
       if(clsF&&stu.class!==clsF) return;
       if(centreF&&stu.centreId!==centreF) return;
-      if(!agg[a.studentUid]) agg[a.studentUid]={score:0,total:0,count:0};
-      agg[a.studentUid].score+=a.score; agg[a.studentUid].total+=a.total; agg[a.studentUid].count++;
+      if(!agg[a.studentUid]) agg[a.studentUid]={score:0,total:0,count:0,correct:0,wrong:0,skipped:0};
+      const g=agg[a.studentUid];
+      g.score+=a.score; g.total+=a.total; g.count++;
+      g.correct+=a.correct||0; g.wrong+=a.wrong||0; g.skipped+=a.unattempted||0;
     });
     let rows=Object.keys(agg).map(uid=>{const g=agg[uid],stu=stuMap[uid];
-      return {name:stu.name,centre:stu.centreId,cls:stu.class,stream:stu.stream,tests:g.count,score:g.score,total:g.total,avg:g.total?g.score/g.total*100:0};});
+      const qs=g.correct+g.wrong+g.skipped, att=g.correct+g.wrong;
+      return {name:stu.name,centre:stu.centreId,cls:stu.class,stream:stu.stream,tests:g.count,score:g.score,total:g.total,
+        qs,att,correct:g.correct,wrong:g.wrong,skipped:g.skipped,
+        acc:att?g.correct/att*100:null,avg:g.total?g.score/g.total*100:0};});
     rows.sort((a,b)=>b.avg-a.avg||b.tests-a.tests);
+    // percentile is worked out against everyone in this filter, before the "top N" cut
+    { const all=rows.map(r=>r.avg); rows.forEach(r=>r.pctile=percentileOf(r.avg,all)); }
     if(topN!=="all") rows=rows.slice(0,parseInt(topN));
     const meta={exam:examF||"All exams",cls:clsF?clsLabel(clsF):"Class 11 & 12",centre:ME.role==="master"?(centreF?centreName(centreF):"All centres"):centreName(ME.centreId)};
     LAST_TOPPERS={meta,rows};
@@ -3788,8 +3795,10 @@ async function loadToppers(){
     if(!rows.length){ el("tpResults").innerHTML=`<div class="card">${emptyState("No ranked results yet","No matching class-test attempts found for this filter.")}</div>`; return; }
     el("tpPrintBtn").style.display="inline-flex";
     el("tpResults").innerHTML=`<div class="card"><p class="muted" style="margin:0 0 10px">${esc(meta.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)}</p>
-      ${tableHTML(["Rank","Name","Centre","Class","Tests taken","Score","Average %"],
-        rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.tests,`${r.score}/${r.total}`,`<b>${r.avg.toFixed(1)}%</b>`]))}</div>`;
+      ${tableHTML(["Rank","Name","Centre","Class","Tests","Questions","Attempted","Correct","Wrong","Skipped","Score","Accuracy %","Percentile"],
+        rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.tests,r.qs,r.att,r.correct,r.wrong,r.skipped,
+          `${r.score}/${r.total}`,r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))}
+      <p class="muted" style="font-size:12px;margin:10px 0 0">Accuracy = correct ÷ attempted. Percentile = % of students in this filter scoring the same or lower.</p></div>`;
   }catch(e){ el("tpResults").innerHTML=errBox(e); setBtn("tpBtn",false,"Show toppers"); }
 }
 function medal(rank){ return rank===1?"🥇 1":rank===2?"🥈 2":rank===3?"🥉 3":String(rank); }
@@ -3797,7 +3806,8 @@ function printToppers(){
   if(!LAST_TOPPERS||!LAST_TOPPERS.rows.length) return;
   const {meta,rows}=LAST_TOPPERS;
   const body=rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
-    <td>${esc(clsLabel(r.cls))}</td><td>${r.tests}</td><td>${r.score}/${r.total}</td><td><b>${r.avg.toFixed(1)}%</b></td></tr>`).join("");
+    <td>${esc(clsLabel(r.cls))}</td><td>${r.tests}</td><td>${r.qs}</td><td>${r.att}</td><td>${r.correct}</td><td>${r.wrong}</td><td>${r.skipped}</td>
+    <td>${r.score}/${r.total}</td><td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("");
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Toppers List</title>
   <style>
     *{box-sizing:border-box} body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:28px 30px;font-size:13.5px}
@@ -3807,12 +3817,14 @@ function printToppers(){
     table{width:100%;border-collapse:collapse} th,td{border:1px solid #ccc;padding:7px 9px;text-align:left;font-size:12.5px}
     th{background:#1f3d2f;color:#fff} tr:nth-child(even){background:#f7f5ee} td.rk{text-align:center;font-weight:bold;width:44px}
     .foot{text-align:center;color:#999;font-size:10.5px;margin-top:18px;border-top:1px solid #ddd;padding-top:6px}
-    @media print{body{padding:0}@page{margin:14mm}}
+    @media print{body{padding:0}@page{margin:10mm;size:A4 landscape}}
   </style></head><body>
   <div class="head"><img src="${LOGO}"/><div class="ttl">Toppers List</div></div>
   <div class="meta">${esc(meta.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; Generated ${new Date().toLocaleDateString()}</div>
-  <table><thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Tests taken</th><th>Score</th><th>Average %</th></tr></thead>
+  <table><thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Tests</th><th>Questions</th><th>Attempted</th>
+  <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th><th>Accuracy %</th><th>Percentile</th></tr></thead>
   <tbody>${body}</tbody></table>
+  <p style="font-size:10.5px;color:#555;margin-top:8px">Accuracy = correct &divide; attempted. Percentile = % of students in this list&#39;s filter scoring the same or lower.</p>
   <div class="foot">Sonam Tuitions · generated from the test portal</div>
   <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
   </body></html>`;
