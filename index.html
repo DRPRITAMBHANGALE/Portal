@@ -721,7 +721,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: toppers stats"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: paper log"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1437,6 +1437,24 @@ function fillSectionRows(examId,boxId,prefix){ if(el(boxId)) el(boxId).innerHTML
 
 /* ---- Assign a test to one, several or all centres, each with its own time window ---- */
 const TS=v=>v?firebase.firestore.Timestamp.fromDate(new Date(v)):null;
+// Typing an "Opens" time immediately limits the matching "Closes" box to later times
+// (tStart/tEnd, suStart/suEnd, fdStart/fdEnd, rsStart/rsEnd and every per-centre S_/E_ pair).
+document.addEventListener("input",e=>{
+  const t=e.target; if(!t||t.type!=="datetime-local"||!t.id) return;
+  let mate=null;
+  if(/Start$/.test(t.id)) mate=el(t.id.replace(/Start$/,"End"));
+  else if(/S_[A-Za-z0-9]+$/.test(t.id)) mate=el(t.id.replace(/S_/,"E_"));
+  if(!mate) return;
+  mate.min=t.value||"";
+  if(t.value&&mate.value&&mate.value<=t.value) mate.style.borderColor="var(--danger)"; else mate.style.borderColor="";
+});
+document.addEventListener("input",e=>{
+  const t=e.target; if(!t||t.type!=="datetime-local"||!t.id) return;
+  let start=null;
+  if(/End$/.test(t.id)) start=el(t.id.replace(/End$/,"Start"));
+  else if(/E_[A-Za-z0-9]+$/.test(t.id)) start=el(t.id.replace(/E_/,"S_"));
+  if(start) t.style.borderColor=(start.value&&t.value&&t.value<=start.value)?"var(--danger)":"";
+});
 const toLocalInput=ts=>{ if(!ts||!ts.toDate) return ""; const d=ts.toDate(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
 function assignedCentres(t){ if(!t) return []; if(t.scope==="all") return CENTRES.map(c=>c.id);
   if(t.scope==="multi") return t.centres||[]; if(t.finalScope&&String(t.scope||"").startsWith("draft")) return t.finalScope==="all"?CENTRES.map(c=>c.id):(t.finalCentres||[t.finalScope]);
@@ -1461,9 +1479,13 @@ function readCentreAssign(p,commonStart,commonEnd){
   const ids=CENTRES.map(c=>c.id).filter(id=>el(p+"C_"+id)&&el(p+"C_"+id).checked);
   if(!ids.length) throw new Error("Tick at least one centre to assign the test to.");
   const startAt=TS(commonStart), endAt=TS(commonEnd), windows={};
+  if(commonStart&&commonEnd&&new Date(commonEnd)<=new Date(commonStart))
+    throw new Error('"Closes" must be after "Opens" — check the common date and time.');
   ids.forEach(id=>{ const a=val(p+"S_"+id), b=val(p+"E_"+id);
-    if(a||b){ windows[id]={startAt:a?TS(a):startAt, endAt:b?TS(b):endAt};
-      if(a&&b&&new Date(b)<=new Date(a)) throw new Error(`For ${centreName(id)}, "Closes" must be after "Opens".`); } });
+    if(a||b){ const w={startAt:a?TS(a):startAt, endAt:b?TS(b):endAt}; windows[id]=w;
+      // compare the times that will actually apply to this centre, even when only one box is filled
+      const sm=w.startAt&&w.startAt.toDate().getTime(), em=w.endAt&&w.endAt.toDate().getTime();
+      if(sm&&em&&em<=sm) throw new Error(`For ${centreName(id)}, "Closes" must be after "Opens".`); } });
   if(ids.length===CENTRES.length&&!Object.keys(windows).length) return {scope:"all",centres:[],windows:{},startAt,endAt};
   if(ids.length===1){ const w=windows[ids[0]]; return {scope:ids[0],centres:ids,windows:{},startAt:w?w.startAt:startAt,endAt:w?w.endAt:endAt}; }
   return {scope:"multi",centres:ids,windows,startAt,endAt};
@@ -1871,6 +1893,8 @@ async function handleSelfUpload(){
         startAt:null,endAt:null,solutionsAt:null,uploadId,uploadName:f.name,
         createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
       SELF_UPLOAD_DRAFT_ID=draftRef.id;
+      logCentreUpdate("draft_created",ME.role==="admin"?ME.centreId:"all",
+        {testTitle:title,exam:val("suExam"),questions:liveIds.length,forCentres:"—",windowText:"Draft — not scheduled yet"});
       setMsg("suActionMsg",`📝 Draft paper “${esc(title)}” created with ${liveIds.length} question${liveIds.length===1?"":"s"}`
         +(pendingCount?` — ${pendingCount} more will join automatically when you approve them in the Review queue.`:"."),"ok");
     }catch(err){ setMsg("suActionMsg","Questions were added, but the draft paper couldn't be created: "+errMsg(err),"err"); }
@@ -2101,6 +2125,8 @@ async function finalizeDraft(id,fields){
     if(!(t.questionIds||[]).length) throw new Error("This draft has no approved questions yet.");
     if(waiting&&!confirm(`${waiting} question${waiting===1?" is":"s are"} still waiting in the Review queue and won't be in the final paper.\n\nSave as final paper anyway with ${(t.questionIds||[]).length} questions?\n(Cancel, then approve them first, if you want them included.)`)) return false;
     await db.collection("tests").doc(id).update({...fields,draft:false,pendingIds:[],finalizedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    { const t1=(await db.collection("tests").doc(id).get()).data()||{};
+      logCentreUpdate("paper_finalised",logCentreForTest(null,t1),testLogDetail(t1,t1)); }
     return true;
   }catch(e){ alert("Could not save the paper: "+errMsg(e)); return false; }
 }
@@ -2160,7 +2186,10 @@ async function saveFinalizeDraft(id){
 }
 async function deleteDraft(id){
   if(!confirm("Delete this draft paper? The questions stay in your question bank.")) return;
-  try{ await db.collection("tests").doc(id).delete(); loadTests(); }catch(e){ alert("Could not delete: "+errMsg(e)); }
+  try{ const t=(await db.collection("tests").doc(id).get()).data()||{};
+    await db.collection("tests").doc(id).delete();
+    logCentreUpdate("draft_deleted",logCentreForTest(null,t),testLogDetail(t,t)); loadTests(); }
+  catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 
 
@@ -2640,12 +2669,16 @@ async function saveReschedule(id){
       startAt:val("rsStart")?firebase.firestore.Timestamp.fromDate(new Date(val("rsStart"))):null,
       endAt:val("rsEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("rsEnd"))):null,
       duration:parseInt(val("rsDur"))||30,solutionsAt,...ASG});
+    { const t1=(await db.collection("tests").doc(id).get()).data()||{};
+      logCentreUpdate("test_updated",logCentreForTest(ASG,t1),testLogDetail(t1,ASG)); }
     closeModal(); loadTests();
   }catch(e){ setMsg("rsMsg",errMsg(e),"err"); setBtn("rsBtn",false,"Save changes"); }
 }
 async function deleteTest(id){
   if(!confirm("Delete this test? Students will no longer see it. (Past attempts are kept.)")) return;
-  try{ await db.collection("tests").doc(id).delete(); loadTests(); }
+  try{ const t=(await db.collection("tests").doc(id).get()).data()||{};
+    await db.collection("tests").doc(id).delete();
+    logCentreUpdate("test_deleted",logCentreForTest(null,t),testLogDetail(t,t)); loadTests(); }
   catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 
@@ -2930,6 +2963,7 @@ async function createTest(){
     await db.collection("tests").add({title,exam,type,subjects,class:cls,questionIds,duration:parseInt(val("tDur"))||30,...ASG,isPractice:false,
       solutionsAt,
       createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    logCentreUpdate("test_created",logCentreForTest(ASG),testLogDetail({title,exam,questionIds},ASG));
     closeModal(); loadTests();
     if(short.length) setTimeout(()=>alert("Test created. Some parts had fewer questions than requested:\n"+short.join("\n")+"\nGenerate more to fill them next time."),200);
   }catch(e){ setMsg("tMsg",errMsg(e),"err"); setBtn("tSaveBtn",false,"Create & schedule"); }
@@ -3222,15 +3256,20 @@ async function delAdmin(uid){
 /* ===== Centre updates — master-only audit trail of admin actions ===== */
 function pageCentreUpdates(){
   setView(`<h1 class="page-title">Centre updates</h1>
-    <p class="page-sub">Every student added or removed, and by whom, across all six centres.</p>
+    <p class="page-sub">Every student added or removed, and every paper created, scheduled or deleted — with who did it and when, across all six centres.</p>
     <div class="grid cols-2" style="max-width:640px">
       <div><label>Centre</label><select id="cuCentre" onchange="loadCentreUpdates()"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
-      <div><label>Action</label><select id="cuAction" onchange="loadCentreUpdates()"><option value="">All actions</option><option value="student_added">Student added</option><option value="students_bulk_added">Bulk upload</option><option value="student_deleted">Student deleted</option><option value="students_promoted">Promoted to Class 12</option><option value="student_password_reset">Password reset</option><option value="practice_toggled">Practice access changed</option></select></div>
+      <div><label>Action</label><select id="cuAction" onchange="loadCentreUpdates()"><option value="">All actions</option><option value="student_added">Student added</option><option value="students_bulk_added">Bulk upload</option><option value="student_deleted">Student deleted</option><option value="students_promoted">Promoted to Class 12</option><option value="student_password_reset">Password reset</option><option value="practice_toggled">Practice access changed</option>
+        <option value="draft_created">Draft paper created</option><option value="paper_finalised">Paper saved as final</option>
+        <option value="test_created">Test created &amp; scheduled</option><option value="test_updated">Test rescheduled / edited</option>
+        <option value="test_deleted">Test deleted</option><option value="draft_deleted">Draft deleted</option></select></div>
     </div>
     <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
   loadCentreUpdates();
 }
-function cuActionLabel(a){ return {students_bulk_deleted:"🗑 Bulk deleted",students_merged:"👥 Duplicate merged",student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
+function cuActionLabel(a){ return {draft_created:"📝 Draft paper created",paper_finalised:"📄 Paper saved as final",
+  test_created:"🗓 Test created & scheduled",test_updated:"✏ Test rescheduled / edited",test_deleted:"🗑 Test deleted",draft_deleted:"🗑 Draft deleted",
+  students_bulk_deleted:"🗑 Bulk deleted",students_merged:"👥 Duplicate merged",student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
 async function loadCentreUpdates(){
   const centreF=val("cuCentre"),actionF=val("cuAction");
   el("cuList").innerHTML=`<div class="muted">Loading…</div>`;
@@ -3243,6 +3282,10 @@ async function loadCentreUpdates(){
       docs.map(d=>{const x=d.data();
         const details=(x.action==="students_bulk_added"||x.action==="students_bulk_deleted"||x.action==="students_promoted")
           ? `${x.count} student${x.count===1?"":"s"}: ${esc((x.studentNames||[]).slice(0,6).join(", "))}${(x.studentNames||[]).length>6?` +${x.studentNames.length-6} more`:""}`
+          : /^(test_|paper_|draft_)/.test(x.action)
+            ? `<b>${esc(x.testTitle||"—")}</b>${x.exam?` · ${esc(x.exam)}`:""}${x.questions?` · ${x.questions} Q`:""}`
+              +`${x.forCentres&&x.forCentres!=="—"?`<br><span class="muted" style="font-size:12px">For: ${esc(x.forCentres)}</span>`:""}`
+              +`${x.windowText?`<br><span class="muted" style="font-size:12px">${esc(x.windowText)}</span>`:""}`
           : x.action==="practice_toggled" ? `Practice ${x.enabled?"turned ON":"turned OFF"}`
           : `${esc(x.studentName||"—")}${x.loginId?` (${esc(x.loginId)})`:""}`;
         return [fmtDate(x.createdAt),centreName(x.centreId),`${esc(x.actorName)} <span class="muted" style="font-size:11.5px">(${x.actorRole})</span>`,cuActionLabel(x.action),details];}));
@@ -3572,6 +3615,23 @@ async function logCentreUpdate(action,centreId,detail){
   }catch(e){ console.error("centre log failed",e); } // never block the actual action on a logging failure
 }
 
+// ---- paper / test activity for the Centre updates trail ----
+// Which centre the entry is filed under: an admin's own centre, else the test's own scope.
+function logCentreForTest(ASG,t){
+  if(ME.role==="admin") return ME.centreId;
+  const sc=(ASG&&ASG.scope)||(t&&t.scope)||"all";
+  return (sc==="multi"||String(sc).startsWith("draft"))?"all":sc;
+}
+function testLogDetail(t,ASG){
+  const src=ASG||t||{};
+  const sc=src.scope||"all";
+  const cents=sc==="all"?"All centres"
+    :sc==="multi"?((src.centres||[]).map(centreName).join(", ")||"—")
+    :String(sc).startsWith("draft")?"—":centreName(sc);
+  const st=src.startAt,en=src.endAt;
+  return {testTitle:(t&&t.title)||"",exam:(t&&t.exam)||"",questions:((t&&t.questionIds)||[]).length,
+    forCentres:cents,windowText:(st||en)?`${st?fmtDate(st):"—"} → ${en?fmtDate(en):"—"}`:"No fixed window"};
+}
 function openAddAdmin(){
   modal(`<h2>Add centre admin</h2>
     <p class="muted">Creates a login that can manage one centre — schedule tests, add students (single or bulk), and view that centre's results, report cards &amp; toppers. Question bank and syllabus stay master-only.</p>
@@ -3683,13 +3743,13 @@ function drawReportCardPage(doc,stu,attemptDocs,scoreCache){
     return a.disqualified
       ? [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),"DISQUALIFIED","—","—","—","—","—","—"]
       : [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",accuracyOf(a),percentileOf(a.score,scoreCache[a.testId]),`${a.correct}`,`${a.wrong}`,`${a.unattempted}`];});
-  const totS=real.reduce((s,d)=>s+d.data().score,0), totT=real.reduce((s,d)=>s+d.data().total,0);
+  // each test stands on its own — no combined score or averaged accuracy
   if(rows.length){
     doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Accuracy","Percentile","Correct","Wrong","Skipped"]],body:rows,
       headStyles:{fillColor:[31,92,82]},styles:{fontSize:7.5,cellPadding:2},alternateRowStyles:{fillColor:[246,243,236]},
       didParseCell:function(d){ if(d.section==="body"&&d.row.raw[3]==="DISQUALIFIED"){ d.cell.styles.textColor=[163,64,47]; d.cell.styles.fontStyle="bold"; } }});
     let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(11);
-    doc.text(`Overall: ${totS}/${totT}  (${pct(totS,totT)}%)   ·   Accuracy: ${accuracyOf({correct:real.reduce((s,d)=>s+(d.data().correct||0),0),wrong:real.reduce((s,d)=>s+(d.data().wrong||0),0)})}   ·   Tests taken: ${real.length}${shown.length>real.length?`   ·   Disqualified: ${shown.length-real.length}`:""}`,14,y);
+    doc.text(`Tests taken: ${real.length}${shown.length>real.length?`   ·   Disqualified: ${shown.length-real.length}`:""}   ·   Every test is shown on its own — scores are not added up or averaged.`,14,y);
     doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(`Accuracy = correct ÷ attempted questions. Percentile = % of students (${ME.role==="admin"?"in "+centreName(ME.centreId):"all centres"}) who scored the same or lower in that test.`,14,y+6);
     doc.setTextColor(35,33,28);
@@ -3740,7 +3800,7 @@ async function downloadAllReportCards(){
 /* ===== Toppers leaderboard ===== */
 function pageToppers(){
   setView(`<h1 class="page-title">Toppers</h1>
-    <p class="page-sub">Ranked by average score % across scheduled (class) tests — practice attempts are not counted.</p>
+    <p class="page-sub">Ranked test by test — each scheduled test has its own list. Practice attempts are not counted.</p>
     <div class="card" style="max-width:680px">
       <div class="grid cols-2">
         <div><label>Exam</label><select id="tpExam"><option value="">All exams</option>${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
@@ -3750,6 +3810,8 @@ function pageToppers(){
         <div><label>Centre</label>${ME.role==="master"?`<select id="tpCentre"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div>
         <div><label>Show top</label><select id="tpTopN"><option value="10">Top 10</option><option value="20">Top 20</option><option value="50">Top 50</option><option value="all">All ranked students</option></select></div>
       </div>
+      <label>Test</label>
+      <select id="tpTest"><option value="">Loading tests…</option></select>
       <div class="msg" id="tpMsg"></div>
       <div class="row" style="gap:10px;margin-top:6px">
         <button class="btn" id="tpBtn" onclick="loadToppers()">Show toppers</button>
@@ -3757,75 +3819,107 @@ function pageToppers(){
       </div>
     </div>
     <div id="tpResults" style="margin-top:18px"></div>`);
+  tpFillTests();
 }
-let LAST_TOPPERS=null;
-async function loadToppers(){
-  const examF=val("tpExam"),clsF=val("tpClass"),centreF=ME.role==="master"?val("tpCentre"):ME.centreId,topN=val("tpTopN");
-  setBtn("tpBtn",true,"Calculating…"); el("tpPrintBtn").style.display="none"; LAST_TOPPERS=null;
+// every scheduled test that has at least one attempt in this user's scope
+let TP_ATTEMPTS=null;
+async function tpFillTests(){
   try{
     let aq=db.collection("attempts").where("isPractice","==",false);
     if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
+    TP_ATTEMPTS=(await aq.get()).docs.map(d=>d.data());
+    const seen={};
+    TP_ATTEMPTS.forEach(a=>{ if(a.disqualified||!a.testId) return;
+      const w=(a.submittedAt&&a.submittedAt.seconds)||0;
+      if(!seen[a.testId]) seen[a.testId]={title:a.testTitle||"(untitled test)",when:w,n:0};
+      seen[a.testId].n++; if(w>seen[a.testId].when) seen[a.testId].when=w; });
+    const list=Object.keys(seen).map(id=>({id,...seen[id]})).sort((x,y)=>y.when-x.when);
+    el("tpTest").innerHTML=`<option value="">Every test — each ranked on its own</option>`
+      +list.map(t=>`<option value="${t.id}">${esc(t.title)}${t.when?" · "+new Date(t.when*1000).toLocaleDateString():""} · ${t.n} student${t.n===1?"":"s"}</option>`).join("");
+  }catch(e){ el("tpTest").innerHTML=`<option value="">Every test — each ranked on its own</option>`; }
+}
+let LAST_TOPPERS=null;
+async function loadToppers(){
+  const examF=val("tpExam"),clsF=val("tpClass"),centreF=ME.role==="master"?val("tpCentre"):ME.centreId,topN=val("tpTopN"),testF=val("tpTest");
+  setBtn("tpBtn",true,"Calculating…"); el("tpPrintBtn").style.display="none"; LAST_TOPPERS=null;
+  try{
+    if(!TP_ATTEMPTS){
+      let aq=db.collection("attempts").where("isPractice","==",false);
+      if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
+      TP_ATTEMPTS=(await aq.get()).docs.map(d=>d.data());
+    }
     let uq=db.collection("users").where("role","==","student");
     if(ME.role==="admin") uq=uq.where("centreId","==",ME.centreId);
-    const [asnap,usnap]=await Promise.all([aq.get(),uq.get()]);
+    const usnap=await uq.get();
     const stuMap={}; usnap.docs.forEach(d=>stuMap[d.id]={id:d.id,...d.data()});
-    const agg={};
-    asnap.forEach(d=>{
-      const a=d.data(); if(examF&&a.exam!==examF) return; if(a.disqualified) return;
-      const stu=stuMap[a.studentUid]; if(!stu) return; // only current, in-scope students
+    // one group per test — nothing is added up across tests
+    const groups={};
+    TP_ATTEMPTS.forEach(a=>{
+      if(a.disqualified) return;
+      if(examF&&a.exam!==examF) return;
+      if(testF&&a.testId!==testF) return;
+      const stu=stuMap[a.studentUid]; if(!stu) return;       // only current, in-scope students
       if(clsF&&stu.class!==clsF) return;
       if(centreF&&stu.centreId!==centreF) return;
-      if(!agg[a.studentUid]) agg[a.studentUid]={score:0,total:0,count:0,correct:0,wrong:0,skipped:0};
-      const g=agg[a.studentUid];
-      g.score+=a.score; g.total+=a.total; g.count++;
-      g.correct+=a.correct||0; g.wrong+=a.wrong||0; g.skipped+=a.unattempted||0;
+      const g=groups[a.testId]||(groups[a.testId]={id:a.testId,title:a.testTitle||"(untitled test)",exam:a.exam||"—",when:0,rows:[]});
+      const w=(a.submittedAt&&a.submittedAt.seconds)||0; if(w>g.when) g.when=w;
+      const c=a.correct||0,wr=a.wrong||0,sk=a.unattempted||0,att=c+wr;
+      g.rows.push({name:stu.name,centre:stu.centreId,cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
+        score:a.score||0,total:a.total||0,acc:att?c/att*100:null,when:w});
     });
-    let rows=Object.keys(agg).map(uid=>{const g=agg[uid],stu=stuMap[uid];
-      const qs=g.correct+g.wrong+g.skipped, att=g.correct+g.wrong;
-      return {name:stu.name,centre:stu.centreId,cls:stu.class,stream:stu.stream,tests:g.count,score:g.score,total:g.total,
-        qs,att,correct:g.correct,wrong:g.wrong,skipped:g.skipped,
-        acc:att?g.correct/att*100:null,avg:g.total?g.score/g.total*100:0};});
-    rows.sort((a,b)=>b.avg-a.avg||b.tests-a.tests);
-    // percentile is worked out against everyone in this filter, before the "top N" cut
-    { const all=rows.map(r=>r.avg); rows.forEach(r=>r.pctile=percentileOf(r.avg,all)); }
-    if(topN!=="all") rows=rows.slice(0,parseInt(topN));
+    let list=Object.keys(groups).map(k=>groups[k]).sort((x,y)=>y.when-x.when);
+    list.forEach(g=>{
+      g.rows.sort((a,b)=>b.score-a.score||(b.acc||0)-(a.acc||0));
+      const all=g.rows.map(r=>r.score);              // percentile over everyone who took THAT test
+      g.rows.forEach(r=>r.pctile=percentileOf(r.score,all));
+      g.entries=g.rows.length;
+      if(topN!=="all") g.rows=g.rows.slice(0,parseInt(topN));
+    });
     const meta={exam:examF||"All exams",cls:clsF?clsLabel(clsF):"Class 11 & 12",centre:ME.role==="master"?(centreF?centreName(centreF):"All centres"):centreName(ME.centreId)};
-    LAST_TOPPERS={meta,rows};
+    LAST_TOPPERS={meta,list};
     setBtn("tpBtn",false,"Show toppers");
-    if(!rows.length){ el("tpResults").innerHTML=`<div class="card">${emptyState("No ranked results yet","No matching class-test attempts found for this filter.")}</div>`; return; }
+    if(!list.length){ el("tpResults").innerHTML=`<div class="card">${emptyState("No ranked results yet","No matching class-test attempts found for this filter.")}</div>`; return; }
     el("tpPrintBtn").style.display="inline-flex";
-    el("tpResults").innerHTML=`<div class="card"><p class="muted" style="margin:0 0 10px">${esc(meta.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)}</p>
-      ${tableHTML(["Rank","Name","Centre","Class","Tests","Questions","Attempted","Correct","Wrong","Skipped","Score","Accuracy %","Percentile"],
-        rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.tests,r.qs,r.att,r.correct,r.wrong,r.skipped,
+    el("tpResults").innerHTML=list.map(g=>`<div class="card" style="margin-bottom:16px">
+      <h3 class="serif" style="margin:0 0 2px;font-size:19px">${esc(g.title)}</h3>
+      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)} · ${g.entries} student${g.entries===1?"":"s"} took this test${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
+      ${tableHTML(["Rank","Name","Centre","Class","Questions","Attempted","Correct","Wrong","Skipped","Score","Accuracy %","Percentile"],
+        g.rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.qs,r.att,r.correct,r.wrong,r.skipped,
           `${r.score}/${r.total}`,r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))}
-      <p class="muted" style="font-size:12px;margin:10px 0 0">Accuracy = correct ÷ attempted. Percentile = % of students in this filter scoring the same or lower.</p></div>`;
+      </div>`).join("")
+      +`<p class="muted" style="font-size:12px">Accuracy = correct ÷ attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are never added up.</p>`;
   }catch(e){ el("tpResults").innerHTML=errBox(e); setBtn("tpBtn",false,"Show toppers"); }
 }
 function medal(rank){ return rank===1?"🥇 1":rank===2?"🥈 2":rank===3?"🥉 3":String(rank); }
 function printToppers(){
-  if(!LAST_TOPPERS||!LAST_TOPPERS.rows.length) return;
-  const {meta,rows}=LAST_TOPPERS;
-  const body=rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
-    <td>${esc(clsLabel(r.cls))}</td><td>${r.tests}</td><td>${r.qs}</td><td>${r.att}</td><td>${r.correct}</td><td>${r.wrong}</td><td>${r.skipped}</td>
-    <td>${r.score}/${r.total}</td><td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("");
+  if(!LAST_TOPPERS||!LAST_TOPPERS.list||!LAST_TOPPERS.list.length) return;
+  const {meta,list}=LAST_TOPPERS;
+  const head=`<thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Questions</th><th>Attempted</th>
+    <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th><th>Accuracy %</th><th>Percentile</th></tr></thead>`;
+  const blocks=list.map((g,gi)=>{
+    const body=g.rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
+      <td>${esc(clsLabel(r.cls))}</td><td>${r.qs}</td><td>${r.att}</td><td>${r.correct}</td><td>${r.wrong}</td><td>${r.skipped}</td>
+      <td>${r.score}/${r.total}</td><td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("");
+    return `<div class="block"${gi?' style="page-break-before:always"':""}>
+      <div class="tname">${esc(g.title)}</div>
+      <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; ${g.entries} student${g.entries===1?"":"s"}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
+      <table>${head}<tbody>${body}</tbody></table></div>`;
+  }).join("");
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Toppers List</title>
   <style>
     *{box-sizing:border-box} body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:28px 30px;font-size:13.5px}
     .head{text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}
     .head img{height:72px;display:block;margin:0 auto 4px} .head .ttl{font-size:17px;font-weight:bold;margin-top:2px}
-    .meta{text-align:center;color:#444;font-size:12.5px;margin-bottom:16px}
-    table{width:100%;border-collapse:collapse} th,td{border:1px solid #ccc;padding:7px 9px;text-align:left;font-size:12.5px}
-    th{background:#1f3d2f;color:#fff} tr:nth-child(even){background:#f7f5ee} td.rk{text-align:center;font-weight:bold;width:44px}
-    .foot{text-align:center;color:#999;font-size:10.5px;margin-top:18px;border-top:1px solid #ddd;padding-top:6px}
+    .tname{font-size:15px;font-weight:bold;margin-top:6px} .tmeta{color:#444;font-size:11.5px;margin:2px 0 8px}
+    table{width:100%;border-collapse:collapse;margin-bottom:10px} th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;font-size:12px}
+    th{background:#1f3d2f;color:#fff} tbody tr:nth-child(even){background:#f7f5ee} td.rk{text-align:center;font-weight:bold;width:40px}
+    .foot{text-align:center;color:#999;font-size:10.5px;margin-top:14px;border-top:1px solid #ddd;padding-top:6px}
     @media print{body{padding:0}@page{margin:10mm;size:A4 landscape}}
   </style></head><body>
-  <div class="head"><img src="${LOGO}"/><div class="ttl">Toppers List</div></div>
-  <div class="meta">${esc(meta.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; Generated ${new Date().toLocaleDateString()}</div>
-  <table><thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Tests</th><th>Questions</th><th>Attempted</th>
-  <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th><th>Accuracy %</th><th>Percentile</th></tr></thead>
-  <tbody>${body}</tbody></table>
-  <p style="font-size:10.5px;color:#555;margin-top:8px">Accuracy = correct &divide; attempted. Percentile = % of students in this list&#39;s filter scoring the same or lower.</p>
-  <div class="foot">Sonam Tuitions · generated from the test portal</div>
+  <div class="head"><img src="${LOGO}"/><div class="ttl">Toppers — test by test</div></div>
+  ${blocks}
+  <p style="font-size:10.5px;color:#555">Accuracy = correct &divide; attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are not added up.</p>
+  <div class="foot">Sonam Tuitions &middot; generated ${new Date().toLocaleDateString()}</div>
   <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
   </body></html>`;
   openPaperWindow(html);
