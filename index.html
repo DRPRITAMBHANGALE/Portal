@@ -737,7 +737,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: admin dupfinder"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: delete confirms"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1740,7 +1740,7 @@ async function saveTQOrder(newIds){
   TQ.t.questionIds=newIds;
 }
 async function tqRemove(i){
-  const q=TQ.ordered[i]; if(!confirm(`Remove Q${i+1} from this test? (It stays in the question bank.)`)) return;
+  const q=TQ.ordered[i]; if(!await askDelete(`Remove Q${i+1} from this paper?`,"It stays in your question bank — only this paper changes.","Yes, remove it")) return;
   try{ TQ.ordered.splice(i,1); await saveTQOrder(TQ.ordered.map(x=>x.id)); renderTQList(); }catch(e){ alert(errMsg(e)); }
 }
 function tqNumericToggle(){ const on=el("tqNumeric").checked; el("tqNumRow").style.display=on?"block":"none"; el("tqOptRows").style.display=on?"none":"block"; }
@@ -2160,7 +2160,7 @@ async function deleteSelfUpload(i){
   try{ const ts=await db.collection("tests").get(); const set=new Set(g.ids);
     ts.docs.forEach(t=>{ if((t.data().questionIds||[]).some(id=>set.has(id))) usedIn++; }); }catch(_){}
   const warn=usedIn?`\n\n⚠ ${usedIn} test${usedIn===1?" uses":"s use"} some of these questions — those questions will disappear from ${usedIn===1?"that test":"those tests"}.`:"";
-  if(!confirm(`Delete all ${g.ids.length} questions from this upload (${g.live} live, ${g.pending} in Review queue)? This can't be undone.${warn}`)) return;
+  if(!await askDelete("Undo this whole upload?",`All ${g.ids.length} questions from it are deleted (${g.live} live, ${g.pending} in the Review queue). This can't be undone.${warn}`,"Yes, delete them")) return;
   setBtn("suhDel"+i,true,"Deleting…");
   try{
     for(let k=0;k<g.ids.length;k+=400){ const batch=db.batch(); g.ids.slice(k,k+400).forEach(id=>batch.delete(db.collection("questions").doc(id))); await batch.commit(); }
@@ -2254,7 +2254,7 @@ async function saveFinalizeDraft(id){
   }catch(e){ setMsg("fdMsg",errMsg(e),"err"); }
 }
 async function deleteDraft(id){
-  if(!confirm("Delete this draft paper? The questions stay in your question bank.")) return;
+  if(!await askDelete("Delete this draft paper?","The questions stay in your question bank.","Yes, delete the draft")) return;
   try{ const t=(await db.collection("tests").doc(id).get()).data()||{};
     await db.collection("tests").doc(id).delete();
     logCentreUpdate("draft_deleted",logCentreForTest(null,t),testLogDetail(t,t)); loadTests(); }
@@ -2320,7 +2320,7 @@ async function approveQ(id){ const ref=db.collection("questions").doc(id); const
   if(isNumericQ(x)&&(x.numAnswer===null||x.numAnswer===undefined)){ alert("This is a numerical-answer question with no value yet.\n\nClick Edit, type the correct number, and save — that approves it."); return; }
   await ref.update({status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
   await syncDraftPapers([{id,draftTestId:x.draftTestId}],true); el("rev-"+id)?.remove(); loadReview(); }
-async function rejectQ(id){ if(!confirm("Reject and delete this draft?"))return; const ref=db.collection("questions").doc(id); const x=(await ref.get()).data()||{};
+async function rejectQ(id){ if(!await askDelete("Reject this question?","It is removed from the Review queue and deleted.","Yes, reject it"))return; const ref=db.collection("questions").doc(id); const x=(await ref.get()).data()||{};
   await ref.delete(); await syncDraftPapers([{id,draftTestId:x.draftTestId}],false); el("rev-"+id)?.remove(); loadReview(); }
 
 /* ===== Add a picture (diagram / graph) to a question, an option or a solution =====
@@ -2548,10 +2548,25 @@ function pageDupFinder(){
     <div class="msg" id="dupMsg" style="margin-top:10px"></div>
     <div id="dupResults" style="margin-top:16px"></div>`);
 }
-let DUP_GROUPS=[];
+let DUP_GROUPS=[], DUP_USED=new Set();
+// Every question id that some paper (draft or scheduled) is built from — deleting one of these would
+// leave that paper short, so they are protected.
+async function loadUsedQuestionIds(){
+  const used=new Set();
+  try{
+    const snap=await db.collection("tests").get();
+    snap.forEach(d=>{ const t=d.data();
+      (t.questionIds||[]).forEach(id=>used.add(id));
+      (t.qOrder||[]).forEach(id=>used.add(id));
+      (t.pendingIds||[]).forEach(id=>used.add(id)); });
+  }catch(e){ console.warn("Could not read tests for the duplicate check",e); }
+  return used;
+}
 function sortDupGroup(g){
-  // Prefer keeping a LIVE copy over a pending one (a live one may already be used in a real test); tie-break on oldest.
+  // Keep the copy a paper already uses; then a LIVE copy over a pending one; tie-break on the oldest.
   return [...g].sort((a,b)=>{
+    const au=DUP_USED.has(a.id), bu=DUP_USED.has(b.id);
+    if(au!==bu) return au?-1:1;
     if((a.status==="live")!==(b.status==="live")) return a.status==="live"?-1:1;
     return (a.createdAt?.seconds||0)-(b.createdAt?.seconds||0);
   });
@@ -2559,6 +2574,7 @@ function sortDupGroup(g){
 async function runDupFinder(){
   setBtn("dupBtn",true,"Scanning…"); el("dupResults").innerHTML=""; setMsg("dupMsg","","");
   try{
+    DUP_USED=await loadUsedQuestionIds();
     const snap=await (ME.role==="admin"
       ? db.collection("questions").where("centreId","==",ME.centreId).get()   // only what this centre uploaded
       : db.collection("questions").get());
@@ -2585,29 +2601,35 @@ async function runDupFinder(){
           <div>${examTag(sorted[0].exam)} ${subjTag(sorted[0].subject)} ${tag(sorted[0].topic||"—")} ${tag("Class "+sorted[0].class)} <span class="tag pending">${sorted.length} copies</span></div>
           <p class="q-text" style="font-size:15px;margin:10px 0">${fmtMath(sorted[0].text,sorted[0].subject)}</p>
           ${sorted.map((x,xi)=>`<div class="row" style="justify-content:space-between;align-items:center;padding:7px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px" id="dupitem-${x.id}">
-            <span class="muted" style="font-size:12.5px">${xi===0?'<b style="color:var(--accent)">Keep</b>':'Duplicate'} · ${x.status==="pending"?"Pending":"Live"} · added ${x.createdAt?fmtDate(x.createdAt,true):"—"}</span>
-            ${xi===0?'':`<button class="btn ghost sm danger" onclick="deleteDupItem('${x.id}','dupitem-${x.id}')">Delete this copy</button>`}
+            <span class="muted" style="font-size:12.5px">${xi===0?'<b style="color:var(--accent)">Keep</b>':'Duplicate'} · ${x.status==="pending"?"Pending":"Live"} · added ${x.createdAt?fmtDate(x.createdAt,true):"—"}${DUP_USED.has(x.id)?' · <b style="color:var(--gold)">used in a paper</b>':''}</span>
+            ${xi===0?'':(DUP_USED.has(x.id)?'<span class="muted" style="font-size:12px">kept — a paper uses this copy</span>':`<button class="btn ghost sm danger" onclick="deleteDupItem('${x.id}','dupitem-${x.id}')">Delete this copy</button>`)}
           </div>`).join("")}
         </div>`;
       }).join("");
   }catch(e){ el("dupResults").innerHTML=errBox(e); setBtn("dupBtn",false,"🔍 Scan for duplicates"); }
 }
 async function deleteDupItem(id,domId){
+  if(!await askDelete("Delete this duplicate copy?","The copy marked “Keep” stays in the bank.","Yes, delete this copy")) return;
+  if(DUP_USED.has(id)){ alert("This copy is used in a paper (draft or scheduled). Deleting it would leave that paper short, so it has been kept."); return; }
   try{ await db.collection("questions").doc(id).delete(); el(domId)?.remove(); }
   catch(e){ alert((ME.role==="admin"?"Only questions your own centre uploaded can be deleted. ":"")+"Could not delete: "+errMsg(e)); }
 }
 async function bulkDedupe(){
   const allExtras=[];
-  DUP_GROUPS.forEach(g=>{ sortDupGroup(g).slice(1).forEach(x=>{ if(el("dupitem-"+x.id)) allExtras.push(x.id); }); });
-  if(!allExtras.length) return;
-  if(!confirm(`Delete ${allExtras.length} duplicate question(s), keeping one copy per group?\n\nThis cannot be undone.`)) return;
+  let protectedCount=0;
+  DUP_GROUPS.forEach(g=>{ sortDupGroup(g).slice(1).forEach(x=>{
+    if(!el("dupitem-"+x.id)) return;
+    if(DUP_USED.has(x.id)){ protectedCount++; return; }   // a paper is built from this copy
+    allExtras.push(x.id); }); });
+  if(!allExtras.length){ setMsg("dupMsg",protectedCount?`Nothing deleted — all ${protectedCount} extra copies are used in papers, so they were kept.`:"Nothing left to delete.","ok"); return; }
+  if(!await askDelete("Delete the duplicate copies?",`${allExtras.length} duplicate question(s) will be deleted, keeping one copy per group.${protectedCount?`\n${protectedCount} copy/copies are used in existing papers and will be kept.`:""}\nThis cannot be undone.`,"Yes, delete duplicates")) return;
   try{
     for(let i=0;i<allExtras.length;i+=400){
       const batch=db.batch();
       allExtras.slice(i,i+400).forEach(id=>batch.delete(db.collection("questions").doc(id)));
       await batch.commit();
     }
-    setMsg("dupMsg",`✓ Deleted ${allExtras.length} duplicate question(s).`,"ok");
+    setMsg("dupMsg",`✓ Deleted ${allExtras.length} duplicate question(s).${protectedCount?` ${protectedCount} were kept because a paper uses them.`:""}`,"ok");
     el("dupResults").innerHTML="";
   }catch(e){ alert("Bulk delete failed partway through: "+errMsg(e)); }
 }
@@ -2746,7 +2768,7 @@ async function saveReschedule(id){
   }catch(e){ setMsg("rsMsg",errMsg(e),"err"); setBtn("rsBtn",false,"Save changes"); }
 }
 async function deleteTest(id){
-  if(!confirm("Delete this test? Students will no longer see it. (Past attempts are kept.)")) return;
+  if(!await askDelete("Delete this test?","Students will no longer see it. Past attempts are kept.","Yes, delete the test")) return;
   try{ const t=(await db.collection("tests").doc(id).get()).data()||{};
     await db.collection("tests").doc(id).delete();
     logCentreUpdate("test_deleted",logCentreForTest(null,t),testLogDetail(t,t)); loadTests(); }
@@ -3028,6 +3050,11 @@ async function createTest(){
     }
     questionIds=[...new Set(questionIds)]; // safety net: guarantee no question appears twice in one test
     if(!questionIds.length) throw new Error("No matching questions in the bank yet. Generate/approve more first.");
+    // the bank couldn't fill what was asked for — make that impossible to miss
+    if(short.length){
+      const ok=confirm(`The question bank could only fill:\n\n${short.join("\n")}\n\nThis paper will have only ${questionIds.length} question${questionIds.length===1?"":"s"}.\n\nCreate it anyway?\n(Cancel, then add more questions to the bank, widen the chapters, or use Self Upload.)`);
+      if(!ok){ setBtn("tSaveBtn",false,"Create & schedule"); return; }
+    }
     let solutionsAt=null;
     if(val("tSolMode")==="scheduled"){
       if(!val("tSolAt")) throw new Error("Pick a date & time for when solutions should be shown, or switch back to \"Immediately\".");
@@ -3038,7 +3065,7 @@ async function createTest(){
       createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     logCentreUpdate("test_created",logCentreForTest(ASG),testLogDetail({title,exam,questionIds},ASG));
     closeModal(); loadTests();
-    if(short.length) setTimeout(()=>alert("Test created. Some parts had fewer questions than requested:\n"+short.join("\n")+"\nGenerate more to fill them next time."),200);
+    if(short.length) setTimeout(()=>alert(`Test created with ${questionIds.length} question${questionIds.length===1?"":"s"}. Some parts had fewer questions than requested:\n`+short.join("\n")+"\nAdd more to the bank to fill them next time."),200);
   }catch(e){ setMsg("tMsg",errMsg(e),"err"); setBtn("tSaveBtn",false,"Create & schedule"); }
 }
 
@@ -3116,7 +3143,7 @@ async function openDupStudents(anyCentre){
 }
 async function mergeDupInto(gi,si){
   const g=SDUP_GROUPS[gi]; if(!g) return; const keep=g.students[si], others=g.students.filter((_,i)=>i!==si);
-  if(!confirm(`Keep the login "${keep.loginId}" for ${keep.name} and merge ${others.length} other login${others.length===1?"":"s"} into it?\n\nTest results from ${others.map(o=>o.loginId).join(", ")} move onto the kept login, and those logins are removed. This can't be undone.`)) return;
+  if(!await askDelete("Merge these duplicate logins?",`Keep "${keep.loginId}" for ${keep.name} and merge ${others.length} other login${others.length===1?"":"s"} into it.\nResults from ${others.map(o=>o.loginId).join(", ")} move onto the kept login, and those logins are removed. This can't be undone.`,"Yes, merge them")) return;
   el("dupList").innerHTML=`<p class="muted">Merging…</p>`;
   try{
     for(const o of others){
@@ -3168,7 +3195,7 @@ async function runBulkDeleteStudents(){
   if(!BULK_DEL.length) return;
   if(val("bdConfirm").trim().toUpperCase()!=="DELETE") return setMsg("bdMsg",'Type DELETE in the box to confirm.',"err");
   const alsoResults=el("bdAttempts").checked;
-  if(!confirm(`Delete ${BULK_DEL.length} student login(s)?${alsoResults?" Their past test results will be deleted too.":" Their past results will be kept."}\n\nThis cannot be undone.`)) return;
+  if(!await askDelete(`Delete ${BULK_DEL.length} student login(s)?`,`${alsoResults?"Their past test results will be deleted too.":"Their past results will be kept."}\nThis cannot be undone.`,"Yes, delete them")) return;
   setBtn("bdBtn",true,`<span class="loader"></span> Deleting…`);
   const prog=t=>{ if(el("bdProgress")) el("bdProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">${t}</div>`; };
   let okCount=0; const fails=[]; const names=[];
@@ -3321,7 +3348,7 @@ async function loadAdmins(){
   }catch(e){ el("adminList").innerHTML=errBox(e); }
 }
 async function delAdmin(uid){
-  if(!confirm("Delete this centre admin? They lose access immediately.")) return;
+  if(!await askDelete("Delete this centre admin?","They lose access to the portal immediately.","Yes, delete the admin")) return;
   try{ await db.collection("users").doc(uid).delete(); loadAdmins(); }
   catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
@@ -3461,7 +3488,7 @@ async function doResetPassword(uid){
   }catch(e){ setMsg("rpMsg",errMsg(e),"err"); setBtn("rpBtn",false,"Reset password"); }
 }
 async function delStudent(uid){
-  if(!confirm("Delete this student? They lose access and disappear from the list. (Their past results are kept unless removed separately.)")) return;
+  if(!await askDelete("Delete this student?","They lose access and disappear from the list. Their past results are kept unless removed separately.","Yes, delete the student")) return;
   try{
     const snap=await db.collection("users").doc(uid).get();
     const stu=snap.exists?snap.data():null;
@@ -4209,7 +4236,7 @@ async function startScheduledPractice(id){
   const t=(await db.collection("practiceTests").doc(id).get()).data();
   launchExam({id,title:t.title,exam:t.exam,subjects:[],questionIds:t.questionIds,duration:t.duration,isPractice:true},true);
 }
-async function delScheduledPractice(id){ if(!confirm("Remove this scheduled practice?"))return; await db.collection("practiceTests").doc(id).delete(); loadScheduledPractice(); }
+async function delScheduledPractice(id){ if(!await askDelete("Remove this scheduled practice?","You can always build another one from the Practice tab.","Yes, remove it"))return; await db.collection("practiceTests").doc(id).delete(); loadScheduledPractice(); }
 // Every test that is over for this student — already taken, or its window has closed.
 async function pagePastTests(){
   setView(`<h1 class="page-title">Test history</h1>
@@ -4263,12 +4290,24 @@ async function pageHistory(){
    12. EXAM ENGINE (exam-aware scoring + negative marking)
    ============================================================ */
 let EXAM=null;
-async function startTest(testId){ const doc=await db.collection("tests").doc(testId).get(); const t=effWindow({id:testId,...doc.data()},ME.centreId);
-  if(testStatus(t)!=="open"){ alert(testStatus(t)==="scheduled"?"This test hasn't opened yet for your centre.":"This test has closed for your centre."); return; }
-  launchExam(t,false); }
+async function startTest(testId){
+  try{
+    const doc=await db.collection("tests").doc(testId).get();
+    if(!doc.exists){ alert("This test is no longer available — please refresh the page."); return; }
+    const t=effWindow({id:testId,...doc.data()},ME.centreId);
+    if(testStatus(t)!=="open"){ alert(testStatus(t)==="scheduled"?"This test hasn't opened yet for your centre.":"This test has closed for your centre."); return; }
+    if(!(t.questionIds||[]).length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
+    await launchExam(t,false);
+  }catch(e){ console.error("startTest failed",e); alert("Could not start the test.\n\n"+errMsg(e)+"\n\nCheck your internet connection and try again — if it keeps happening, show this message to your centre."); }
+}
+window.addEventListener("unhandledrejection",e=>{ console.error("Unhandled error:",e&&e.reason); });
 let VIS_HANDLER=null;
 async function launchExam(test,isPractice){
-  const qDocs=await Promise.all(test.questionIds.map(id=>db.collection("questions").doc(id).get()));
+  const ids=(test&&test.questionIds)||[];
+  if(!ids.length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
+  // fetch in batches so a long paper on a weak connection doesn't fire 150 requests at once
+  const qDocs=[];
+  for(let i=0;i<ids.length;i+=25) qDocs.push(...await Promise.all(ids.slice(i,i+25).map(id=>db.collection("questions").doc(id).get())));
   let questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
   if(!questions.length){ alert("This test has no available questions."); return; }
   // Group by subject so each subject sits together as its own section (like the real exam paper),
@@ -4547,6 +4586,27 @@ function examTag(e){return `<span class="tag exam">${esc(e||"—")}</span>`;}
 function subjTag(s){const c={Physics:"phy",Chemistry:"chem",Mathematics:"math",Biology:"bio",Botany:"bot",Zoology:"zoo"}[s]||"";return `<span class="tag ${c}">${esc(s)}</span>`;}
 function subjChips(arr){return (arr||[]).map(subjTag).join(" ");}
 function tableHTML(head,rows){return `<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;}
+// Every delete in the portal goes through this: a clear Yes / No box, so nothing is removed by a stray click.
+function askDelete(title,message,yesLabel){
+  return new Promise(res=>{
+    const bg=document.createElement("div");
+    bg.style.cssText="position:fixed;inset:0;background:rgba(20,18,14,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px";
+    bg.innerHTML=`<div class="card" style="max-width:460px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,.32)">
+      <h3 style="margin:0 0 8px;color:var(--danger)">🗑 ${esc(title||"Delete?")}</h3>
+      <p class="muted" style="margin:0 0 18px;white-space:pre-line">${esc(message||"")}</p>
+      <div class="row end" style="gap:8px">
+        <button class="btn ghost" id="askNoBtn">No, keep it</button>
+        <button class="btn danger" id="askYesBtn">${esc(yesLabel||"Yes, delete")}</button></div></div>`;
+    document.body.appendChild(bg);
+    const finish=v=>{ document.removeEventListener("keydown",onKey); bg.remove(); res(v); };
+    function onKey(e){ if(e.key==="Escape") finish(false); }
+    bg.querySelector("#askNoBtn").onclick=()=>finish(false);
+    bg.querySelector("#askYesBtn").onclick=()=>finish(true);
+    bg.onclick=e=>{ if(e.target===bg) finish(false); };       // clicking outside = No
+    document.addEventListener("keydown",onKey);
+    setTimeout(()=>bg.querySelector("#askNoBtn").focus(),30); // "No" is focused, so Enter is safe
+  });
+}
 function emptyState(t,s){return `<div class="empty"><div class="ico">◔</div><h3 class="serif" style="margin:10px 0 4px">${t}</h3><p class="muted">${s}</p></div>`;}
 function errBox(e){return `<div class="note">Couldn't load: ${esc(errMsg(e))}. ${/index/i.test(e.message||"")?'A Firestore index may be needed — click the link in the browser console (F12) to create it, then reload.':''}</div>`;}
 function errMsg(e){return (e&&e.message)||String(e);}
