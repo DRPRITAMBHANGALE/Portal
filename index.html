@@ -721,7 +721,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: clear selection"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: powers fixed"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1336,13 +1336,26 @@ async function readWordWithEquations(arrayBuffer){
     "£":"≤","³":"≥","¹":"≠","»":"≈","±":"±","´":"×","·":"·","®":"→","¬":"←","«":"↔","Þ":"⇒","Û":"⇔","¥":"∞","°":"°","¢":"′","²":"″","\\":"∴","¶":"∂","Ñ":"∇","µ":"∝","ò":"∫","å":"∑","Î":"∈","Ç":"∩","È":"∪","^":"⊥","Ð":"∠","¼":"…","-":"−","@":"≅","~":"∼","Æ":"∅","Ö":"√","×":"·"};
   const symText=s=>[...s].map(ch=>{ const c=ch.charCodeAt(0); const k=c>=0xF000?String.fromCharCode(c-0xF000):ch; return SYMF[k]||k; }).join("");
   function runIsSymbol(r){ const f=r.getElementsByTagName("w:rFonts")[0]; return !!f&&/^symbol$/i.test(f.getAttribute("w:ascii")||f.getAttribute("w:hAnsi")||""); }
+  // "superscript" (a power, like 2⁵ or Cu²⁺) or "subscript" (like H₂O) set on the run itself
+  function runVertAlign(r){
+    const pr=r.getElementsByTagName("w:rPr")[0]; if(!pr) return "";
+    const v=pr.getElementsByTagName("w:vertAlign")[0]; if(!v) return "";
+    const val=(v.getAttribute("w:val")||"").toLowerCase();
+    return (val==="superscript"||val==="subscript")?val:"";
+  }
   function paraText(p){
     let s="";
     (function walk(n,sym){
       for(let c=n.firstChild;c;c=c.nextSibling){
         if(c.nodeType!==1) continue;
         const ln=local(c);
-        if(ln==="r"){ walk(c,runIsSymbol(c)); continue; }
+        if(ln==="r"){
+          const va=runVertAlign(c);
+          if(va){ const at=s.length; walk(c,runIsSymbol(c));
+            const t=s.slice(at).trim();
+            s=s.slice(0,at)+(t?((va==="superscript"?"^{":"_{")+t+"}"):"");
+          } else walk(c,runIsSymbol(c));
+          continue; }
         if(ln==="t") s+=sym?symText(c.textContent):c.textContent;
         else if(ln==="tab"){ if(local(c.parentNode)==="r") s+="\t"; }
         else if(ln==="br"||ln==="cr") s+="\n";
@@ -1363,6 +1376,8 @@ async function readWordWithEquations(arrayBuffer){
         else walk(c,sym);
       }
     })(p,false);
+    // Word often splits one power across several runs ("10" then "-19") — join them back up
+    s=s.replace(/\^\{([^{}]*)\}(?:[ \t]*)\^\{/g,"^{$1").replace(/_\{([^{}]*)\}(?:[ \t]*)_\{/g,"_{$1");
     return s;
   }
   const body=doc.getElementsByTagName("w:body")[0]||doc.documentElement;
