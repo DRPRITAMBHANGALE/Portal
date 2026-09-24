@@ -721,7 +721,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: pyq removed"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: simpler upload"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1830,10 +1830,6 @@ function openSelfUpload(){
     <label>② Subjects by question number</label>
     <div id="suSections"></div>
     <div class="row" style="gap:8px;align-items:center;margin-top:6px"><span class="muted" style="font-size:13px">Any question not in the ranges above is:</span><select id="suSubject" style="width:auto;flex:1"></select></div>
-    <details style="margin-top:10px"><summary style="cursor:pointer;font-size:13.5px;color:var(--ink-soft)">Question bank labels (optional) — class, chapter &amp; difficulty used to file these questions in your bank</summary>
-      <div class="grid cols-2"><div><label>Class (for the question bank)</label>${classSelect("suClass",false)}</div><div><label>Chapter / topic label</label><input id="suTopic" placeholder="Leave blank to use the subject name"/></div></div>
-      <label>Difficulty</label>${difficultySelect("suDiff")}
-    </details>
     <label>③ Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
     <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a></p>
     <div id="suPreview"></div>
@@ -1851,7 +1847,6 @@ function openSelfUpload(){
       <button class="btn" id="suTestBtn" onclick="selfUploadFinalize()" disabled>✓ Save as final paper</button>
     </div>`,true);
   fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec");
-  if([...el("suDiff").options].some(o=>o.value==="Moderate")) el("suDiff").value="Moderate";
   el("suExam").onchange=()=>{ fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec"); };
 }
 let SELF_UPLOAD_LIVE_IDS=[], SELF_UPLOAD_DRAFT_ID=null;
@@ -1869,10 +1864,13 @@ async function handleSelfUpload(){
       if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
       raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
     }
-    const defaults={exam:val("suExam"),subject:val("suSubject"),cls:val("suClass"),topic:val("suTopic").trim()||val("suSubject"),difficulty:val("suDiff")};
+    // no bank labels are asked for any more: file each question under the paper's own class,
+    // its subject as the chapter label, and a middle difficulty
+    const suCls=val("suPaperClass")==="12"?"12":"11";
+    const defaults={exam:val("suExam"),subject:val("suSubject"),cls:suCls,topic:val("suSubject"),difficulty:"Moderate"};
     const ranges=readSectionRanges("suSec",val("suExam"));
     SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults,W);
-    SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.num,ranges,q.subject); if(!val("suTopic").trim()) q.topic=q.subject; });
+    SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.num,ranges,q.subject); q.topic=q.subject; });
     if(!SELF_UPLOAD_PARSED.length){ setMsg("suMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err"); return; }
     const ready=SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready");
     const fixable=SELF_UPLOAD_PARSED.filter(q=>q.tier==="fixable");
@@ -1887,7 +1885,7 @@ async function handleSelfUpload(){
       const title=val("suTitle").trim()||f.name.replace(/\.docx$/i,"");
       if(!val("suTitle").trim()) el("suTitle").value=title;
       const subjects=[...new Set([...ready,...fixable].map(q=>q.subject))];
-      await draftRef.set({title,exam:val("suExam"),type:"selfUpload",subjects,class:val("suPaperClass")||val("suClass"),
+      await draftRef.set({title,exam:val("suExam"),type:"selfUpload",subjects,class:val("suPaperClass")||"11",
         questionIds:liveIds.slice(),qOrder:order,pendingIds,duration:parseInt(val("suDur"))||60,
         scope:ME.role==="admin"?"draft_"+ME.centreId:"draft",finalScope:ME.role==="master"?"all":ME.centreId,draft:true,isPractice:false,
         startAt:null,endAt:null,solutionsAt:null,uploadId,uploadName:f.name,
@@ -2148,7 +2146,7 @@ async function deleteSelfUpload(i){
 async function selfUploadFinalize(){
   if(!SELF_UPLOAD_DRAFT_ID) return;
   let ASG; try{ ASG=readCentreAssign("suA",val("suStart"),val("suEnd")); }catch(e){ return setMsg("suActionMsg",errMsg(e),"err"); }
-  const fields={title:val("suTitle").trim(),class:val("suPaperClass")||val("suClass"),duration:parseInt(val("suDur"))||60,...ASG,solutionsAt:null};
+  const fields={title:val("suTitle").trim(),class:val("suPaperClass")||"11",duration:parseInt(val("suDur"))||60,...ASG,solutionsAt:null};
   if(!fields.title) return setMsg("suActionMsg","Add a paper title first.","err");
   setBtn("suTestBtn",true,"Saving…");
   try{ const ranges=readSectionRanges("suSec",val("suExam")); if(ranges.length) await applySectionsToTest(SELF_UPLOAD_DRAFT_ID,ranges); }
