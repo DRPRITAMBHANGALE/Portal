@@ -727,7 +727,8 @@ const STAFF_NAV=[
 const ADMIN_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},{id:"review",label:"Review queue",ic:"⚑"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
-  {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"}
+  {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"},
+  {id:"dupfinder",label:"Duplicate Finder",ic:"🧬"}
 ];
 const NAV={ master:STAFF_NAV, admin:ADMIN_NAV,
   student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"pasttests",label:"Test history",ic:"▤"},{id:"history",label:"My results",ic:"⤓"}] };
@@ -736,7 +737,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: no repeats"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: admin dupfinder"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2542,7 +2543,7 @@ async function aiVerifyAudit(){
 function normalizeQText(t){ return (t||"").toLowerCase().replace(/[^\w\s]/g,"").replace(/\s+/g," ").trim(); }
 function pageDupFinder(){
   setView(`<h1 class="page-title">Duplicate Finder</h1>
-    <p class="page-sub">Finds questions saved as separate entries with identical or near-identical wording — the likely cause of a student seeing the same question twice in one test. Groups them so you can keep one copy and remove the rest.</p>
+    <p class="page-sub">Finds questions saved as separate entries with identical or near-identical wording — the likely cause of a student seeing the same question twice in one test. Groups them so you can keep one copy and remove the rest.${ME.role==="admin"?` Scans the questions uploaded by ${esc(centreName(ME.centreId))}.`:""}</p>
     <button class="btn" id="dupBtn" onclick="runDupFinder()">🔍 Scan for duplicates</button>
     <div class="msg" id="dupMsg" style="margin-top:10px"></div>
     <div id="dupResults" style="margin-top:16px"></div>`);
@@ -2558,7 +2559,9 @@ function sortDupGroup(g){
 async function runDupFinder(){
   setBtn("dupBtn",true,"Scanning…"); el("dupResults").innerHTML=""; setMsg("dupMsg","","");
   try{
-    const snap=await db.collection("questions").get();
+    const snap=await (ME.role==="admin"
+      ? db.collection("questions").where("centreId","==",ME.centreId).get()   // only what this centre uploaded
+      : db.collection("questions").get());
     const groups={};
     snap.forEach(d=>{
       const x=d.data();
@@ -2591,7 +2594,7 @@ async function runDupFinder(){
 }
 async function deleteDupItem(id,domId){
   try{ await db.collection("questions").doc(id).delete(); el(domId)?.remove(); }
-  catch(e){ alert("Could not delete: "+errMsg(e)); }
+  catch(e){ alert((ME.role==="admin"?"Only questions your own centre uploaded can be deleted. ":"")+"Could not delete: "+errMsg(e)); }
 }
 async function bulkDedupe(){
   const allExtras=[];
