@@ -721,7 +721,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: simpler upload"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: upload solutions time"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1841,6 +1841,11 @@ function openSelfUpload(){
     <label>Duration (min)</label><input id="suDur" type="number" value="60"/>
     <div class="grid cols-2"><div><label>Opens (common)</label><input id="suStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="suEnd" type="datetime-local"/></div></div>
     ${centreAssignHTML("suA")}
+    <label>When should students see the answer key &amp; solutions?</label>
+    <select id="suSolMode" onchange="suSolModeChanged()">
+      <option value="immediate">Immediately after each student submits</option>
+      <option value="scheduled">Only from a specific date &amp; time</option></select>
+    <div id="suSolAtRow" style="display:none"><label>Show solutions from</label><input id="suSolAt" type="datetime-local"/></div>
     <div class="msg" id="suActionMsg"></div>
     <div class="row end" style="margin-top:16px;gap:8px">
       <button class="btn ghost" onclick="closeModal()">Close</button>
@@ -1848,6 +1853,11 @@ function openSelfUpload(){
     </div>`,true);
   fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec");
   el("suExam").onchange=()=>{ fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec"); };
+}
+function suSolModeChanged(){
+  const show=val("suSolMode")==="scheduled";
+  el("suSolAtRow").style.display=show?"block":"none";
+  if(show&&!val("suSolAt")&&val("suEnd")) el("suSolAt").value=val("suEnd"); // handy default: the paper's Closes time
 }
 let SELF_UPLOAD_LIVE_IDS=[], SELF_UPLOAD_DRAFT_ID=null;
 async function handleSelfUpload(){
@@ -2146,7 +2156,12 @@ async function deleteSelfUpload(i){
 async function selfUploadFinalize(){
   if(!SELF_UPLOAD_DRAFT_ID) return;
   let ASG; try{ ASG=readCentreAssign("suA",val("suStart"),val("suEnd")); }catch(e){ return setMsg("suActionMsg",errMsg(e),"err"); }
-  const fields={title:val("suTitle").trim(),class:val("suPaperClass")||"11",duration:parseInt(val("suDur"))||60,...ASG,solutionsAt:null};
+  let solutionsAt=null;
+  if(val("suSolMode")==="scheduled"){
+    if(!val("suSolAt")) return setMsg("suActionMsg",'Pick a date & time for when solutions should be shown, or switch back to "Immediately".',"err");
+    solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("suSolAt")));
+  }
+  const fields={title:val("suTitle").trim(),class:val("suPaperClass")||"11",duration:parseInt(val("suDur"))||60,...ASG,solutionsAt};
   if(!fields.title) return setMsg("suActionMsg","Add a paper title first.","err");
   setBtn("suTestBtn",true,"Saving…");
   try{ const ranges=readSectionRanges("suSec",val("suExam")); if(ranges.length) await applySectionsToTest(SELF_UPLOAD_DRAFT_ID,ranges); }
