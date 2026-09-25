@@ -504,6 +504,32 @@ function warnModal(title,message){
   modal(`<h2 style="font-size:19px;color:#822f22">⚠ ${esc(title)}</h2><p style="margin-top:8px;line-height:1.5;white-space:pre-line">${esc(message)}</p>
     <div class="row end" style="margin-top:18px"><button class="btn danger" onclick="closeModal()">I understand</button></div>`);
 }
+/* ===== Every test is named the same way: DATE - EXAM - NAME  (e.g. 26/09/2026 - NEET - Thermal
+   properties of matter). You type only the name; the date comes from the paper's Opens date (today if
+   it has none yet) and the exam from the Exam box. ===== */
+const dmy=d=>`${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+function testTitleDate(p){ const v=val(p+"Start"); const d=v?new Date(v):new Date(); return dmy(isNaN(d.getTime())?new Date():d); }
+function composeTestTitle(p,fallbackName){
+  const name=(val(p+"Title").trim()||fallbackName||"").trim();
+  const exam=val(p+"Exam")||"";
+  return [testTitleDate(p),exam,name].filter(x=>x!=="").join(" - ");
+}
+// the name on its own, so editing a test later doesn't stack a second date/exam in front of it
+function stripTestTitle(t){
+  const keys=(typeof EXAM_KEYS!=="undefined"?EXAM_KEYS:[]).map(k=>String(k).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|");
+  const re=new RegExp("^\\s*\\d{1,2}/\\d{1,2}/\\d{2,4}\\s*-\\s*(?:"+(keys||"[A-Za-z-]+")+")\\s*-\\s*","i");
+  return String(t||"").replace(re,"").trim();
+}
+function updTitlePrev(p){
+  const box=el(p+"TitlePrev"); if(!box) return;
+  const name=val(p+"Title").trim();
+  box.innerHTML=`Saved as: <b>${esc(composeTestTitle(p,name?"":"…"))}</b>`;
+}
+function titleFieldHTML(p,value,placeholder){
+  return `<label>Test name <span class="muted" style="font-weight:400">— the date and exam are added in front automatically</span></label>
+    <input id="${p}Title" value="${esc(value||"")}" placeholder="${esc(placeholder||"e.g. Thermal properties of matter & mathematical methods")}" oninput="updTitlePrev('${p}')"/>
+    <p class="muted" id="${p}TitlePrev" style="font-size:12.5px;margin:4px 0 0"></p>`;
+}
 function scopeClasses(v){return v==="both"?["11","12"]:[v];}
 // Pull live question IDs for one subject across given classes & chapters.
 // While one paper is being built, every question already taken is remembered by its WORDING, not just
@@ -760,7 +786,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: lock on leave"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: exam shown"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1996,7 +2022,7 @@ function openSelfUpload(){
     <div class="msg" id="suMsg"></div>
     <hr class="sep"/>
     <p class="muted" style="margin-bottom:2px">📝 <b>A draft paper is made automatically</b> from this file as soon as it's read. Questions you approve later from the Review queue are added to it in their original place. When you're happy, click <b>Save as final paper</b> — here, or later from <b>Tests → Draft papers</b>.</p>
-    <label>Paper title</label><input id="suTitle" placeholder="Leave blank to use the file name"/>
+    ${titleFieldHTML("su","","Leave blank to use the file name")}
     <label>Paper is for</label><select id="suPaperClass"><option value="both">Class 11 &amp; 12 students</option><option value="11">Class 11 students</option><option value="12">Class 12 students</option></select>
     <label>Duration (min)</label><input id="suDur" type="number" value="60"/>
     <div class="grid cols-2"><div><label>Opens (common)</label><input id="suStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="suEnd" type="datetime-local"/></div></div>
@@ -2056,8 +2082,9 @@ async function handleSelfUpload(){
     SELF_UPLOAD_LIVE_IDS=liveIds;
     // create the draft paper straight away (students and centre admins can't see drafts)
     try{
-      const title=val("suTitle").trim()||f.name.replace(/\.docx$/i,"");
-      if(!val("suTitle").trim()) el("suTitle").value=title;
+      const baseName=val("suTitle").trim()||f.name.replace(/\.docx$/i,"");
+      if(!val("suTitle").trim()){ el("suTitle").value=baseName; updTitlePrev("su"); }
+      const title=composeTestTitle("su",baseName);
       const subjects=[...new Set([...ready,...fixable].map(q=>q.subject))];
       await draftRef.set({title,exam:val("suExam"),type:"selfUpload",subjects,class:val("suPaperClass")||"11",
         questionIds:liveIds.slice(),qOrder:order,pendingIds,duration:parseInt(val("suDur"))||60,
@@ -2339,7 +2366,7 @@ async function selfUploadFinalize(){
     if(!val("suSolAt")) return setMsg("suActionMsg",'Pick a date & time for when solutions should be shown, or switch back to "Immediately".',"err");
     solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("suSolAt")));
   }
-  const fields={title:val("suTitle").trim(),class:val("suPaperClass")||"11",duration:parseInt(val("suDur"))||60,...ASG,solutionsAt};
+  const fields={title:composeTestTitle("su"),exam:val("suExam"),class:val("suPaperClass")||"11",duration:parseInt(val("suDur"))||60,...ASG,solutionsAt};
   if(!fields.title) return setMsg("suActionMsg","Add a paper title first.","err");
   setBtn("suTestBtn",true,"Saving…");
   try{ const ranges=readSectionRanges("suSec",val("suExam")); if(ranges.length) await applySectionsToTest(SELF_UPLOAD_DRAFT_ID,ranges); }
@@ -2386,8 +2413,8 @@ async function openFinalizeDraft(id){
   const t=(await db.collection("tests").doc(id).get()).data(); const waiting=(t.pendingIds||[]).length;
   modal(`<h2>✓ Save as final paper</h2><p class="muted">${esc(t.title)} · ${(t.questionIds||[]).length} questions</p>
     ${waiting?`<div class="note" style="margin-bottom:10px">⚠ ${waiting} question${waiting===1?" is":"s are"} still waiting in the Review queue. Approve ${waiting===1?"it":"them"} first if you want ${waiting===1?"it":"them"} in this paper — they're added automatically.</div>`:""}
-    <label>Title</label><input id="fdTitle" value="${esc(t.title)}"/>
-    <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="fdExam">${EXAM_KEYS.map(e=>`<option ${e===t.exam?"selected":""}>${e}</option>`).join("")}</select></div>
+    ${titleFieldHTML("fd",stripTestTitle(t.title),"")}
+    <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="fdExam">${EXAM_KEYS.map(e=>`<option ${e===examOf(t)?"selected":""}>${e}</option>`).join("")}</select></div>
       <div><label>Class (who can see it)</label><select id="fdClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="fdDur" type="number" value="${t.duration||60}"/></div>
       <div></div></div>
@@ -2410,7 +2437,7 @@ async function saveFinalizeDraft(id){
       solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("fdSolAt"))); }
     const ASG=readCentreAssign("fdA",val("fdStart"),val("fdEnd"));
     const secR=readSectionRanges("fdSec",val("fdExam")); if(secR.length){ setBtn("fdBtn",true,"Setting sections…"); await applySectionsToTest(id,secR); }
-    const fields={title:val("fdTitle").trim()||"Test",exam:val("fdExam"),class:val("fdClass"),duration:parseInt(val("fdDur"))||60,...ASG,solutionsAt};
+    const fields={title:composeTestTitle("fd","Test"),exam:val("fdExam"),class:val("fdClass"),duration:parseInt(val("fdDur"))||60,...ASG,solutionsAt};
     setBtn("fdBtn",true,"Saving…");
     if(await finalizeDraft(id,fields)){ closeModal(); loadTests(); } else setBtn("fdBtn",false,"✓ Save as final paper");
   }catch(e){ setMsg("fdMsg",errMsg(e),"err"); }
@@ -2870,13 +2897,13 @@ async function loadTests(){
     const drafts=docs.filter(d=>d.data().draft); docs=docs.filter(d=>!d.data().draft);
     if(el("draftCard")){ el("draftCard").style.display=drafts.length?"block":"none";
       el("draftList").innerHTML=drafts.length?tableHTML(["Title","Exam","Questions","Waiting in Review queue",""],drafts.map(d=>{const t=d.data();const w=(t.pendingIds||[]).length;
-        return [`<b>${esc(t.title)}</b><br><span class="muted">${esc(t.uploadName||"")}</span>`,examTag(t.exam),(t.questionIds||[]).length,
+        return [`<b>${esc(t.title)}</b><br><span class="muted">${esc(t.uploadName||"")}</span>`,examTag(examOf(t)),(t.questionIds||[]).length,
           w?`<a href="#" onclick="go('review');return false">${w} to approve →</a>`:'<span class="muted">none — ready</span>',
           `<button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button> <button class="btn ghost sm danger" onclick="deleteDraft('${d.id}')">Delete</button>`];})):""; }
     el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
       :tableHTML(["Title","Exam","Subjects","Q","Scope","Window","Status",""],
         docs.map(d=>{const t=d.data();const canEdit=canEditTest(t);return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}${t.solutionsAt?` · 🔒 Solutions from ${fmtDate(t.solutionsAt)}`:""}</span>`,
-          examTag(t.exam),subjChips(t.subjects),(t.questionIds||[]).length,scopeLabel(t),windowLabel(t),testStatusTag(t),
+          examTag(examOf(t)),subjChips(t.subjects),(t.questionIds||[]).length,scopeLabel(t),windowLabel(t),testStatusTag(t),
           `<button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button>`
           +(canEdit?` <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button> <button class="btn ghost sm" onclick="openReschedule('${d.id}')">Reschedule</button> <button class="btn ghost sm danger" onclick="deleteTest('${d.id}')">Delete</button>`:"")];}));
   }catch(e){ el("testList").innerHTML=errBox(e); }
@@ -2885,8 +2912,8 @@ async function openReschedule(id){
   const t=(await db.collection("tests").doc(id).get()).data();
   const toLocal=ts=>{ if(!ts)return""; const d=ts.toDate(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
   modal(`<h2>Reschedule test</h2><p class="muted">${esc(t.title)}</p>
-    <label>Title</label><input id="rsTitle" value="${esc(t.title)}"/>
-    <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="rsExam">${EXAM_KEYS.map(e=>`<option ${e===t.exam?"selected":""}>${e}</option>`).join("")}</select></div>
+    ${titleFieldHTML("rs",stripTestTitle(t.title),"")}
+    <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="rsExam">${EXAM_KEYS.map(e=>`<option ${e===examOf(t)?"selected":""}>${e}</option>`).join("")}</select></div>
       <div><label>Class (who can see it)</label><select id="rsClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
     <div class="grid cols-2"><div><label>Opens</label><input id="rsStart" type="datetime-local" value="${toLocal(t.startAt)}"/></div>
       <div><label>Closes</label><input id="rsEnd" type="datetime-local" value="${toLocal(t.endAt)}"/></div></div>
@@ -2918,7 +2945,7 @@ async function saveReschedule(id){
       if(ranges.length) await applySectionsToTest(id,ranges);
     }
     const ASG=readCentreAssign("rsA",val("rsStart"),val("rsEnd"));
-    await db.collection("tests").doc(id).update({title:val("rsTitle").trim()||"Test",exam:val("rsExam"),class:val("rsClass"),
+    await db.collection("tests").doc(id).update({title:composeTestTitle("rs","Test"),exam:val("rsExam"),class:val("rsClass"),
       startAt:val("rsStart")?firebase.firestore.Timestamp.fromDate(new Date(val("rsStart"))):null,
       endAt:val("rsEnd")?firebase.firestore.Timestamp.fromDate(new Date(val("rsEnd"))):null,
       duration:parseInt(val("rsDur"))||30,solutionsAt,...ASG});
@@ -3112,7 +3139,7 @@ function openPaperWindow(html){
 }
 function openCreateTest(){
   modal(`<h2>New test</h2>
-    <label>Title</label><input id="tTitle" placeholder="e.g. Weekly Mock — Mechanics"/>
+    ${titleFieldHTML("t","","e.g. Weekly Mock — Mechanics")}
     <div class="grid cols-2">
       <div><label>Test type</label><select id="tType" onchange="tRebuild()">
         <option value="chapter">Chapter test (pick &amp; merge chapters — any subjects)</option>
@@ -3197,7 +3224,7 @@ function tSubjToggle(cb){
 }
 async function createTest(){
   startPull();
-  const title=val("tTitle").trim(),exam=val("tExam"),type=val("tType");
+  const title=composeTestTitle("t"),exam=val("tExam"),type=val("tType");
   if(!title) return setMsg("tMsg","Add a title.","err");
   let ASG; try{ ASG=readCentreAssign("tA",val("tStart"),val("tEnd")); }catch(e){ return setMsg("tMsg",errMsg(e),"err"); }
   setBtn("tSaveBtn",true,"Building…");
@@ -4263,7 +4290,7 @@ async function pageStudentHome(){
     if(liveDocs.length){
       html+=`<div class="grid cols-2">`+liveDocs.map(d=>{const t=effWindow(d.data(),ME.centreId);const st=testStatus(t);const taken=done.has(d.id);
         return `<div class="card"><div class="row" style="justify-content:space-between"><h3>${esc(t.title)}</h3>${testStatusTag(t)}</div>
-          <p class="muted">${examTag(t.exam)} ${subjChips(t.subjects)} · ${(t.questionIds||[]).length} Q · ${t.duration} min · Class ${clsLabel(t.class)}</p>
+          <p class="muted">${examTag(examOf(t))} ${subjChips(t.subjects)} · ${(t.questionIds||[]).length} Q · ${t.duration} min · Class ${clsLabel(t.class)}</p>
           <p class="muted" style="font-size:12.5px">${windowLabel(t)} · ${EXAMS[t.exam]?.note||""}</p>
           ${taken?`<button class="btn ghost full" disabled>✓ Completed</button>`
             :st==="open"?`<button class="btn full" onclick="startTest('${d.id}')">Start test</button>`
@@ -4814,6 +4841,12 @@ function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random
 function fmtDate(ts,short){if(!ts)return"—";const d=ts.toDate?ts.toDate():new Date(ts);return short?d.toLocaleDateString():d.toLocaleString([],{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}
 function tag(t){return `<span class="tag" style="background:#ece9e0;color:var(--ink-soft)">${esc(t)}</span>`;}
 function examTag(e){return `<span class="tag exam">${esc(e||"—")}</span>`;}
+// older papers may have no exam saved on them — fall back to the exam in their title
+function examOf(t){
+  if(t&&t.exam) return t.exam;
+  const m=String((t&&t.title)||"").match(new RegExp("\\b("+EXAM_KEYS.map(k=>String(k).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|")+")\\b","i"));
+  return m?EXAM_KEYS.find(k=>k.toLowerCase()===m[1].toLowerCase())||m[1]:"";
+}
 function subjTag(s){const c={Physics:"phy",Chemistry:"chem",Mathematics:"math",Biology:"bio",Botany:"bot",Zoology:"zoo"}[s]||"";return `<span class="tag ${c}">${esc(s)}</span>`;}
 function subjChips(arr){return (arr||[]).map(subjTag).join(" ");}
 function tableHTML(head,rows){return `<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;}
