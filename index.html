@@ -737,7 +737,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: delete confirms"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: check answers fix"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -4522,29 +4522,37 @@ function showResult(r){
         </div>`}`);
   if(!solutionsUnlocked(EXAM.test,EXAM.isPractice)) return;
   el("solList").innerHTML=EXAM.questions.map((q,i)=>{const sel=EXAM.answers[i];
-    return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${q.subject}${q.topic?" · "+q.topic:""}</div>
+    const opts=Array.isArray(q.options)?q.options:[];
+    return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${esc(q.subject||"—")}${q.topic?" · "+esc(q.topic):""}</div>
       <p class="q-text" style="font-size:16px;margin:6px 0 14px">${qLabel(q)}</p>
       ${isNumericQ(q)
         ? `<div class="opt ${sel===undefined||sel===""?"":(numAnswerCorrect(q,sel)?"correct":"wrong")}" style="cursor:default;padding:10px 14px;margin-bottom:8px;display:block">
              <div>Your answer: <b style="font-family:'Courier New',monospace">${sel===undefined||sel===""?"— not attempted":esc(String(sel))}</b></div>
              <div style="margin-top:4px">Correct answer: <b style="font-family:'Courier New',monospace">${esc(numAnswerLabel(q))}</b></div></div>`
-        : q.options.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
+        : opts.map((o,k)=>{let c="";if(k===q.correct)c="correct";else if(k===sel)c="wrong";
         return `<div class="opt ${c}" style="cursor:default;padding:10px 14px;margin-bottom:8px"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)} ${k===sel?'<b style="font-size:12px">· your answer</b>':''}</div></div>`;}).join("")}
       ${q.solution?`<div class="solution"><b>Solution:</b> ${fmtMath(q.solution,q.subject)}</div>`:""}</div>`;}).join("");
 }
 async function reviewAttempt(attemptId){
-  const a=(await db.collection("attempts").doc(attemptId).get()).data();
-  let order=a.questionOrder, answersArr=a.answers, solutionsAt=null;
-  if(!a.isPractice){
-    const t=await db.collection("tests").doc(a.testId).get();
-    if(t.exists){ solutionsAt=t.data().solutionsAt||null; if(!order) order=t.data().questionIds; }
-  }
-  if(!order){ alert("Saved answers aren't available for this older attempt."); return; }
-  const qDocs=await Promise.all(order.map(id=>db.collection("questions").doc(id).get()));
-  const questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
-  const answers={}; if(answersArr) answersArr.forEach((v,i)=>{ if(v!==null&&v!==undefined) answers[i]=v; });
-  EXAM={test:{title:a.testTitle,exam:a.exam,solutionsAt},questions,answers,isPractice:!!a.isPractice};
-  showResult({score:a.score,total:a.total,correct:a.correct,wrong:a.wrong,unattempted:a.unattempted,disqualified:!!a.disqualified});
+  try{
+    const snap=await db.collection("attempts").doc(attemptId).get();
+    const a=snap.exists?snap.data():null;
+    if(!a){ alert("This result is no longer available — please refresh the page."); return; }
+    let order=a.questionOrder, answersArr=a.answers, solutionsAt=null;
+    if(!a.isPractice&&a.testId){
+      try{ const t=await db.collection("tests").doc(a.testId).get();
+        if(t.exists){ solutionsAt=t.data().solutionsAt||null; if(!order) order=t.data().questionIds; }
+      }catch(e){ console.warn("Could not read the test for this attempt",e); }
+    }
+    if(!order||!order.length){ alert("The saved answers for this attempt aren't available, so it can't be reviewed. Your score above is unaffected."); return; }
+    const qDocs=[];
+    for(let i=0;i<order.length;i+=25) qDocs.push(...await Promise.all(order.slice(i,i+25).map(id=>db.collection("questions").doc(id).get())));
+    const questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
+    if(!questions.length){ alert("The questions from this paper are no longer in the question bank, so the answers can't be shown. Your score is unaffected."); return; }
+    const answers={}; if(answersArr) answersArr.forEach((v,i)=>{ if(v!==null&&v!==undefined) answers[i]=v; });
+    EXAM={test:{title:a.testTitle,exam:a.exam,solutionsAt},questions,answers,isPractice:!!a.isPractice};
+    showResult({score:a.score,total:a.total,correct:a.correct,wrong:a.wrong,unattempted:a.unattempted,disqualified:!!a.disqualified});
+  }catch(e){ console.error("reviewAttempt failed",e); alert("Couldn't open the answers.\n\n"+errMsg(e)+"\n\nPlease try again — if it keeps happening, show this message to your centre."); }
 }
 
 /* ============================================================
