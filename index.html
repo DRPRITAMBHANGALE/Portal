@@ -727,8 +727,7 @@ const STAFF_NAV=[
 const ADMIN_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},{id:"review",label:"Review queue",ic:"⚑"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
-  {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"},
-  {id:"dupfinder",label:"Duplicate Finder",ic:"🧬"}
+  {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"}
 ];
 const NAV={ master:STAFF_NAV, admin:ADMIN_NAV,
   student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"pasttests",label:"Test history",ic:"▤"},{id:"history",label:"My results",ic:"⤓"}] };
@@ -737,7 +736,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: missing questions ok"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: dupfinder ai only"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2543,7 +2542,7 @@ async function aiVerifyAudit(){
 function normalizeQText(t){ return (t||"").toLowerCase().replace(/[^\w\s]/g,"").replace(/\s+/g," ").trim(); }
 function pageDupFinder(){
   setView(`<h1 class="page-title">Duplicate Finder</h1>
-    <p class="page-sub">Finds questions saved as separate entries with identical or near-identical wording — the likely cause of a student seeing the same question twice in one test. Groups them so you can keep one copy and remove the rest.${ME.role==="admin"?` Scans the questions uploaded by ${esc(centreName(ME.centreId))}.`:""}</p>
+    <p class="page-sub">Finds <b>AI-generated</b> questions saved as separate entries with identical or near-identical wording, and groups them so you can keep one copy and remove the rest. Questions that came from your own Word files (Self Upload) are never touched — those papers stay exactly as uploaded.</p>
     <button class="btn" id="dupBtn" onclick="runDupFinder()">🔍 Scan for duplicates</button>
     <div class="msg" id="dupMsg" style="margin-top:10px"></div>
     <div id="dupResults" style="margin-top:16px"></div>`);
@@ -2575,9 +2574,7 @@ async function runDupFinder(){
   setBtn("dupBtn",true,"Scanning…"); el("dupResults").innerHTML=""; setMsg("dupMsg","","");
   try{
     DUP_USED=await loadUsedQuestionIds();
-    const snap=await (ME.role==="admin"
-      ? db.collection("questions").where("centreId","==",ME.centreId).get()   // only what this centre uploaded
-      : db.collection("questions").get());
+    const snap=await db.collection("questions").where("source","==","ai").get();   // AI drafts only
     const groups={};
     snap.forEach(d=>{
       const x=d.data();
@@ -2588,8 +2585,8 @@ async function runDupFinder(){
     DUP_GROUPS=dupGroups;
     setBtn("dupBtn",false,"🔍 Scan for duplicates");
     const totalExtra=dupGroups.reduce((s,g)=>s+g.length-1,0);
-    setMsg("dupMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${dupGroups.length} duplicate group${dupGroups.length===1?"":"s"} (${totalExtra} extra cop${totalExtra===1?"y":"ies"}).`,dupGroups.length?"err":"ok");
-    if(!dupGroups.length){ el("dupResults").innerHTML=`<div class="card">${emptyState("No duplicates found","Every question's wording is unique within its subject &amp; class.")}</div>`; return; }
+    setMsg("dupMsg",`Scanned ${snap.size} AI-generated question${snap.size===1?"":"s"} — found ${dupGroups.length} duplicate group${dupGroups.length===1?"":"s"} (${totalExtra} extra cop${totalExtra===1?"y":"ies"}). Self Upload questions were not scanned.`,dupGroups.length?"err":"ok");
+    if(!dupGroups.length){ el("dupResults").innerHTML=`<div class="card">${emptyState("No duplicates found","Every AI-generated question's wording is unique within its subject &amp; class.")}</div>`; return; }
     el("dupResults").innerHTML=`<div class="card" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">
         <p style="margin:0 0 4px"><b>Reviewed a few groups and they look right?</b></p>
         <p class="muted" style="margin:0 0 10px">Keeps one copy per group (a live copy if there is one, else the oldest) and deletes the rest. Review a few groups below first — this can't be undone.</p>
@@ -2612,7 +2609,7 @@ async function deleteDupItem(id,domId){
   if(!await askDelete("Delete this duplicate copy?","The copy marked “Keep” stays in the bank.","Yes, delete this copy")) return;
   if(DUP_USED.has(id)){ alert("This copy is used in a paper (draft or scheduled). Deleting it would leave that paper short, so it has been kept."); return; }
   try{ await db.collection("questions").doc(id).delete(); el(domId)?.remove(); }
-  catch(e){ alert((ME.role==="admin"?"Only questions your own centre uploaded can be deleted. ":"")+"Could not delete: "+errMsg(e)); }
+  catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 async function bulkDedupe(){
   const allExtras=[];
@@ -2846,6 +2843,17 @@ async function getQuestionDocs(ids){
   return out;
 }
 async function fetchQs(ids){ return getQuestionDocs(ids); }
+// same fetch, but keeps a null in place of a question that can't be loaded
+async function getQuestionDocsInOrder(ids){
+  const out=[];
+  for(let i=0;i<(ids||[]).length;i+=25){
+    out.push(...await Promise.all(ids.slice(i,i+25).map(id=>
+      db.collection("questions").doc(id).get()
+        .then(d=>d.exists?{id:d.id,...d.data()}:null)
+        .catch(()=>null))));
+  }
+  return out;
+}
 let LAST_PAPER=null;
 async function generatePaper(){
   startPull();
@@ -4531,7 +4539,11 @@ function showResult(r){
           <p class="muted">Your score above is final — the answer key and explanations for this test will be shown from <b>${fmtDate(EXAM.test.solutionsAt)}</b>. Check back after that to review each question.</p>
         </div>`}`);
   if(!solutionsUnlocked(EXAM.test,EXAM.isPractice)) return;
+  if(EXAM.missing) el("solList").insertAdjacentHTML("beforebegin",
+    `<div class="note" style="margin-bottom:12px">${EXAM.missing} of ${EXAM.questions.length} questions can no longer be loaded — they were removed from the question bank after this test. Your score is unaffected; the rest are shown below.</div>`);
   el("solList").innerHTML=EXAM.questions.map((q,i)=>{const sel=EXAM.answers[i];
+    if(!q) return `<div class="card" style="margin-bottom:14px;opacity:.75"><div class="q-meta">Q${i+1}</div>
+      <p class="muted" style="margin:6px 0 0">This question is no longer in the question bank, so it can't be shown.${sel===undefined||sel===""?"":` You had answered <b>${esc(typeof sel==="number"?"ABCD"[sel]||String(sel):String(sel))}</b>.`}</p></div>`;
     const opts=Array.isArray(q.options)?q.options:[];
     return `<div class="card" style="margin-bottom:14px"><div class="q-meta">Q${i+1} · ${esc(q.subject||"—")}${q.topic?" · "+esc(q.topic):""}</div>
       <p class="q-text" style="font-size:16px;margin:6px 0 14px">${qLabel(q)}</p>
@@ -4555,10 +4567,11 @@ async function reviewAttempt(attemptId){
       }catch(e){ console.warn("Could not read the test for this attempt",e); }
     }
     if(!order||!order.length){ alert("The saved answers for this attempt aren't available, so it can't be reviewed. Your score above is unaffected."); return; }
-    const questions=await getQuestionDocs(order);
-    if(!questions.length){ alert("The questions from this paper are no longer in the question bank, so the answers can't be shown. Your score is unaffected."); return; }
+    const questions=await getQuestionDocsInOrder(order);
+    const missing=questions.filter(q=>!q).length;
+    if(missing===questions.length){ alert("The questions from this paper are no longer in the question bank, so the answers can't be shown. Your score is unaffected."); return; }
     const answers={}; if(answersArr) answersArr.forEach((v,i)=>{ if(v!==null&&v!==undefined) answers[i]=v; });
-    EXAM={test:{title:a.testTitle,exam:a.exam,solutionsAt},questions,answers,isPractice:!!a.isPractice};
+    EXAM={test:{title:a.testTitle,exam:a.exam,solutionsAt},questions,answers,isPractice:!!a.isPractice,missing};
     showResult({score:a.score,total:a.total,correct:a.correct,wrong:a.wrong,unattempted:a.unattempted,disqualified:!!a.disqualified});
   }catch(e){ console.error("reviewAttempt failed",e); alert("Couldn't open the answers.\n\n"+errMsg(e)+"\n\nPlease try again — if it keeps happening, show this message to your centre."); }
 }
