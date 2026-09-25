@@ -142,6 +142,9 @@ tr:last-child td{border-bottom:none}
 .exam-body{max-width:1080px;margin:0 auto;display:flex;gap:24px;padding:26px 22px}
 .q-main{flex:1;min-width:0}
 .q-card{background:var(--paper-2);border:1px solid var(--line);border-radius:14px;padding:26px;box-shadow:var(--shadow)}
+.qtbl{border-collapse:collapse;margin:10px 0;width:auto;max-width:100%}
+.qtbl th,.qtbl td{border:1px solid var(--line-2);padding:6px 11px;text-align:left;font-size:15px;vertical-align:middle}
+.qtbl th{background:var(--accent-soft);font-weight:700;font-size:13.5px}
 .q-meta{font-size:12.5px;color:var(--ink-soft);font-weight:600;margin-bottom:10px;text-transform:uppercase;letter-spacing:.4px}
 .q-text{font-size:18px;line-height:1.55;margin:0 0 22px;font-weight:500}
 .opt{display:flex;gap:13px;align-items:flex-start;padding:14px 16px;border:1.5px solid var(--line-2);border-radius:11px;margin-bottom:11px;cursor:pointer;transition:.12s;background:#fff}
@@ -151,6 +154,9 @@ tr:last-child td{border-bottom:none}
 .search-hit:last-child{border-radius:0 0 8px 8px}
 .search-hit:hover{background:var(--accent-soft)}
 .opt.sel{border-color:var(--accent);background:var(--accent-soft)}
+.opt.locked{cursor:not-allowed;opacity:.65}
+.opt.locked:hover{border-color:var(--line-2)}
+.pgrid button.lockedq{border-style:dashed;border-color:var(--danger);color:var(--danger)}
 .opt .k{width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line-2);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none}
 .opt.sel .k{background:var(--accent);color:#fff;border-color:var(--accent)}
 .opt.correct{border-color:var(--ok);background:#e9f1e7}.opt.correct .k{background:var(--ok);color:#fff;border-color:var(--ok)}
@@ -198,6 +204,7 @@ sup{font-size:.72em;vertical-align:super;line-height:0} sub{font-size:.72em;vert
 .rad{border-top:1.5px solid currentColor;padding:0 2px;margin-left:1px}
 .logo-img{display:block} .login-logo{max-width:230px;width:100%;height:auto;margin:0 auto 6px}
 .top-logo{height:40px;width:auto;background:#fff;border-radius:7px;padding:3px 5px}
+.idfont{font-family:Consolas,"DejaVu Sans Mono","Lucida Console","Liberation Mono","Courier New",monospace;letter-spacing:.5px}
 .logtbl{border-collapse:collapse;width:100%;font-size:12px;font-family:'Courier New',monospace}
 .logtbl th,.logtbl td{border:1px solid var(--line);padding:5px 6px;text-align:center}
 .logtbl thead th{position:sticky;top:0;background:var(--accent);color:#fff;z-index:2}
@@ -494,7 +501,7 @@ function confirmModal(message,onYes,yesLabel){
   el("cfYes").onclick=()=>{closeModal();onYes();};
 }
 function warnModal(title,message){
-  modal(`<h2 style="font-size:19px;color:#822f22">⚠ ${esc(title)}</h2><p style="margin-top:8px;line-height:1.5">${esc(message)}</p>
+  modal(`<h2 style="font-size:19px;color:#822f22">⚠ ${esc(title)}</h2><p style="margin-top:8px;line-height:1.5;white-space:pre-line">${esc(message)}</p>
     <div class="row end" style="margin-top:18px"><button class="btn danger" onclick="closeModal()">I understand</button></div>`);
 }
 function scopeClasses(v){return v==="both"?["11","12"]:[v];}
@@ -595,9 +602,26 @@ const QFIG_RE=/(\[\[img:data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+\]\]
 function fmtMath(s,subject){
   if(s==null) return "";
   s=String(s);
+  if(s.includes("[[tbl:")) return s.split(/(\[\[tbl:[\s\S]*?:tbl\]\])/).map(p=>{
+    const m=p.match(/^\[\[tbl:([\s\S]*?):tbl\]\]$/);
+    return m?renderQTable(m[1],subject):fmtMathPlain(p,subject); }).join("");
+  return fmtMathPlain(s,subject);
+}
+function fmtMathPlain(s,subject){
+  if(s==null) return "";
+  s=String(s);
   if(s.includes("[[img:")) return s.split(QFIG_RE).map(p=>{ const m=p.match(/^\[\[img:(data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+)\]\]$/);
     return m?`<img class="qfig" src="${m[1]}" alt="diagram"/>`:fmtMathCore(p,subject); }).join("");
   return fmtMathCore(s,subject);
+}
+// "Match List-I with List-II" and any other table from the Word file
+function renderQTable(payload,subject){
+  const rows=String(payload||"").split("~||~").map(r=>r.split("~|~"));
+  if(!rows.length) return "";
+  const head=rows[0], rest=rows.slice(1);
+  const headerLooksLikeHeading=head.every(c=>c.length<40);
+  return `<table class="qtbl">${headerLooksLikeHeading?`<thead><tr>${head.map(c=>`<th>${fmtMathPlain(c,subject)}</th>`).join("")}</tr></thead>`:""}
+    <tbody>${(headerLooksLikeHeading?rest:rows).map(r=>`<tr>${r.map(c=>`<td>${fmtMathPlain(c,subject)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
 function fmtMathCore(s,subject){
   const parts=s.split(/(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g);
@@ -736,7 +760,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: add solutions"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: lock on leave"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1397,8 +1421,28 @@ async function readWordWithEquations(arrayBuffer){
   }
   const body=doc.getElementsByTagName("w:body")[0]||doc.documentElement;
   const inFallback=n=>{ for(let a=n.parentNode;a;a=a.parentNode) if(a.nodeType===1&&local(a)==="Fallback") return true; return false; };
+  // A Word table (matching columns, data tables) becomes one token that keeps its rows and columns:
+  // [[tbl: r1c1 ~|~ r1c2 ~||~ r2c1 ~|~ r2c2 :tbl]]
+  function tableToken(tbl){
+    const rows=[];
+    Array.from(tbl.getElementsByTagName("w:tr")).forEach(tr=>{
+      const cells=Array.from(tr.getElementsByTagName("w:tc")).map(tc=>
+        Array.from(tc.getElementsByTagName("w:p")).map(q=>paraText(q)).join(" ").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim());
+      if(cells.length) rows.push(cells.map(c=>c.replace(/~\|~|~\|\|~/g," ")));
+    });
+    if(!rows.length) return "";
+    return "[[tbl:"+rows.map(r=>r.join("~|~")).join("~||~")+":tbl]]";
+  }
   const out=[];
-  Array.from(body.getElementsByTagName("w:p")).forEach(p=>{ if(!inFallback(p)) out.push(paraText(p)); });
+  (function walkBody(node){
+    for(let c=node.firstChild;c;c=c.nextSibling){
+      if(c.nodeType!==1) continue;
+      const ln=local(c);
+      if(ln==="p"){ if(!inFallback(c)) out.push(paraText(c)); }
+      else if(ln==="tbl"){ const t=tableToken(c); if(t) out.push(t); }
+      else if(ln!=="sectPr") walkBody(c);          // content controls, etc.
+    }
+  })(body);
   // shrink big pictures so each question stays small in the database
   for(let i=0;i<figs.length;i++) figs[i]=await shrinkPicture(figs[i]);
   return {raw:out.join("\n\n")+"\n\n",eqs,figs,stats};
@@ -1420,7 +1464,7 @@ function restoreWordTokens(s,W){
     .replace(/⟦F(\d+)⟧/g,(_,i)=>"\n[[img:"+W.figs[+i]+"]]\n")
     .replace(/⟦EQ\?⟧/g,()=>{ problems.push("an equation couldn't be read — type it in"); return "[equation missing]"; })
     .replace(/⟦FIG\?⟧/g,()=>{ problems.push("a diagram couldn't be imported (not PNG/JPEG)"); return "[diagram missing]"; });
-  s=s.split(/(\$[^$]*\$|\[\[img:[^\]]*\]\])/).map((p,i)=>i%2?p:p.replace(/ ([,.;:?!)\]])/g,"$1").replace(/([(\[]) /g,"$1")).join("");
+  s=s.split(/(\$[^$]*\$|\[\[img:[^\]]*\]\]|\[\[tbl:[\s\S]*?:tbl\]\])/).map((p,i)=>i%2?p:p.replace(/ ([,.;:?!)\]])/g,"$1").replace(/([(\[]) /g,"$1")).join("");
   s=s.replace(/[ \t]+/g," ").replace(/ *\n */g,"\n").replace(/\n{2,}/g,"\n").trim();
   return {s,problems};
 }
@@ -1946,10 +1990,7 @@ function openSelfUpload(){
   modal(`<h2>📄 Self Upload — build from your own Word file</h2>
     <p class="muted">Upload a <b>.docx</b> file laid out like your periodic tests: a numbered question paper with (a)(b)(c)(d) options, an <b>"Answer Keys"</b> section, and optionally a <b>"HINTS &amp; SOLUTION"</b> section. Legacy <b>.doc</b> files must be saved as .docx first — open the file in Word, then File → Save As → Word Document (.docx). Ready questions are added to your bank automatically as soon as the file is read — no extra click needed.</p>
     <label>① Exam <span class="muted" style="font-weight:400">— sets the marking scheme and which students can see the paper</span></label>${examSelect("suExam")}
-    <label>② Subjects by question number</label>
-    <div id="suSections"></div>
-    <div class="row" style="gap:8px;align-items:center;margin-top:6px"><span class="muted" style="font-size:13px">Any question not in the ranges above is:</span><select id="suSubject" style="width:auto;flex:1"></select></div>
-    <label>③ Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
+    <label>② Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
     <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a></p>
     <div id="suPreview"></div>
     <div class="msg" id="suMsg"></div>
@@ -1965,13 +2006,16 @@ function openSelfUpload(){
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
     <div id="suSolAtRow" style="display:none"><label>Show solutions from</label><input id="suSolAt" type="datetime-local"/></div>
+    <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Subjects by question number — only for a mixed paper (PCM / PCB)</summary>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave empty for a single-subject paper. The subjects are applied when you click “Save as final paper”.</p>
+      <div id="suSections"></div></details>
     <div class="msg" id="suActionMsg"></div>
     <div class="row end" style="margin-top:16px;gap:8px">
       <button class="btn ghost" onclick="closeModal()">Close</button>
       <button class="btn" id="suTestBtn" onclick="selfUploadFinalize()" disabled>✓ Save as final paper</button>
     </div>`,true);
-  fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec");
-  el("suExam").onchange=()=>{ fillSubjects("suExam","suSubject",false); fillSectionRows("suExam","suSections","suSec"); };
+  fillSectionRows("suExam","suSections","suSec");
+  el("suExam").onchange=()=>{ fillSectionRows("suExam","suSections","suSec"); };
 }
 function suSolModeChanged(){
   const show=val("suSolMode")==="scheduled";
@@ -1996,7 +2040,8 @@ async function handleSelfUpload(){
     // no bank labels are asked for any more: file each question under the paper's own class,
     // its subject as the chapter label, and a middle difficulty
     const suCls=val("suPaperClass")==="12"?"12":"11";
-    const defaults={exam:val("suExam"),subject:val("suSubject"),cls:suCls,topic:val("suSubject"),difficulty:"Moderate"};
+    const suSubj=(examSubjects(val("suExam"))[0])||"Physics";   // corrected by the question-number ranges, if any
+    const defaults={exam:val("suExam"),subject:suSubj,cls:suCls,topic:suSubj,difficulty:"Moderate"};
     const ranges=readSectionRanges("suSec",val("suExam"));
     SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults,W);
     SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.num,ranges,q.subject); q.topic=q.subject; });
@@ -2037,7 +2082,7 @@ async function handleSelfUpload(){
     el("suTestBtn").disabled=!SELF_UPLOAD_DRAFT_ID;
     { const subs=new Set(SELF_UPLOAD_PARSED.map(q=>q.subject));
       if(subs.size===1&&examSubjects(val("suExam")).length>1&&SELF_UPLOAD_PARSED.length>40)
-        setMsg("suActionMsg",(el("suActionMsg").textContent||"")+`  ⚠ All questions were filed under ${[...subs][0]}. If this is a mixed paper, fill in "② Subjects by question number" now — the subjects are corrected when you click "Save as final paper".`,"warn"); }
+        setMsg("suActionMsg",(el("suActionMsg").textContent||"")+`  ⚠ All questions were filed under ${[...subs][0]}. If this is a mixed paper, open “Subjects by question number” below and fill in the ranges — they are applied when you click “Save as final paper”.`,"warn"); }
     el("suPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
       +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
@@ -2094,7 +2139,21 @@ function parseSelfUploadDoc(raw,defaults,W){
   });
 
   function findOptionMarks(text){
-    return findMarks(text,false,"ABCD")||findMarks(text,true,"ABCD")||findMarks(text,false,"1234")||findMarks(text,true,"1234");
+    // First look for labels that START a line, a cell or a tab-separated column — that is how a real
+    // option list is laid out. Only if that fails do we accept a label anywhere in the text, so
+    // "…acceleration (a) in two systems…" inside the question can't be mistaken for option A.
+    return findMarksAtStart(text,"ABCD")||findMarksAtStart(text,"1234")
+      ||findMarks(text,false,"ABCD")||findMarks(text,true,"ABCD")||findMarks(text,false,"1234")||findMarks(text,true,"1234");
+  }
+  function findMarksAtStart(text,set){
+    const L=(set||"ABCD").split("");
+    const at=(letter,from)=>{ const re=new RegExp("(?:^|[\\n\\t]|  +)[ \\t]*\\("+letter+"\\)","i");
+      const mm=re.exec(text.slice(from)); return mm?from+mm.index+mm[0].indexOf("("):-1; };
+    const aIdx=at(L[0],0); if(aIdx<0) return null;
+    const bIdx=at(L[1],aIdx+3); if(bIdx<0) return null;
+    const cIdx=at(L[2],bIdx+3); if(cIdx<0) return null;
+    const dIdx=at(L[3],cIdx+3); if(dIdx<0) return null;
+    return {aIdx,bIdx,cIdx,dIdx};
   }
   // strict: "(a)"; loose (fallback): also "a)" when it stands on its own, e.g. "a) 0.2  (b) 0.4".
   // Papers that number the options (1)(2)(3)(4) instead of (a)(b)(c)(d) are read the same way.
@@ -3381,7 +3440,9 @@ function slipWindow(list,head){
     .nm{font-size:9pt;font-weight:700;line-height:1.15;margin-bottom:.8mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .kv{display:flex;gap:1.6mm;align-items:baseline;line-height:1.3}
     .kv span{color:#6b7a72;font-size:7pt;width:6mm;flex:none}
-    .kv b{font-family:"Courier New",monospace;font-size:9.5pt;letter-spacing:.3px}
+    /* Consolas / DejaVu Sans Mono keep 1 and l, 0 and O clearly apart; Courier New is only a last resort */
+    .kv b{font-family:Consolas,"DejaVu Sans Mono","Lucida Console","Liberation Mono","Courier New",monospace;
+          font-size:10pt;letter-spacing:.6px;font-weight:700}
     @media print{.page{page-break-after:always}}
   </style></head><body>${body}
   <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
@@ -3521,7 +3582,7 @@ async function loadStudents(){
     const snap=await q.limit(300).get();
     el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
       :tableHTML(["Name","Login ID","Password","Class","Stream","Centre",""],
-        snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,esc(s.loginId||s.email||"—"),esc(s.pw||"—"),"Class "+s.class,s.stream||"—",centreName(s.centreId),
+        snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,`<span class="idfont">${esc(s.loginId||s.email||"—")}</span>`,`<span class="idfont">${esc(s.pw||"—")}</span>`,"Class "+s.class,s.stream||"—",centreName(s.centreId),
           `<button class="btn ghost sm" onclick='printStudentSlip("${d.id}")'>🖨 Slip</button> ${ME.role==="master"?`<button class="btn ghost sm" onclick='openEditStudent("${d.id}")'>Class / course</button> `:""}<button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
   }catch(e){ el("stuList").innerHTML=errBox(e); }
 }
@@ -3747,7 +3808,14 @@ async function bulkPreview(){
       tableHTML(["Name","Class","Course","Centre","Duplicate?"],out.slice(0,50).map(r=>[esc(r.name),r.cls,r.stream,centreName(r.centre||(ME.role==="master"?val("bDefCentre"):ME.centreId)),r.dup?`<span class="tag pending">${esc(r.dup)}</span>`:"—"]))+`</div>`;
   }catch(e){ setMsg("bMsg","Could not read file: "+errMsg(e),"err"); }
 }
-function genLoginId(name){ const base=(name.toLowerCase().replace(/[^a-z]/g,"")||"student").slice(0,9); return base+Math.floor(100+Math.random()*900); }
+// New login IDs avoid the digits 0 and 1 so they can never be mistaken for the letters O and l
+// (passwords already leave out i, l, o, 0 and 1). Existing IDs are untouched.
+function genLoginId(name){
+  const base=(name.toLowerCase().replace(/[^a-z]/g,"")||"student").slice(0,9);
+  const d="23456789"; let n="";
+  for(let i=0;i<3;i++) n+=d[Math.floor(Math.random()*d.length)];
+  return base+n;
+}
 function genPassword(){ const c="abcdefghjkmnpqrstuvwxyz23456789"; let p=""; for(let i=0;i<7;i++)p+=c[Math.floor(Math.random()*c.length)]; return p; }
 let BULK_FAILED=[];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -4442,12 +4510,14 @@ async function launchExam(test,isPractice){
     subjectBlocks.push({subject:s,start:grouped.length,count:shuffled.length});
     grouped=grouped.concat(shuffled);
   });
-  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,disqualified:false,live:true};
+  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),locked:new Set(),lockLog:[],cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,disqualified:false,live:true};
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
   document.body.classList.remove("rotate-ok"); askLandscape();
   renderSubjectTabs(); renderPalette(); renderQ(); startTimer();
   attachCheatGuard();
+  if(!isPractice) setTimeout(()=>warnModal("Before you begin",
+    "Stay in this window until you submit.\n\nIf you leave the test — switch apps, minimise it, or open anything on top of it — the question you are on is locked, and its answer can no longer be changed. Notifications that pass in a moment don't lock anything."),150);
 }
 // One shared strike counter for leaving the test AND screenshot / print attempts.
 // A notification banner, an incoming call or any other window coming on top only BLURS the paper —
@@ -4489,17 +4559,40 @@ function releaseLandscape(){
   try{ if(document.fullscreenElement&&document.exitFullscreen) document.exitFullscreen().catch(()=>{}); }catch(_){}
 }
 function dismissRotate(){ document.body.classList.add("rotate-ok"); }
+// Leaving the test locks the question that was open: its answer stays exactly as it was and can no
+// longer be changed. A passing notification doesn't lock anything — only actually leaving the test
+// (another app, another tab, minimising) or something sitting on top of it for more than 3 seconds.
+function lockCurrentQuestion(why){
+  if(!EXAM||!EXAM.live||EXAM.isPractice||EXAM.disqualified) return;
+  const i=EXAM.cur;
+  if(!EXAM.locked) EXAM.locked=new Set();
+  if(EXAM.locked.has(i)) return;
+  EXAM.locked.add(i);
+  (EXAM.lockLog=EXAM.lockLog||[]).push({q:i+1,why:why||"left",at:Date.now()});
+  EXAM.lockPending=true;                      // tell the student as soon as they are back
+}
+function isLocked(i){ return !!(EXAM&&EXAM.locked&&EXAM.locked.has(i)); }
+function showLockNotice(){
+  if(!EXAM||!EXAM.lockPending) return; EXAM.lockPending=false;
+  warnModal("Question locked",`You left the test while that question was open, so it has been locked with the answer as it stood. You can carry on with the rest of the paper.`);
+}
 function shieldExam(on){ const s=el("examScreen"); if(s) s.classList.toggle("shielded",!!on); }
 function attachCheatGuard(){
   detachCheatGuard();
   GUARD.vis=()=>{ if(!EXAM||!EXAM.live) return;
-    if(document.hidden){ shieldExam(true); examStrike("tab"); }
-    else { shieldExam(false); if(EXAM.warnPending&&!EXAM.disqualified) showStrikeWarning(); } };
+    if(document.hidden){ shieldExam(true); lockCurrentQuestion("left the test"); examStrike("tab"); }
+    else { shieldExam(false); renderQ();
+      if(EXAM.warnPending&&!EXAM.disqualified) showStrikeWarning(); else showLockNotice(); } };
   // window loses focus but tab still visible: snipping tool, screen-recorder controls, another app on top
   // window lost focus but the test is still on screen (notification, incoming call, snipping tool,
   // recorder controls): hide the question while it lasts, but don't count it against the student.
-  GUARD.blur=()=>{ if(!EXAM||!EXAM.live) return; shieldExam(true); };
-  GUARD.focus=()=>{ clearTimeout(GUARD.blurT); if(!document.hidden) shieldExam(false); if(EXAM&&EXAM.warnPending&&!EXAM.disqualified) showStrikeWarning(); };
+  GUARD.blur=()=>{ if(!EXAM||!EXAM.live) return; shieldExam(true);
+    // something is on top of the test: a banner passes in a second, an AI overlay or another window
+    // stays. Only a stay of 3 seconds or more locks the question.
+    clearTimeout(GUARD.lockT); GUARD.lockT=setTimeout(()=>{ if(!document.hasFocus()) lockCurrentQuestion("something on top of the test"); },3000); };
+  GUARD.focus=()=>{ clearTimeout(GUARD.blurT); clearTimeout(GUARD.lockT); if(!document.hidden) shieldExam(false);
+    if(EXAM&&EXAM.live) renderQ();
+    if(EXAM&&EXAM.warnPending&&!EXAM.disqualified) showStrikeWarning(); else showLockNotice(); };
   GUARD.key=e=>{ if(!EXAM||!EXAM.live) return;
     const k=(e.key||"").toLowerCase(), mod=e.ctrlKey||e.metaKey;
     if(k==="printscreen"||e.keyCode===44){ e.preventDefault(); shieldExam(true); try{navigator.clipboard.writeText("");}catch(_){} setTimeout(()=>shieldExam(false),1500); examStrike("screenshot"); return; }
@@ -4519,7 +4612,7 @@ function attachCheatGuard(){
 }
 function detachCheatGuard(){
   if(GUARD.vis) document.removeEventListener("visibilitychange",GUARD.vis);
-  if(GUARD.blur){ window.removeEventListener("blur",GUARD.blur); window.removeEventListener("focus",GUARD.focus); }
+  if(GUARD.blur){ window.removeEventListener("blur",GUARD.blur); window.removeEventListener("focus",GUARD.focus); clearTimeout(GUARD.lockT); }
   if(GUARD.key){ document.removeEventListener("keydown",GUARD.key,true); document.removeEventListener("keyup",GUARD.key,true); }
   if(GUARD.block) ["contextmenu","copy","cut","dragstart","selectstart"].forEach(ev=>document.removeEventListener(ev,GUARD.block,true));
   if(GUARD.print) window.removeEventListener("beforeprint",GUARD.print);
@@ -4553,24 +4646,27 @@ function renderSubjectTabs(){
 function switchSubjectTab(idx){ const b=EXAM.subjectBlocks[idx]; if(!b) return; EXAM.cur=b.start; renderQ(); }
 function renderQ(){
   const i=EXAM.cur,q=EXAM.questions[i],sel=EXAM.answers[i],m=examMarks(EXAM.test.exam,q.subject);
+  const lock=isLocked(i);
   const block=EXAM.subjectBlocks[currentBlockIdx()];
   const localNum=block?(i-block.start+1):(i+1), localTotal=block?block.count:EXAM.questions.length;
   el("qCard").innerHTML=`<div class="q-meta">Question ${localNum} of ${localTotal} · ${q.subject} · ${m} mark${m>1?"s":""}${examNeg(EXAM.test.exam)?` · −${examNeg(EXAM.test.exam)} if wrong`:""}</div>
     <p class="q-text">${qLabel(q)}</p>
+    ${lock?`<div class="note" style="border-color:var(--danger);background:var(--danger-soft);margin-bottom:12px">🔒 <b>This question is locked.</b> You left the test while it was open, so the answer stays as it was. Carry on with the other questions.</div>`:""}
     <div id="opts">${isNumericQ(q)
       ? `<div class="opt" style="cursor:default;display:block;padding:14px 16px">
            <div class="muted" style="font-size:13px;margin-bottom:6px">Type your answer as a number (use a minus sign for negatives, and a dot for decimals).</div>
-           <input id="numAns" type="text" inputmode="decimal" autocomplete="off" value="${esc(sel===undefined?"":String(sel))}"
+           <input id="numAns" type="text" inputmode="decimal" autocomplete="off" ${lock?"disabled":""} value="${esc(sel===undefined?"":String(sel))}"
              style="font-size:18px;font-family:'Courier New',monospace;max-width:220px" oninput="pickNum(this.value)"/>
          </div>`
-      : q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''}" onclick="pick(${k})"><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
+      : q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''} ${lock?'locked':''}" ${lock?"":`onclick="pick(${k})"`}><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
   el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review";
-  { const c=el("clearBtn"); if(c){ const has=sel!==undefined&&sel!==""; c.disabled=!has; c.style.opacity=has?"1":".45"; } }
+  { const c=el("clearBtn"); if(c){ const has=(sel!==undefined&&sel!=="")&&!lock; c.disabled=!has; c.style.opacity=has?"1":".45"; } }
   renderSubjectTabs(); renderPalette();
 }
-function pick(k){ EXAM.answers[EXAM.cur]=k; renderQ(); }
+function pick(k){ if(isLocked(EXAM.cur)) return; EXAM.answers[EXAM.cur]=k; renderQ(); }
 // typed answers must not redraw the box (that would lose the cursor) — just keep the palette in step
 function pickNum(v){
+  if(isLocked(EXAM.cur)) return;
   const t=String(v||"").trim();
   if(t==="") delete EXAM.answers[EXAM.cur]; else EXAM.answers[EXAM.cur]=t;
   renderSubjectTabs(); renderPalette();
@@ -4578,7 +4674,7 @@ function pickNum(v){
 }
 function navQ(d){ const n=EXAM.cur+d; if(n>=0&&n<EXAM.questions.length){EXAM.cur=n;renderQ();} }
 // Unanswer the current question — it goes back to "not attempted", so no negative marking applies.
-function clearAnswer(){ delete EXAM.answers[EXAM.cur]; renderQ(); }
+function clearAnswer(){ if(isLocked(EXAM.cur)) return; delete EXAM.answers[EXAM.cur]; renderQ(); }
 function toggleReview(){ EXAM.review.has(EXAM.cur)?EXAM.review.delete(EXAM.cur):EXAM.review.add(EXAM.cur); renderQ(); }
 function renderPalette(){
   const block=EXAM.subjectBlocks[currentBlockIdx()]||{start:0,count:EXAM.questions.length};
@@ -4587,7 +4683,8 @@ function renderPalette(){
     let cls=answered?"answered":(reviewed?"review":"");
     if(answered&&reviewed) cls+=" review-mark";
     if(i===EXAM.cur) cls+=" cur";
-    return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()">${i-block.start+1}</button>`;}).join("");
+    if(isLocked(i)) cls+=" lockedq";
+    return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()" ${isLocked(i)?'title="Locked — you left the test while this question was open"':""}>${i-block.start+1}${isLocked(i)?"🔒":""}</button>`;}).join("");
 }
 function confirmSubmit(){
   const ans=Object.keys(EXAM.answers).length,tot=EXAM.questions.length;
@@ -4609,6 +4706,7 @@ async function submitExam(auto,disqualify){
   // every attempt is saved (practice too) so answers can be reviewed later
   try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,isPractice:!!EXAM.isPractice,
       studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
+      lockedCount:(EXAM.locked?EXAM.locked.size:0),lockLog:(EXAM.lockLog||[]).slice(0,60),
       questionOrder:order,answers,disqualified:!!disqualify,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
