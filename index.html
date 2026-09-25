@@ -737,7 +737,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: check answers fix"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: missing questions ok"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1828,7 +1828,7 @@ async function tqReplaceGo(i,newId){
 async function applySectionsToTest(id,ranges){
   const t0=(await db.collection("tests").doc(id).get()).data();
   const order=(t0.qOrder&&t0.qOrder.length?t0.qOrder:t0.questionIds)||[]; const inTest=new Set(t0.questionIds||[]);
-  const qs=await Promise.all(order.map(qid=>db.collection("questions").doc(qid).get()));
+  const qs=await Promise.all(order.map(qid=>db.collection("questions").doc(qid).get().catch(()=>({exists:false}))));
   const subjects=new Set(); const ups=[];
   qs.forEach((d,k)=>{ if(!d.exists) return; const x=d.data(); const n=x.qNum||(k+1);
     const sub=subjectForNum(n,ranges,x.subject); if(inTest.has(d.id)) subjects.add(sub);
@@ -2834,7 +2834,18 @@ function ppToggleAllChaps(){
   const allOn=boxes.every(b=>b.checked);
   boxes.forEach(b=>b.checked=!allOn);
 }
-async function fetchQs(ids){ const docs=await Promise.all(ids.map(id=>db.collection("questions").doc(id).get())); return docs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()})); }
+async function getQuestionDocs(ids){
+  const out=[];
+  for(let i=0;i<(ids||[]).length;i+=25){
+    const part=await Promise.all(ids.slice(i,i+25).map(id=>
+      db.collection("questions").doc(id).get()
+        .then(d=>d.exists?{id:d.id,...d.data()}:null)
+        .catch(err=>{ console.warn("question unavailable",id,err&&err.code); return null; })));
+    part.forEach(q=>{ if(q) out.push(q); });
+  }
+  return out;
+}
+async function fetchQs(ids){ return getQuestionDocs(ids); }
 let LAST_PAPER=null;
 async function generatePaper(){
   startPull();
@@ -4306,10 +4317,9 @@ async function launchExam(test,isPractice){
   const ids=(test&&test.questionIds)||[];
   if(!ids.length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
   // fetch in batches so a long paper on a weak connection doesn't fire 150 requests at once
-  const qDocs=[];
-  for(let i=0;i<ids.length;i+=25) qDocs.push(...await Promise.all(ids.slice(i,i+25).map(id=>db.collection("questions").doc(id).get())));
-  let questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
-  if(!questions.length){ alert("This test has no available questions."); return; }
+  let questions=await getQuestionDocs(ids);
+  if(!questions.length){ alert("The questions for this paper can't be opened — they may have been removed from the question bank. Please tell your centre."); return; }
+  if(questions.length<ids.length) console.warn(`${ids.length-questions.length} question(s) of this paper are no longer in the bank`);
   // Group by subject so each subject sits together as its own section (like the real exam paper),
   // while still randomising the ORDER within each subject per attempt — no two students see the same order.
   const bySubject={}; questions.forEach(q=>{ (bySubject[q.subject]=bySubject[q.subject]||[]).push(q); });
@@ -4545,9 +4555,7 @@ async function reviewAttempt(attemptId){
       }catch(e){ console.warn("Could not read the test for this attempt",e); }
     }
     if(!order||!order.length){ alert("The saved answers for this attempt aren't available, so it can't be reviewed. Your score above is unaffected."); return; }
-    const qDocs=[];
-    for(let i=0;i<order.length;i+=25) qDocs.push(...await Promise.all(order.slice(i,i+25).map(id=>db.collection("questions").doc(id).get())));
-    const questions=qDocs.filter(d=>d.exists).map(d=>({id:d.id,...d.data()}));
+    const questions=await getQuestionDocs(order);
     if(!questions.length){ alert("The questions from this paper are no longer in the question bank, so the answers can't be shown. Your score is unaffected."); return; }
     const answers={}; if(answersArr) answersArr.forEach((v,i)=>{ if(v!==null&&v!==undefined) answers[i]=v; });
     EXAM={test:{title:a.testTitle,exam:a.exam,solutionsAt},questions,answers,isPractice:!!a.isPractice};
