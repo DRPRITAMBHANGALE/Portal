@@ -786,7 +786,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: exam shown"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: word numbering"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1396,6 +1396,43 @@ async function readWordWithEquations(arrayBuffer){
     else stats.figFailed++;
     return figCache[rid]=tok;
   }
+  const numXml=get("word/numbering.xml"); const numDefs={}; const numCounters={};
+  if(numXml){
+    try{
+      const nd=new DOMParser().parseFromString(dec(numXml),"application/xml"); const abs={};
+      Array.from(nd.getElementsByTagName("w:abstractNum")).forEach(an=>{
+        const id=an.getAttribute("w:abstractNumId"); const lv={};
+        Array.from(an.getElementsByTagName("w:lvl")).forEach(l=>{
+          const g=t=>{ const e=l.getElementsByTagName("w:"+t)[0]; return e?e.getAttribute("w:val"):null; };
+          lv[String(l.getAttribute("w:ilvl"))]={start:parseInt(g("start")||"1")||1,fmt:g("numFmt")||"decimal",text:g("lvlText")||"%1."};
+        });
+        abs[id]=lv;
+      });
+      Array.from(nd.getElementsByTagName("w:num")).forEach(nn=>{
+        const a=nn.getElementsByTagName("w:abstractNumId")[0];
+        if(a&&abs[a.getAttribute("w:val")]) numDefs[nn.getAttribute("w:numId")]=abs[a.getAttribute("w:val")];
+      });
+    }catch(_){}
+  }
+  const ROMAN=[[1000,"m"],[900,"cm"],[500,"d"],[400,"cd"],[100,"c"],[90,"xc"],[50,"l"],[40,"xl"],[10,"x"],[9,"ix"],[5,"v"],[4,"iv"],[1,"i"]];
+  const toRoman=n=>{ let s=""; ROMAN.forEach(([v,r])=>{ while(n>=v){ s+=r; n-=v; } }); return s; };
+  const oneNum=(v,fmt)=>/lowerLetter/i.test(fmt)?String.fromCharCode(97+((v-1)%26))
+    :/upperLetter/i.test(fmt)?String.fromCharCode(65+((v-1)%26))
+    :/lowerRoman/i.test(fmt)?toRoman(v):/upperRoman/i.test(fmt)?toRoman(v).toUpperCase():String(v);
+  function autoNumberLabel(p){
+    const pr=p.getElementsByTagName("w:numPr")[0]; if(!pr) return "";
+    const ni=pr.getElementsByTagName("w:numId")[0], il=pr.getElementsByTagName("w:ilvl")[0];
+    const numId=ni&&ni.getAttribute("w:val"); if(!numId||!numDefs[numId]) return "";
+    const ilvl=String((il&&il.getAttribute("w:val"))||"0");
+    const lvl=numDefs[numId][ilvl]; if(!lvl||/bullet|none/i.test(lvl.fmt)) return "";
+    const cur=numCounters[numId]=numCounters[numId]||{};
+    cur[ilvl]=(cur[ilvl]===undefined?lvl.start:cur[ilvl]+1);
+    Object.keys(cur).forEach(k=>{ if(parseInt(k)>parseInt(ilvl)) delete cur[k]; });   // deeper levels start again
+    return String(lvl.text).replace(/%(\d)/g,(m,d)=>{
+      const li=String(parseInt(d)-1), lv=numDefs[numId][li]||lvl;
+      return oneNum(cur[li]===undefined?lv.start:cur[li],lv.fmt);
+    });
+  }
   const SYMF={a:"α",b:"β",c:"χ",d:"δ",e:"ε",f:"φ",g:"γ",h:"η",i:"ι",j:"ϕ",k:"κ",l:"λ",m:"μ",n:"ν",o:"ο",p:"π",q:"θ",r:"ρ",s:"σ",t:"τ",u:"υ",v:"ϖ",w:"ω",x:"ξ",y:"ψ",z:"ζ",
     A:"Α",B:"Β",C:"Χ",D:"Δ",E:"Ε",F:"Φ",G:"Γ",H:"Η",I:"Ι",K:"Κ",L:"Λ",M:"Μ",N:"Ν",O:"Ο",P:"Π",Q:"Θ",R:"Ρ",S:"Σ",T:"Τ",U:"Υ",W:"Ω",X:"Ξ",Y:"Ψ",Z:"Ζ",
     "£":"≤","³":"≥","¹":"≠","»":"≈","±":"±","´":"×","·":"·","®":"→","¬":"←","«":"↔","Þ":"⇒","Û":"⇔","¥":"∞","°":"°","¢":"′","²":"″","\\":"∴","¶":"∂","Ñ":"∇","µ":"∝","ò":"∫","å":"∑","Î":"∈","Ç":"∩","È":"∪","^":"⊥","Ð":"∠","¼":"…","-":"−","@":"≅","~":"∼","Æ":"∅","Ö":"√","×":"·"};
@@ -1464,7 +1501,10 @@ async function readWordWithEquations(arrayBuffer){
     for(let c=node.firstChild;c;c=c.nextSibling){
       if(c.nodeType!==1) continue;
       const ln=local(c);
-      if(ln==="p"){ if(!inFallback(c)) out.push(paraText(c)); }
+      if(ln==="p"){ if(!inFallback(c)){
+        const label=autoNumberLabel(c), txt=paraText(c);
+        out.push(label?(label+"\t"+txt.replace(/^[ \t]+/,"")):txt);   // put Word's own list number back
+      } }
       else if(ln==="tbl"){ const t=tableToken(c); if(t) out.push(t); }
       else if(ln!=="sectPr") walkBody(c);          // content controls, etc.
     }
