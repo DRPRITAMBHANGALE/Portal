@@ -57,7 +57,7 @@ label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margi
 input,select,textarea{width:100%;padding:11px 13px;border:1px solid var(--line-2);border-radius:10px;background:#fff;font-size:15px;color:var(--ink);font-family:inherit}
 select.tbox{padding:11px 4px;flex:none;text-align:center;text-align-last:center;font-variant-numeric:tabular-nums}
 .dtpair{display:flex;gap:6px;flex-wrap:nowrap;align-items:center;min-width:0}
-.dtpair>input[type=date]{flex:1 1 92px;min-width:0;padding-left:9px;padding-right:5px;font-variant-numeric:tabular-nums}
+.dtpair>input[type=date]{flex:1 1 92px;min-width:0;padding-left:8px;padding-right:4px;font-variant-numeric:tabular-nums}
 @media(max-width:430px){ .dtpair{flex-wrap:wrap;gap:6px 6px} .dtpair>input[type=date]{flex:1 1 100%} }
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 18px;border-radius:10px;border:1px solid transparent;font-weight:700;font-size:14.5px;background:var(--accent);color:#fff;transition:.15s}
@@ -159,16 +159,25 @@ tr:last-child td{border-bottom:none}
 .search-hit:hover{background:var(--accent-soft)}
 .opt.sel{border-color:var(--accent);background:var(--accent-soft)}
 /* the centre list: name, Opens, Closes as three tidy columns; stacked on a small screen */
-.cAsgHead,.cAsgRow{display:grid;grid-template-columns:minmax(120px,0.9fr) minmax(300px,1.25fr) minmax(300px,1.25fr);gap:6px 12px;align-items:center}
+.cAsgBox{border:1px solid var(--line);border-radius:10px;padding:8px 12px;container-type:inline-size;overflow-x:auto}
+.cAsgHead,.cAsgRow{display:grid;grid-template-columns:minmax(104px,0.8fr) minmax(292px,1.25fr) minmax(292px,1.25fr);gap:6px 12px;align-items:center}
 .cAsgHead{font-size:12px;font-weight:700;color:var(--ink-soft);padding:2px 0 7px;letter-spacing:.2px}
 .cAsgRow{padding:7px 0;border-top:1px dashed var(--line)}
 .cAsgName{display:flex;gap:8px;align-items:center;margin:0;min-width:0;font-size:13.5px}
 .cAsgName>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cAsgCell{min-width:0}
 .cAsgLab{display:none;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:3px}
+/* a narrower box (a dialog): the centre name takes its own line, Opens and Closes sit side by side */
+@container (max-width:729px){
+  .cAsgHead{display:none}
+  .cAsgRow{grid-template-columns:1fr 1fr;gap:4px 12px;padding:9px 0}
+  .cAsgName{grid-column:1 / -1;font-weight:700;font-size:14px;margin-bottom:2px}
+  .cAsgLab{display:block}
+}
+/* narrower still (a phone): one thing under the other */
+@container (max-width:545px){ .cAsgRow{grid-template-columns:1fr;gap:6px} }
 @media(max-width:1020px){
   .cAsgHead{display:none}
-  .cAsgRow{grid-template-columns:1fr;gap:8px;padding:10px 0}
   .cAsgName{font-weight:700;font-size:14.5px}
   .cAsgLab{display:block}
 }
@@ -822,7 +831,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: AM/PM & centre rows"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre box & class"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1610,7 +1619,7 @@ function timeBoxes(id,hhmm,compact){
   if(m){ const H=parseInt(m[1],10); ap=H<12?"AM":"PM"; h12=String(H%12===0?12:H%12); mi=m[2]; }
   const mins=TMINS.slice(); if(mi&&mins.indexOf(mi)<0){ mins.push(mi); mins.sort(); }
   const hrs=[]; for(let i=1;i<=12;i++) hrs.push(String(i));
-  const w=compact?"56px":"62px", wa=compact?"62px":"68px";
+  const w=compact?"53px":"62px", wa=compact?"59px":"68px";
   const box=(sfx,opts,cur,blank,width)=>`<select id="${id}${sfx}" onchange="dtSync('${id}')" class="tbox" style="width:${width}">`
     +(blank?`<option value="">--</option>`:"")
     +opts.map(o=>`<option value="${o}"${String(cur)===String(o)?" selected":""}>${o}</option>`).join("")
@@ -1676,7 +1685,7 @@ function centreAssignHTML(p,t){
   const on=new Set(t?assignedCentres(t):(ME.role==="admin"?[ME.centreId]:CENTRES.map(c=>c.id)));
   const w=(t&&t.windows)||{};
   return `<label>Assign to centres <span class="muted" style="font-weight:400">— tick the centres; give a centre its own time only if it differs from the common Opens / Closes</span></label>
-  <div style="border:1px solid var(--line);border-radius:10px;padding:8px 12px">
+  <div class="cAsgBox">
     <label style="display:flex;gap:8px;align-items:center;margin:2px 0 6px;font-weight:600"><input type="checkbox" style="width:auto" id="${p}All" ${on.size===CENTRES.length?"checked":""}
       onchange="document.querySelectorAll('.${p}cc').forEach(c=>c.checked=this.checked)"/> All centres</label>
     <div class="cAsgHead"><span>Centre</span><span>Opens — date &amp; time</span><span>Closes — date &amp; time</span></div>
@@ -2163,7 +2172,7 @@ function openSelfUpload(){
     <hr class="sep"/>
     <p class="muted" style="margin-bottom:2px">📝 <b>A draft paper is made automatically</b> from this file as soon as it's read. Questions you approve later from the Review queue are added to it in their original place. When you're happy, click <b>Save as final paper</b> — here, or later from <b>Tests → Draft papers</b>.</p>
     ${titleFieldHTML("su","","Leave blank to use the file name")}
-    <label>Paper is for</label><select id="suPaperClass"><option value="both">Class 11 &amp; 12 students</option><option value="11">Class 11 students</option><option value="12">Class 12 students</option></select>
+    <label>Paper is for</label><select id="suPaperClass"><option value="11">Class 11 students</option><option value="12">Class 12 students</option></select>
     <label>Duration (min)</label><input id="suDur" type="number" value="60"/>
     <div class="grid cols-2"><div><label>Opens (common)</label>${dtPair("suStart")}</div><div><label>Closes (common)</label>${dtPair("suEnd")}</div></div>
     ${centreAssignHTML("suA")}
@@ -2555,7 +2564,7 @@ async function openFinalizeDraft(id){
     ${waiting?`<div class="note" style="margin-bottom:10px">⚠ ${waiting} question${waiting===1?" is":"s are"} still waiting in the Review queue. Approve ${waiting===1?"it":"them"} first if you want ${waiting===1?"it":"them"} in this paper — they're added automatically.</div>`:""}
     ${titleFieldHTML("fd",stripTestTitle(t.title),"")}
     <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="fdExam">${EXAM_KEYS.map(e=>`<option ${e===examOf(t)?"selected":""}>${e}</option>`).join("")}</select></div>
-      <div><label>Class (who can see it)</label><select id="fdClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
+      <div><label>Class (who can see it)</label><select id="fdClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11 students</option><option value="12" ${t.class==="12"?"selected":""}>Class 12 students</option>${t.class==="both"?'<option value="both" selected>Class 11 &amp; 12 (old setting)</option>':""}</select></div></div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="fdDur" type="number" value="${t.duration||60}"/></div>
       <div></div></div>
     <div class="grid cols-2"><div><label>Opens (common)</label>${dtPair("fdStart")}</div><div><label>Closes (common)</label>${dtPair("fdEnd")}</div></div>
@@ -3063,7 +3072,7 @@ async function openReschedule(id){
   modal(`<h2>Reschedule test</h2><p class="muted">${esc(t.title)}</p>
     ${titleFieldHTML("rs",stripTestTitle(t.title),"")}
     <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="rsExam">${EXAM_KEYS.map(e=>`<option ${e===examOf(t)?"selected":""}>${e}</option>`).join("")}</select></div>
-      <div><label>Class (who can see it)</label><select id="rsClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
+      <div><label>Class (who can see it)</label><select id="rsClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11 students</option><option value="12" ${t.class==="12"?"selected":""}>Class 12 students</option>${t.class==="both"?'<option value="both" selected>Class 11 &amp; 12 (old setting)</option>':""}</select></div></div>
     <div class="grid cols-2"><div><label>Opens</label>${dtPair("rsStart",toLocal(t.startAt))}</div>
       <div><label>Closes</label>${dtPair("rsEnd",toLocal(t.endAt))}</div></div>
     <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
