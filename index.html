@@ -55,6 +55,10 @@ a{color:var(--accent)}
 .auth-card p.lede{color:var(--ink-soft);font-size:14px;margin:0 0 20px}
 label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:14px 0 6px;letter-spacing:.2px}
 input,select,textarea{width:100%;padding:11px 13px;border:1px solid var(--line-2);border-radius:10px;background:#fff;font-size:15px;color:var(--ink);font-family:inherit}
+select.tbox{padding:11px 4px;flex:none;text-align:center;text-align-last:center;font-variant-numeric:tabular-nums}
+.dtpair{display:flex;gap:6px;flex-wrap:nowrap;align-items:center;min-width:0}
+.dtpair>input[type=date]{flex:1 1 92px;min-width:0;padding-left:9px;padding-right:5px;font-variant-numeric:tabular-nums}
+@media(max-width:430px){ .dtpair{flex-wrap:wrap;gap:6px 6px} .dtpair>input[type=date]{flex:1 1 100%} }
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 18px;border-radius:10px;border:1px solid transparent;font-weight:700;font-size:14.5px;background:var(--accent);color:#fff;transition:.15s}
 .btn:hover{background:var(--accent-ink)}
@@ -154,6 +158,20 @@ tr:last-child td{border-bottom:none}
 .search-hit:last-child{border-radius:0 0 8px 8px}
 .search-hit:hover{background:var(--accent-soft)}
 .opt.sel{border-color:var(--accent);background:var(--accent-soft)}
+/* the centre list: name, Opens, Closes as three tidy columns; stacked on a small screen */
+.cAsgHead,.cAsgRow{display:grid;grid-template-columns:minmax(120px,0.9fr) minmax(300px,1.25fr) minmax(300px,1.25fr);gap:6px 12px;align-items:center}
+.cAsgHead{font-size:12px;font-weight:700;color:var(--ink-soft);padding:2px 0 7px;letter-spacing:.2px}
+.cAsgRow{padding:7px 0;border-top:1px dashed var(--line)}
+.cAsgName{display:flex;gap:8px;align-items:center;margin:0;min-width:0;font-size:13.5px}
+.cAsgName>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cAsgCell{min-width:0}
+.cAsgLab{display:none;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:3px}
+@media(max-width:1020px){
+  .cAsgHead{display:none}
+  .cAsgRow{grid-template-columns:1fr;gap:8px;padding:10px 0}
+  .cAsgName{font-weight:700;font-size:14.5px}
+  .cAsgLab{display:block}
+}
 .opt.locked{cursor:not-allowed;opacity:.65}
 .opt.locked:hover{border-color:var(--line-2)}
 .pgrid button.lockedq{border-style:dashed;border-color:var(--danger);color:var(--danger)}
@@ -804,7 +822,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: statements & dates"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: AM/PM & centre rows"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1583,26 +1601,59 @@ const TS=v=>v?firebase.firestore.Timestamp.fromDate(new Date(v)):null;
 /* ---- Date & time boxes: a plain calendar box and a plain clock box, instead of the combined picker
    that is fiddly to use. They write into a hidden field in the old format, so everything that reads
    these values keeps working. ---- */
-function dtPair(id,value,width){
+/* The time is picked the way we say it out loud: hour, minutes, AM or PM. The three boxes write a
+   24-hour value into the hidden field, so everything that already reads these values keeps working. */
+const TMINS=["00","05","10","15","20","25","30","35","40","45","50","55"];
+function timeBoxes(id,hhmm,compact){
+  const m=String(hhmm||"").match(/^(\d{1,2}):(\d{2})$/);
+  let h12="",mi="",ap="AM";
+  if(m){ const H=parseInt(m[1],10); ap=H<12?"AM":"PM"; h12=String(H%12===0?12:H%12); mi=m[2]; }
+  const mins=TMINS.slice(); if(mi&&mins.indexOf(mi)<0){ mins.push(mi); mins.sort(); }
+  const hrs=[]; for(let i=1;i<=12;i++) hrs.push(String(i));
+  const w=compact?"56px":"62px", wa=compact?"62px":"68px";
+  const box=(sfx,opts,cur,blank,width)=>`<select id="${id}${sfx}" onchange="dtSync('${id}')" class="tbox" style="width:${width}">`
+    +(blank?`<option value="">--</option>`:"")
+    +opts.map(o=>`<option value="${o}"${String(cur)===String(o)?" selected":""}>${o}</option>`).join("")
+    +`</select>`;
+  return `<span class="row" style="gap:3px;flex-wrap:nowrap;align-items:center;flex:none">`
+    +box("_h",hrs,h12,true,w)+`<b style="opacity:.45">:</b>`+box("_m",mins,mi||"00",false,w)+box("_ap",["AM","PM"],ap,false,wa)
+    +`</span>`;
+}
+function timeVal(id){
+  const h=val(id+"_h"); if(!h) return "";
+  let H=parseInt(h,10)%12; if((val(id+"_ap")||"AM")==="PM") H+=12;
+  return String(H).padStart(2,"0")+":"+(val(id+"_m")||"00");
+}
+function setTimeBoxes(id,hhmm){
+  const m=String(hhmm||"").match(/^(\d{1,2}):(\d{2})$/), H=m?parseInt(m[1],10):null;
+  if(el(id+"_h"))  el(id+"_h").value = m?String(H%12===0?12:H%12):"";
+  if(el(id+"_m")){ const sel=el(id+"_m");
+    if(m&&!Array.from(sel.options).some(o=>o.value===m[2])) sel.add(new Option(m[2],m[2]));
+    sel.value=m?m[2]:"00"; }
+  if(el(id+"_ap")) el(id+"_ap").value = m?(H<12?"AM":"PM"):"AM";
+}
+function dtPair(id,value,compact){
   const m=String(value||"").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
-  return `<div class="row" style="gap:6px;flex-wrap:nowrap;align-items:center">
-    <input type="date" id="${id}_d" value="${m?m[1]:""}" onchange="dtSync('${id}')" style="flex:1;min-width:0"/>
-    <input type="time" id="${id}_t" value="${m?m[2]:""}" step="300" onchange="dtSync('${id}')" style="width:${width||"140px"};flex:none;font-variant-numeric:tabular-nums"/>
+  return `<div class="dtpair">
+    <input type="date" id="${id}_d" value="${m?m[1]:""}" onchange="dtSync('${id}')"/>
+    ${timeBoxes(id,m?m[2]:"",compact)}
     <input type="hidden" id="${id}" value="${esc(value||"")}"/></div>`;
 }
 function dtSync(id){
   const h=el(id); if(!h) return;
-  const d=val(id+"_d"), t=val(id+"_t");
+  const d=val(id+"_d");
+  if(d&&!val(id+"_h")&&el(id+"_h")) setTimeBoxes(id,"00:00");   // a date with no time means 12 AM — show it
+  const t=timeVal(id);
   h.value=d?`${d}T${t||"00:00"}`:"";
-  if(d&&!t&&el(id+"_t")) el(id+"_t").value="00:00";
   h.dispatchEvent(new Event("input",{bubbles:true}));
 }
-function dtSet(id,value){                    // fill both boxes from a "2026-09-30T18:45" value
+function dtSet(id,value){                    // fill the boxes from a "2026-09-30T18:45" value
   const h=el(id); if(!h) return; h.value=value||"";
   const m=String(value||"").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
   if(el(id+"_d")) el(id+"_d").value=m?m[1]:"";
-  if(el(id+"_t")) el(id+"_t").value=m?m[2]:"";
+  setTimeBoxes(id,m?m[2]:"");
 }
+function dtMark(id,bad){ ["_d","_h","_m","_ap"].forEach(x=>{ const e=el(id+x); if(e) e.style.borderColor=bad?"var(--danger)":""; }); }
 // Typing an "Opens" time immediately limits the matching "Closes" box to later times
 // (tStart/tEnd, suStart/suEnd, fdStart/fdEnd, rsStart/rsEnd and every per-centre S_/E_ pair).
 document.addEventListener("input",e=>{
@@ -1615,7 +1666,7 @@ document.addEventListener("input",e=>{
   const st=el(startId),en=el(endId); if(!st||!en) return;
   const bad=st.value&&en.value&&en.value<=st.value;
   const ed=el(endId+"_d"); if(ed) ed.min=(st.value||"").slice(0,10);
-  [el(endId+"_d"),el(endId+"_t")].forEach(x=>{ if(x) x.style.borderColor=bad?"var(--danger)":""; });
+  dtMark(endId,bad);
 });
 const toLocalInput=ts=>{ if(!ts||!ts.toDate) return ""; const d=ts.toDate(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
 function assignedCentres(t){ if(!t) return []; if(t.scope==="all") return CENTRES.map(c=>c.id);
@@ -1628,11 +1679,12 @@ function centreAssignHTML(p,t){
   <div style="border:1px solid var(--line);border-radius:10px;padding:8px 12px">
     <label style="display:flex;gap:8px;align-items:center;margin:2px 0 6px;font-weight:600"><input type="checkbox" style="width:auto" id="${p}All" ${on.size===CENTRES.length?"checked":""}
       onchange="document.querySelectorAll('.${p}cc').forEach(c=>c.checked=this.checked)"/> All centres</label>
-    ${CENTRES.map(c=>`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0;padding-top:4px;border-top:1px dashed var(--line)">
-      <label style="display:flex;gap:8px;align-items:center;margin:0;width:150px"><input type="checkbox" class="${p}cc" style="width:auto" id="${p}C_${c.id}" ${on.has(c.id)?"checked":""}
-        onchange="el('${p}All').checked=[...document.querySelectorAll('.${p}cc')].every(x=>x.checked)"/> ${esc(c.name)}${c.id===ME.centreId?" (your centre)":""}</label>
-      <span class="muted" style="font-size:12px">Opens</span><span style="flex:1;min-width:210px">${dtPair(p+"S_"+c.id,toLocalInput(w[c.id]&&w[c.id].startAt),"128px")}</span>
-      <span class="muted" style="font-size:12px">Closes</span><span style="flex:1;min-width:210px">${dtPair(p+"E_"+c.id,toLocalInput(w[c.id]&&w[c.id].endAt),"128px")}</span></div>`).join("")}
+    <div class="cAsgHead"><span>Centre</span><span>Opens — date &amp; time</span><span>Closes — date &amp; time</span></div>
+    ${CENTRES.map(c=>`<div class="cAsgRow">
+      <label class="cAsgName"><input type="checkbox" class="${p}cc" style="width:auto" id="${p}C_${c.id}" ${on.has(c.id)?"checked":""}
+        onchange="el('${p}All').checked=[...document.querySelectorAll('.${p}cc')].every(x=>x.checked)"/><span>${esc(c.name)}${c.id===ME.centreId?" (your centre)":""}</span></label>
+      <div class="cAsgCell"><span class="cAsgLab">Opens</span>${dtPair(p+"S_"+c.id,toLocalInput(w[c.id]&&w[c.id].startAt),true)}</div>
+      <div class="cAsgCell"><span class="cAsgLab">Closes</span>${dtPair(p+"E_"+c.id,toLocalInput(w[c.id]&&w[c.id].endAt),true)}</div></div>`).join("")}
     <p class="muted" style="font-size:12px;margin:6px 0 2px">Leave a centre's own times empty to use the common Opens / Closes. Example: Ambernath 10:00–12:00, Ulhasnagar 3 08:00–10:00.</p>
   </div>`;
 }
