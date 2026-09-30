@@ -786,7 +786,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: word numbering"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: master papers locked"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1625,7 +1625,18 @@ function scopeLabel(t){
   return centreName(t.scope);
 }
 
-function canEditTest(t){ return ME.role==="master"||(ME.role==="admin"&&(t.scope===ME.centreId||t.scope==="draft_"+ME.centreId||t.createdBy===ME.uid)); }
+// Master can change any paper. A centre admin can change only papers that the master did NOT make:
+// their own, or one made by another admin for their own centre. Papers with no record of who made them
+// are treated as the master's and left alone.
+function canEditTest(t){
+  if(ME.role==="master") return true;
+  if(ME.role!=="admin"||!t) return false;
+  const by=t.createdByRole||"master";
+  if(by==="master") return false;
+  if(t.createdBy===ME.uid) return true;
+  return t.scope===ME.centreId||t.scope==="draft_"+ME.centreId;
+}
+function lockedByMaster(t){ return ME.role==="admin"&&t&&(t.createdByRole||"master")==="master"; }
 // Questions of a test in paper order, grouped into subject sections (Physics, Chemistry, Maths, Biology…)
 async function testPaperGroups(t){
   const qs=await fetchQs(t.questionIds||[]); const byId={}; qs.forEach(q=>byId[q.id]=q);
@@ -2072,7 +2083,7 @@ function openSelfUpload(){
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
     <div id="suSolAtRow" style="display:none"><label>Show solutions from</label><input id="suSolAt" type="datetime-local"/></div>
-    <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Subjects by question number — only for a mixed paper (PCM / PCB)</summary>
+    <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:600">Subjects by question number — only for a mixed paper (PCM / PCB)</summary>
       <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave empty for a single-subject paper. The subjects are applied when you click “Save as final paper”.</p>
       <div id="suSections"></div></details>
     <div class="msg" id="suActionMsg"></div>
@@ -2460,7 +2471,9 @@ async function openFinalizeDraft(id){
       <div></div></div>
     <div class="grid cols-2"><div><label>Opens (common)</label><input id="fdStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="fdEnd" type="datetime-local"/></div></div>
     ${centreAssignHTML("fdA",null)}
-    <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number (for mixed PCM / PCB papers)</summary>${sectionRowsHTML("fdSec",t.exam)}</details>
+    <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number (for mixed PCM / PCB papers)</summary>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave every box empty for a single-subject paper.</p>
+      ${sectionRowsHTML("fdSec",t.exam)}</details>
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="fdSolMode" onchange="el('fdSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
       <option value="immediate">Immediately after each student submits</option>
@@ -2483,6 +2496,8 @@ async function saveFinalizeDraft(id){
   }catch(e){ setMsg("fdMsg",errMsg(e),"err"); }
 }
 async function deleteDraft(id){
+  { const t0=(await db.collection("tests").doc(id).get()).data()||{};
+    if(!canEditTest(t0)) return alert("This draft was created by the head office (master login), so it can't be deleted from a centre login."); }
   if(!await askDelete("Delete this draft paper?","The questions stay in your question bank.","Yes, delete the draft")) return;
   try{ const t=(await db.collection("tests").doc(id).get()).data()||{};
     await db.collection("tests").doc(id).delete();
@@ -2939,16 +2954,21 @@ async function loadTests(){
       el("draftList").innerHTML=drafts.length?tableHTML(["Title","Exam","Questions","Waiting in Review queue",""],drafts.map(d=>{const t=d.data();const w=(t.pendingIds||[]).length;
         return [`<b>${esc(t.title)}</b><br><span class="muted">${esc(t.uploadName||"")}</span>`,examTag(examOf(t)),(t.questionIds||[]).length,
           w?`<a href="#" onclick="go('review');return false">${w} to approve →</a>`:'<span class="muted">none — ready</span>',
-          `<button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button> <button class="btn ghost sm danger" onclick="deleteDraft('${d.id}')">Delete</button>`];})):""; }
+          (canEditTest(t)
+            ? `<button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button> <button class="btn ghost sm danger" onclick="deleteDraft('${d.id}')">Delete</button>`
+            : `<button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <span class="muted" style="font-size:12px">· made by the head office</span>`)];})):""; }
     el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
       :tableHTML(["Title","Exam","Subjects","Q","Scope","Window","Status",""],
         docs.map(d=>{const t=d.data();const canEdit=canEditTest(t);return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}${t.solutionsAt?` · 🔒 Solutions from ${fmtDate(t.solutionsAt)}`:""}</span>`,
           examTag(examOf(t)),subjChips(t.subjects),(t.questionIds||[]).length,scopeLabel(t),windowLabel(t),testStatusTag(t),
           `<button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button>`
-          +(canEdit?` <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button> <button class="btn ghost sm" onclick="openReschedule('${d.id}')">Reschedule</button> <button class="btn ghost sm danger" onclick="deleteTest('${d.id}')">Delete</button>`:"")];}));
+          +(canEdit?` <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button> <button class="btn ghost sm" onclick="openReschedule('${d.id}')">Reschedule</button> <button class="btn ghost sm danger" onclick="deleteTest('${d.id}')">Delete</button>`
+            :(lockedByMaster(t)?` <span class="muted" style="font-size:12px">🔒 made by the head office</span>`:""))];}));
   }catch(e){ el("testList").innerHTML=errBox(e); }
 }
 async function openReschedule(id){
+  { const t0=(await db.collection("tests").doc(id).get()).data()||{};
+    if(!canEditTest(t0)) return alert("This paper was created by the head office (master login), so a centre login can't change it."); }
   const t=(await db.collection("tests").doc(id).get()).data();
   const toLocal=ts=>{ if(!ts)return""; const d=ts.toDate(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
   modal(`<h2>Reschedule test</h2><p class="muted">${esc(t.title)}</p>
@@ -2995,6 +3015,8 @@ async function saveReschedule(id){
   }catch(e){ setMsg("rsMsg",errMsg(e),"err"); setBtn("rsBtn",false,"Save changes"); }
 }
 async function deleteTest(id){
+  { const t0=(await db.collection("tests").doc(id).get()).data()||{};
+    if(!canEditTest(t0)) return alert("This paper was created by the head office (master login), so it can't be deleted from a centre login."); }
   if(!await askDelete("Delete this test?","Students will no longer see it. Past attempts are kept.","Yes, delete the test")) return;
   try{ const t=(await db.collection("tests").doc(id).get()).data()||{};
     await db.collection("tests").doc(id).delete();
