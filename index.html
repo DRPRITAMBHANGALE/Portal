@@ -831,7 +831,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre box & class"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centres unticked"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1682,11 +1682,11 @@ function assignedCentres(t){ if(!t) return []; if(t.scope==="all") return CENTRE
   if(t.scope==="multi") return t.centres||[]; if(t.finalScope&&String(t.scope||"").startsWith("draft")) return t.finalScope==="all"?CENTRES.map(c=>c.id):(t.finalCentres||[t.finalScope]);
   return t.scope?[t.scope]:[]; }
 function centreAssignHTML(p,t){
-  const on=new Set(t?assignedCentres(t):(ME.role==="admin"?[ME.centreId]:CENTRES.map(c=>c.id)));
+  const on=new Set(t?assignedCentres(t):[]);
   const w=(t&&t.windows)||{};
-  return `<label>Assign to centres <span class="muted" style="font-weight:400">— tick the centres; give a centre its own time only if it differs from the common Opens / Closes</span></label>
+  return `<label>Assign to centres <span class="muted" style="font-weight:400">— tick the centres this paper is for; give a centre its own time only if it differs from the common Opens / Closes</span></label>
   <div class="cAsgBox">
-    <label style="display:flex;gap:8px;align-items:center;margin:2px 0 6px;font-weight:600"><input type="checkbox" style="width:auto" id="${p}All" ${on.size===CENTRES.length?"checked":""}
+    <label style="display:flex;gap:8px;align-items:center;margin:2px 0 6px;font-weight:600"><input type="checkbox" style="width:auto" id="${p}All" ${(on.size&&on.size===CENTRES.length)?"checked":""}
       onchange="document.querySelectorAll('.${p}cc').forEach(c=>c.checked=this.checked)"/> All centres</label>
     <div class="cAsgHead"><span>Centre</span><span>Opens — date &amp; time</span><span>Closes — date &amp; time</span></div>
     ${CENTRES.map(c=>`<div class="cAsgRow">
