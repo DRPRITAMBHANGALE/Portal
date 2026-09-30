@@ -621,13 +621,31 @@ function prettyPlain(s,subject){
      .replace(/\^(-?[0-9]+|-?[A-Za-z])/g,'<sup>$1</sup>');
   s=s.replace(/_\{([^}]+)\}/g,'<sub>$1</sub>').replace(/_\(([^)]+)\)/g,'<sub>$1</sub>').replace(/_([0-9]+|[A-Za-z])/g,'<sub>$1</sub>');
   s=s.replace(/(\d+)\s*\/\s*(\d+)/g,'<span class="frac"><span class="fnum">$1</span><span class="fden">$2</span></span>');
+  s=s.replace(/\n/g,"<br>");                 // keep the line breaks the question was written with
   return s;
 }
 // Full math: renders LaTeX in \(...\), \[...\], $$...$$, $...$ with KaTeX; plain text via prettyPlain
 const QFIG_RE=/(\[\[img:data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+\]\])/;
+// An assertion–reason or "two statements" question reads far better with each part on its own line.
+// Only the standard lead-ins are broken; nothing else about the text is changed.
+function breakStatements(s){
+  if(!/Assertion|Statement|Reason/.test(s)) return s;
+  const MARK="\u0000"; let lead=null;
+  // the standard lead-in sentence stays as one line — its "Assertion (A)…Reason (R)" is not a heading
+  s=s.replace(/one is labell?ed as Assertion\s*\(?\s*A\s*\)?[^.]{0,90}?labell?ed as Reason\s*\(?\s*R\s*\)?\s*[.:]?/i,
+    m=>{ lead=m; return MARK; });
+  s=s.replace(/\s*(Assertion\s*\(?\s*A\s*\)?\s*[:.]?\s)/g,"\n$1")
+     .replace(/\s*(Reason\s*\(?\s*R\s*\)?\s*[:.]?\s)/g,"\n$1")
+     .replace(/\s*(Statement[\s-]*\(?\s*(?:I{1,3}|IV|[1-4])\s*\)?\s*[:.]\s)/g,"\n$1")
+     .replace(/\s*(In the light of the above statements[\s\S]*?below\s*:?)/gi,"\n$1");
+  if(!/In the light of the above statements/i.test(s))
+    s=s.replace(/\s*(Choose the (?:correct|most appropriate) answer[\s\S]*?below\s*:?)/gi,"\n$1");
+  if(lead!==null) s=s.replace(MARK,lead);
+  return s.replace(/\n{2,}/g,"\n").replace(/^\n/,"");
+}
 function fmtMath(s,subject){
   if(s==null) return "";
-  s=String(s);
+  s=breakStatements(String(s));
   if(s.includes("[[tbl:")) return s.split(/(\[\[tbl:[\s\S]*?:tbl\]\])/).map(p=>{
     const m=p.match(/^\[\[tbl:([\s\S]*?):tbl\]\]$/);
     return m?renderQTable(m[1],subject):fmtMathPlain(p,subject); }).join("");
@@ -786,7 +804,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: master papers locked"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: statements & dates"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1562,23 +1580,42 @@ function fillSectionRows(examId,boxId,prefix){ if(el(boxId)) el(boxId).innerHTML
 
 /* ---- Assign a test to one, several or all centres, each with its own time window ---- */
 const TS=v=>v?firebase.firestore.Timestamp.fromDate(new Date(v)):null;
+/* ---- Date & time boxes: a plain calendar box and a plain clock box, instead of the combined picker
+   that is fiddly to use. They write into a hidden field in the old format, so everything that reads
+   these values keeps working. ---- */
+function dtPair(id,value,width){
+  const m=String(value||"").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  return `<div class="row" style="gap:6px;flex-wrap:nowrap;align-items:center">
+    <input type="date" id="${id}_d" value="${m?m[1]:""}" onchange="dtSync('${id}')" style="flex:1;min-width:0"/>
+    <input type="time" id="${id}_t" value="${m?m[2]:""}" step="300" onchange="dtSync('${id}')" style="width:${width||"140px"};flex:none;font-variant-numeric:tabular-nums"/>
+    <input type="hidden" id="${id}" value="${esc(value||"")}"/></div>`;
+}
+function dtSync(id){
+  const h=el(id); if(!h) return;
+  const d=val(id+"_d"), t=val(id+"_t");
+  h.value=d?`${d}T${t||"00:00"}`:"";
+  if(d&&!t&&el(id+"_t")) el(id+"_t").value="00:00";
+  h.dispatchEvent(new Event("input",{bubbles:true}));
+}
+function dtSet(id,value){                    // fill both boxes from a "2026-09-30T18:45" value
+  const h=el(id); if(!h) return; h.value=value||"";
+  const m=String(value||"").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if(el(id+"_d")) el(id+"_d").value=m?m[1]:"";
+  if(el(id+"_t")) el(id+"_t").value=m?m[2]:"";
+}
 // Typing an "Opens" time immediately limits the matching "Closes" box to later times
 // (tStart/tEnd, suStart/suEnd, fdStart/fdEnd, rsStart/rsEnd and every per-centre S_/E_ pair).
 document.addEventListener("input",e=>{
-  const t=e.target; if(!t||t.type!=="datetime-local"||!t.id) return;
-  let mate=null;
-  if(/Start$/.test(t.id)) mate=el(t.id.replace(/Start$/,"End"));
-  else if(/S_[A-Za-z0-9]+$/.test(t.id)) mate=el(t.id.replace(/S_/,"E_"));
-  if(!mate) return;
-  mate.min=t.value||"";
-  if(t.value&&mate.value&&mate.value<=t.value) mate.style.borderColor="var(--danger)"; else mate.style.borderColor="";
-});
-document.addEventListener("input",e=>{
-  const t=e.target; if(!t||t.type!=="datetime-local"||!t.id) return;
-  let start=null;
-  if(/End$/.test(t.id)) start=el(t.id.replace(/End$/,"Start"));
-  else if(/E_[A-Za-z0-9]+$/.test(t.id)) start=el(t.id.replace(/E_/,"S_"));
-  if(start) t.style.borderColor=(start.value&&t.value&&t.value<=start.value)?"var(--danger)":"";
+  const t=e.target; if(!t||!t.id) return;
+  let startId=null,endId=null;
+  if(/Start$/.test(t.id)){ startId=t.id; endId=t.id.replace(/Start$/,"End"); }
+  else if(/End$/.test(t.id)){ endId=t.id; startId=t.id.replace(/End$/,"Start"); }
+  else if(/S_[A-Za-z0-9]+$/.test(t.id)){ startId=t.id; endId=t.id.replace(/S_/,"E_"); }
+  else if(/E_[A-Za-z0-9]+$/.test(t.id)){ endId=t.id; startId=t.id.replace(/E_/,"S_"); }
+  const st=el(startId),en=el(endId); if(!st||!en) return;
+  const bad=st.value&&en.value&&en.value<=st.value;
+  const ed=el(endId+"_d"); if(ed) ed.min=(st.value||"").slice(0,10);
+  [el(endId+"_d"),el(endId+"_t")].forEach(x=>{ if(x) x.style.borderColor=bad?"var(--danger)":""; });
 });
 const toLocalInput=ts=>{ if(!ts||!ts.toDate) return ""; const d=ts.toDate(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
 function assignedCentres(t){ if(!t) return []; if(t.scope==="all") return CENTRES.map(c=>c.id);
@@ -1594,8 +1631,8 @@ function centreAssignHTML(p,t){
     ${CENTRES.map(c=>`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0;padding-top:4px;border-top:1px dashed var(--line)">
       <label style="display:flex;gap:8px;align-items:center;margin:0;width:150px"><input type="checkbox" class="${p}cc" style="width:auto" id="${p}C_${c.id}" ${on.has(c.id)?"checked":""}
         onchange="el('${p}All').checked=[...document.querySelectorAll('.${p}cc')].every(x=>x.checked)"/> ${esc(c.name)}${c.id===ME.centreId?" (your centre)":""}</label>
-      <span class="muted" style="font-size:12px">Opens</span><input type="datetime-local" id="${p}S_${c.id}" style="width:auto;flex:1;min-width:170px" value="${toLocalInput(w[c.id]&&w[c.id].startAt)}"/>
-      <span class="muted" style="font-size:12px">Closes</span><input type="datetime-local" id="${p}E_${c.id}" style="width:auto;flex:1;min-width:170px" value="${toLocalInput(w[c.id]&&w[c.id].endAt)}"/></div>`).join("")}
+      <span class="muted" style="font-size:12px">Opens</span><span style="flex:1;min-width:210px">${dtPair(p+"S_"+c.id,toLocalInput(w[c.id]&&w[c.id].startAt),"128px")}</span>
+      <span class="muted" style="font-size:12px">Closes</span><span style="flex:1;min-width:210px">${dtPair(p+"E_"+c.id,toLocalInput(w[c.id]&&w[c.id].endAt),"128px")}</span></div>`).join("")}
     <p class="muted" style="font-size:12px;margin:6px 0 2px">Leave a centre's own times empty to use the common Opens / Closes. Example: Ambernath 10:00–12:00, Ulhasnagar 3 08:00–10:00.</p>
   </div>`;
 }
@@ -2076,13 +2113,13 @@ function openSelfUpload(){
     ${titleFieldHTML("su","","Leave blank to use the file name")}
     <label>Paper is for</label><select id="suPaperClass"><option value="both">Class 11 &amp; 12 students</option><option value="11">Class 11 students</option><option value="12">Class 12 students</option></select>
     <label>Duration (min)</label><input id="suDur" type="number" value="60"/>
-    <div class="grid cols-2"><div><label>Opens (common)</label><input id="suStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="suEnd" type="datetime-local"/></div></div>
+    <div class="grid cols-2"><div><label>Opens (common)</label>${dtPair("suStart")}</div><div><label>Closes (common)</label>${dtPair("suEnd")}</div></div>
     ${centreAssignHTML("suA")}
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="suSolMode" onchange="suSolModeChanged()">
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
-    <div id="suSolAtRow" style="display:none"><label>Show solutions from</label><input id="suSolAt" type="datetime-local"/></div>
+    <div id="suSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("suSolAt")}</div>
     <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:600">Subjects by question number — only for a mixed paper (PCM / PCB)</summary>
       <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave empty for a single-subject paper. The subjects are applied when you click “Save as final paper”.</p>
       <div id="suSections"></div></details>
@@ -2469,7 +2506,7 @@ async function openFinalizeDraft(id){
       <div><label>Class (who can see it)</label><select id="fdClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
     <div class="grid cols-2"><div><label>Duration (min)</label><input id="fdDur" type="number" value="${t.duration||60}"/></div>
       <div></div></div>
-    <div class="grid cols-2"><div><label>Opens (common)</label><input id="fdStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="fdEnd" type="datetime-local"/></div></div>
+    <div class="grid cols-2"><div><label>Opens (common)</label>${dtPair("fdStart")}</div><div><label>Closes (common)</label>${dtPair("fdEnd")}</div></div>
     ${centreAssignHTML("fdA",null)}
     <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number (for mixed PCM / PCB papers)</summary>
       <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave every box empty for a single-subject paper.</p>
@@ -2478,7 +2515,7 @@ async function openFinalizeDraft(id){
     <select id="fdSolMode" onchange="el('fdSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
-    <div id="fdSolAtRow" style="display:none"><label>Show solutions from</label><input id="fdSolAt" type="datetime-local"/></div>
+    <div id="fdSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("fdSolAt")}</div>
     <div class="msg" id="fdMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="fdBtn" onclick="saveFinalizeDraft('${id}')">✓ Save as final paper</button></div>`);
@@ -2975,8 +3012,8 @@ async function openReschedule(id){
     ${titleFieldHTML("rs",stripTestTitle(t.title),"")}
     <div class="grid cols-2"><div><label>Exam (students see papers for their own exam)</label><select id="rsExam">${EXAM_KEYS.map(e=>`<option ${e===examOf(t)?"selected":""}>${e}</option>`).join("")}</select></div>
       <div><label>Class (who can see it)</label><select id="rsClass"><option value="11" ${t.class==="11"?"selected":""}>Class 11</option><option value="12" ${t.class==="12"?"selected":""}>Class 12</option><option value="both" ${t.class==="both"?"selected":""}>Class 11 &amp; 12</option></select></div></div>
-    <div class="grid cols-2"><div><label>Opens</label><input id="rsStart" type="datetime-local" value="${toLocal(t.startAt)}"/></div>
-      <div><label>Closes</label><input id="rsEnd" type="datetime-local" value="${toLocal(t.endAt)}"/></div></div>
+    <div class="grid cols-2"><div><label>Opens</label>${dtPair("rsStart",toLocal(t.startAt))}</div>
+      <div><label>Closes</label>${dtPair("rsEnd",toLocal(t.endAt))}</div></div>
     <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
     ${centreAssignHTML("rsA",t)}
     ${ME.role!=="student"?`<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number</summary>
@@ -2986,7 +3023,7 @@ async function openReschedule(id){
     <select id="rsSolMode" onchange="el('rsSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
       <option value="immediate" ${!t.solutionsAt?"selected":""}>Immediately after each student submits</option>
       <option value="scheduled" ${t.solutionsAt?"selected":""}>Only from a specific date &amp; time</option></select>
-    <div id="rsSolAtRow" style="display:${t.solutionsAt?"block":"none"}"><label>Show solutions from</label><input id="rsSolAt" type="datetime-local" value="${toLocal(t.solutionsAt)}"/></div>
+    <div id="rsSolAtRow" style="display:${t.solutionsAt?"block":"none"}"><label>Show solutions from</label>${dtPair("rsSolAt",toLocal(t.solutionsAt))}</div>
     <div class="msg" id="rsMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="rsBtn" onclick="saveReschedule('${id}')">Save changes</button></div>`);
@@ -3214,13 +3251,13 @@ function openCreateTest(){
     <div id="tDiffs" style="margin-bottom:6px">${difficultyPctRows("tdiffpct")}</div>
     ${numericalControl("tNum")}
     <label>Duration (min)</label><input id="tDur" type="number" value="30"/>
-    <div class="grid cols-2"><div><label>Opens (common)</label><input id="tStart" type="datetime-local"/></div><div><label>Closes (common)</label><input id="tEnd" type="datetime-local"/></div></div>
+    <div class="grid cols-2"><div><label>Opens (common)</label>${dtPair("tStart")}</div><div><label>Closes (common)</label>${dtPair("tEnd")}</div></div>
     ${centreAssignHTML("tA")}
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="tSolMode" onchange="tSolModeChanged()">
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
-    <div id="tSolAtRow" style="display:none"><label>Show solutions from</label><input id="tSolAt" type="datetime-local"/></div>
+    <div id="tSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("tSolAt")}</div>
     <div class="note" id="tMark"></div>
     <div class="msg" id="tMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -4406,7 +4443,7 @@ async function pagePractice(){
       <label>When</label>
       <select id="pWhen" onchange="el('pSchedRow').style.display=this.value==='later'?'block':'none'">
         <option value="now">Start now</option><option value="later">Schedule for later</option></select>
-      <div id="pSchedRow" style="display:none"><label>Date &amp; time</label><input id="pAt" type="datetime-local"/></div>
+      <div id="pSchedRow" style="display:none"><label>Date &amp; time</label>${dtPair("pAt")}</div>
       <div class="msg" id="pMsg"></div>
       <button class="btn full" id="pBtn" onclick="startPractice()">Start practice test</button>
     </div>
