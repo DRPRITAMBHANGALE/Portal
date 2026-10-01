@@ -576,6 +576,7 @@ async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerica
   let docs=snap.docs.filter(d=>{const x=d.data();
     if(classes.length>1 && !classes.includes(x.class)) return false;
     if(chapters && chapters.length && !chapters.includes(x.topic)) return false;
+    if(x.difficulty===RETIRED_DIFF) return false;              // the Easy level is retired
     if(diffs && diffs.length && !diffs.includes(x.difficulty)) return false;
     if(numerical==="only" && !x.numerical) return false;
     if(numerical==="none" && x.numerical) return false;
@@ -725,7 +726,9 @@ const STUDENT_LOGIN_DOMAIN = "sonamtuitions.app";
 const toLoginEmail = id => id.includes("@") ? id : id.toLowerCase()+"@"+STUDENT_LOGIN_DOMAIN;
 
 const ALL_SUBJECTS = ["Physics","Chemistry","Mathematics","Biology","Botany","Zoology"];
-const DIFFICULTIES = ["Easy","Easy-Moderate","Moderate","Moderate-Difficult","Difficult","Previous Year"];
+const DIFFICULTIES = ["Easy-Moderate","Moderate","Moderate-Difficult","Difficult","Previous Year"];
+const RETIRED_DIFF = "Easy";               // older questions may still carry it; nothing new ever does
+const PYQ_MIN_YEAR = 2016;                 // previous-year questions never come from before this
 const TOPICS = {
   Physics:["Laws of Motion","Electrostatics","Current Electricity","Optics","Rotational Motion","Magnetism","Thermodynamics","Modern Physics"],
   Chemistry:["Chemical Bonding","Solutions","Electrochemistry","Coordination Compounds","Hydrocarbons","Thermodynamics","p-Block Elements","Aldehydes & Ketones"],
@@ -832,7 +835,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: toppers by centre"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: disqualified shown"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -934,6 +937,7 @@ async function loadQuestions(){
 function openAIGen(){
   modal(`<h2>✦ Generate questions with AI</h2>
     <p class="muted">Claude drafts exam-pattern questions with full solutions. Every draft goes to the <b>Review queue</b> for your approval before any student sees it.</p>
+    <div class="note" style="margin-bottom:10px;font-size:12.5px">Anything that repeats a question already in your bank — same wording, or the same question rewritten — is thrown away automatically and asked for again. <b>Previous Year</b> questions are limited to ${PYQ_MIN_YEAR} onwards; please still check the year on each one in the Review queue.</div>
     <div class="grid cols-2"><div><label>Exam</label>${examSelect("gExam")}</div><div><label>Class</label>${classSelect("gClass",false)}</div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="gSubject"></select></div><div><label>Topic</label><select id="gTopic"></select></div></div>
     <div class="grid cols-2"><div><label>Difficulty</label>${difficultySelect("gDiff")}</div>
@@ -959,6 +963,46 @@ async function aiGenerate(payload){
   }
   if(!res.ok){ let m="server returned "+res.status; try{const j=await res.json(); if(j&&(j.message||j.error)) m=j.message||j.error;}catch(_){} throw new Error(m); }
   const data=await res.json(); return data.questions||[];
+}
+/* Everything already in the bank for this exam / subject / class (and chapter, when one is chosen),
+   so a newly drafted question can be checked against it. */
+async function existingFingerprints(meta){
+  try{
+    let q=db.collection("questions").where("exam","==",meta.exam).where("subject","==",meta.subject);
+    if(meta.cls) q=q.where("class","==",meta.cls);
+    const snap=await q.limit(600).get();
+    const out=[];
+    snap.forEach(d=>{ const x=d.data();
+      if(meta.topic&&x.topic&&x.topic!==meta.topic) return;
+      if(x.text){ const fp=qFingerprint(x.text); fp.t=x.text; out.push(fp); } });
+    return out;
+  }catch(e){ console.warn("Couldn't read the bank for the repeat check",e); return []; }
+}
+/* Generate, throw away anything that repeats what is already there (or what this very run has just
+   produced), and ask again for the shortfall. Stops after a few rounds so it can never spin. */
+async function aiGenerateUnique(meta,total,onProgress){
+  const pool=await existingFingerprints(meta);
+  const kept=[]; let dropped=0, rounds=0;
+  while(kept.length<total && rounds<4){
+    const want=total-kept.length;
+    // the AI is also shown what to stay away from: this run's keepers first, then what the bank holds
+    const avoid=kept.map(k=>truncate(k.question,130))
+      .concat(pool.filter(x=>x.t).slice(-30).map(x=>truncate(x.t,130)))
+      .slice(0,45);
+    const items=await aiGenerateMany({...meta,count:want,avoid,minYear:PYQ_MIN_YEAR,noRepeats:true},
+      want,(d)=>{ if(onProgress) onProgress(Math.min(total,kept.length+d),total); });
+    if(!items.length) break;
+    items.forEach(it=>{
+      const text=String(it.question||"").trim(); if(!text) return;
+      if(meta.difficulty==="Previous Year" && !(parseInt(it.year)>=PYQ_MIN_YEAR)){ dropped++; return; }
+      const fp=qFingerprint(text);
+      if(qIsRepeat(fp,pool)){ dropped++; return; }
+      pool.push(fp); kept.push(it);
+    });
+    rounds++;
+    if(onProgress) onProgress(Math.min(total,kept.length),total);
+  }
+  return {items:kept.slice(0,total),dropped};
 }
 // Fetch many questions in safe sub-batches so the AI reply never gets cut off.
 async function aiGenerateMany(payload,total,onProgress){
@@ -987,10 +1031,10 @@ async function runAIGen(){
   const count=Math.min(50,Math.max(1,parseInt(val("gCount"))||5));
   setBtn("genBtn",true,`<span class="loader"></span> Generating…`); setMsg("genMsg","Contacting AI…","ok");
   try{
-    const items=await aiGenerateMany(meta,count,(done,tot)=>setMsg("genMsg",`Generating… ${done}/${tot}`,"ok"));
-    if(!items.length) throw new Error("No questions returned.");
+    const {items,dropped}=await aiGenerateUnique(meta,count,(done,tot)=>setMsg("genMsg",`Generating… ${done}/${tot}`,"ok"));
+    if(!items.length) throw new Error(dropped?`Every question that came back repeated one already in your bank. This chapter may be well covered already — try a different difficulty or chapter.`:"No questions returned.");
     await saveDrafts(items,meta);
-    setMsg("genMsg",`✓ ${items.length} draft questions created. Approve them in the Review queue.`,"ok");
+    setMsg("genMsg",`✓ ${items.length} draft question${items.length===1?"":"s"} created${dropped?` · ${dropped} repeat${dropped===1?"":"s"} thrown away`:""}. Approve them in the Review queue.`,"ok");
     setBtn("genBtn",false,"Generate &amp; send to review");
     setTimeout(()=>{closeModal();go("review");},1400);
   }catch(e){ setMsg("genMsg","Generation failed: "+e.message,"err"); setBtn("genBtn",false,"Generate &amp; send to review"); }
@@ -1028,17 +1072,18 @@ async function runAIGenAll(){
   if(!chapters.length) return setMsg("gaMsg","No chapters for this combination. Add them in Syllabus first.","err");
   if(!confirm(`Generate ${per} question(s) for each of ${chapters.length} chapter(s)? This can take a few minutes.`)) return;
   setBtn("gaBtn",true,`<span class="loader"></span> Working…`); el("gaMsg").className="msg"; el("gaMsg").textContent="";
-  let total=0; const fails=[];
+  let total=0,skipped=0; const fails=[];
   for(let i=0;i<chapters.length;i++){
     const ch=chapters[i];
     el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Chapter ${i+1} of ${chapters.length}: <b>${esc(ch)}</b> — generating…</div>`;
     try{
-      const items=await aiGenerateMany({exam,subject,cls,topic:ch,difficulty},per,(done,tot)=>{el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Chapter ${i+1} of ${chapters.length}: <b>${esc(ch)}</b> — ${done}/${tot}…</div>`;});
+      const {items,dropped}=await aiGenerateUnique({exam,subject,cls,topic:ch,difficulty},per,(done,tot)=>{el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">Chapter ${i+1} of ${chapters.length}: <b>${esc(ch)}</b> — ${done}/${tot}…</div>`;});
       if(items.length){ await saveDrafts(items,{exam,subject,cls,topic:ch,difficulty}); total+=items.length; }
-      el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">✓ ${i+1}/${chapters.length} &nbsp;${esc(ch)} — ${items.length} added (running total ${total})</div>`;
+      skipped+=dropped;
+      el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">✓ ${i+1}/${chapters.length} &nbsp;${esc(ch)} — ${items.length} added${dropped?`, ${dropped} repeat${dropped===1?"":"s"} skipped`:""} (running total ${total})</div>`;
     }catch(e){ fails.push(ch); el("gaProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">⚠ ${esc(ch)} failed: ${esc(e.message)}</div>`; }
   }
-  setMsg("gaMsg",`✓ Done — ${total} question(s) created across ${chapters.length-fails.length}/${chapters.length} chapters${fails.length?`. Couldn't do: ${fails.join(", ")} (try those again).`:"."} They're waiting in the Review queue.`, fails.length?"err":"ok");
+  setMsg("gaMsg",`✓ Done — ${total} question(s) created across ${chapters.length-fails.length}/${chapters.length} chapters${skipped?`, ${skipped} repeat(s) thrown away`:""}${fails.length?`. Couldn't do: ${fails.join(", ")} (try those again).`:"."} They're waiting in the Review queue.`, fails.length?"err":"ok");
   setBtn("gaBtn",false,"Generate all chapters");
   if(!fails.length) setTimeout(()=>{closeModal();go("review");},2000);
 }
@@ -2709,7 +2754,7 @@ async function editReviewQ(id){
       <div><label>Class</label><select id="eClass"><option value="11" ${x.class==="11"?"selected":""}>Class 11</option><option value="12" ${x.class==="12"?"selected":""}>Class 12</option></select></div></div>
     <div class="grid cols-2"><div><label>Subject</label><select id="eSubject"></select></div>
       <div><label>Topic / chapter</label><input id="eTopic" value="${esc(x.topic||"")}"/></div></div>
-    <label>Difficulty</label><select id="eDiff">${DIFFICULTIES.map(d=>`<option ${d===x.difficulty?"selected":""}>${d}</option>`).join("")}</select>
+    <label>Difficulty</label><select id="eDiff">${(DIFFICULTIES.includes(x.difficulty)||!x.difficulty?DIFFICULTIES:[x.difficulty+" (old level — please change)"].concat(DIFFICULTIES)).map(d=>{const v=d.replace(/ \(old level.*$/,"");return `<option value="${esc(v)}" ${v===x.difficulty?"selected":""}>${esc(d)}</option>`;}).join("")}</select>
     <label>Question</label><textarea id="eText" rows="3">${esc(x.text)}</textarea>
     ${imgPickerHTML("eText","the question")}
     <label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="eNumeric" style="width:auto" ${isNumericQ(x)?"checked":""} onchange="eNumericToggle()"/> Numerical answer (the student types a number, no options)</label>
@@ -2884,6 +2929,53 @@ async function aiVerifyAudit(){
    students sometimes see "the same question twice" in one test (the selection logic itself
    is safe — verified — but two different documents with the same wording can both get picked). ===== */
 function normalizeQText(t){ return (t||"").toLowerCase().replace(/[^\w\s]/g,"").replace(/\s+/g," ").trim(); }
+
+/* ---- Near-duplicate detection -------------------------------------------------------------
+   Two questions are "the same" when they test the same thing, even if the sentence was rewritten
+   or put into the passive voice. We compare the meaningful words (ignoring the filler words that
+   every question contains) and the numbers in the question. ---- */
+const QSTOP=new Set(("a an the of to in for on at by with from into onto over under about between and or if then "+
+ "than that this these those which what how why when where it its is are was were be been being as not no do does "+
+ "did can could will would shall should may might must each other same such also there here they them his her he "+
+ "she you your we our has have had following given find calculate determine value values option options correct "+
+ "incorrect true false statement statements question figure shown above below respectively").split(" "));
+function qWords(t){
+  return String(t||"").toLowerCase()
+    .replace(/<[^>]*>/g," ")
+    .replace(/[^a-z0-9^_.\/+-]+/g," ")
+    .split(/\s+/)
+    .map(w=>w.replace(/^[^a-z0-9]+/,"").replace(/[^a-z0-9^]+$/,""))   // drop the full stop on "solution."
+    .filter(w=>w.length>1&&!QSTOP.has(w));
+}
+function qFingerprint(t){
+  const w=qWords(t);
+  return {set:new Set(w), nums:new Set(String(t||"").match(/\d+(?:\.\d+)?/g)||[])};
+}
+// how much of the shorter question's wording also appears in the other one (0 to 1)
+function qOverlap(a,b){
+  if(!a||!b||!a.set.size||!b.set.size) return 0;
+  const small=a.set.size<=b.set.size?a.set:b.set, big=a.set.size<=b.set.size?b.set:a.set;
+  let common=0; small.forEach(w=>{ if(big.has(w)) common++; });
+  return common/small.size;
+}
+function qSameNumbers(a,b){
+  if(!a.nums.size||!b.nums.size) return false;
+  const small=a.nums.size<=b.nums.size?a.nums:b.nums, big=a.nums.size<=b.nums.size?b.nums:a.nums;
+  let hit=0; small.forEach(n=>{ if(big.has(n)) hit++; });
+  return hit/small.size>=0.75;
+}
+// A repeat is: nearly the same wording, OR fairly similar wording built on the very same numbers.
+// A one-line question carries few words, so it has to match almost exactly before it counts as one.
+function qIsRepeat(fp,pool){
+  for(const q of pool){
+    const n=Math.min(fp.set.size,q.set.size); if(!n) continue;
+    const o=qOverlap(fp,q);
+    if(n<5){ if(o>=0.85) return true; continue; }
+    if(o>=0.72) return true;
+    if(n>=8&&o>=0.55&&qSameNumbers(fp,q)) return true;
+  }
+  return false;
+}
 function pageDupFinder(){
   setView(`<h1 class="page-title">Duplicate Finder</h1>
     <p class="page-sub">Finds <b>AI-generated</b> questions saved as separate entries with identical or near-identical wording, and groups them so you can keep one copy and remove the rest. Questions that came from your own Word files (Self Upload) are never touched — those papers stay exactly as uploaded.</p>
@@ -4326,7 +4418,7 @@ function tpFilters(){
 }
 // returns the student when this attempt belongs in the list, otherwise null
 function tpKeep(a,f){
-  if(!a||a.disqualified||!a.testId) return null;
+  if(!a||!a.testId) return null;
   const stu=TP_STUDENTS?TP_STUDENTS[a.studentUid]:null; if(!stu) return null;
   if(f.cls&&stu.class!==f.cls) return null;
   if(f.centre&&tpCentreOf(a,stu)!==f.centre) return null;
@@ -4366,19 +4458,24 @@ async function loadToppers(){
     TP_ATTEMPTS.forEach(a=>{
       if(testF&&a.testId!==testF) return;
       const stu=tpKeep(a,F); if(!stu) return;                // the one rule, shared with the Test list
-      const g=groups[a.testId]||(groups[a.testId]={id:a.testId,title:a.testTitle||"(untitled test)",exam:a.exam||"—",when:0,rows:[]});
+      const g=groups[a.testId]||(groups[a.testId]={id:a.testId,title:a.testTitle||"(untitled test)",exam:a.exam||"—",when:0,rows:[],dq:[]});
       const w=(a.submittedAt&&a.submittedAt.seconds)||0; if(w>g.when) g.when=w;
+      // a disqualified attempt is listed by name but takes no rank and counts for no one's percentile
+      if(a.disqualified){ g.dq.push({name:stu.name,centre:tpCentreOf(a,stu),cls:stu.class,when:w,
+        strikes:a.violations||0}); return; }
       const c=a.correct||0,wr=a.wrong||0,sk=a.unattempted||0,att=c+wr;
       g.rows.push({name:stu.name,centre:tpCentreOf(a,stu),cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
         score:a.score||0,total:a.total||0,acc:att?c/att*100:null,when:w});
     });
-    let list=Object.keys(groups).map(k=>groups[k]).sort((x,y)=>y.when-x.when);
+    let list=Object.keys(groups).map(k=>groups[k]).filter(g=>g.rows.length||(g.dq||[]).length).sort((x,y)=>y.when-x.when);
     list.forEach(g=>{
       g.rows.sort((a,b)=>b.score-a.score||(b.acc||0)-(a.acc||0));
       const all=g.rows.map(r=>r.score);              // percentile over everyone who took THAT test
       g.rows.forEach(r=>r.pctile=percentileOf(r.score,all));
       g.entries=g.rows.length;
-      if(topN!=="all") g.rows=g.rows.slice(0,parseInt(topN));
+      g.dqCount=(g.dq||[]).length;
+      (g.dq||[]).sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
+      if(topN!=="all") g.rows=g.rows.slice(0,parseInt(topN));   // "Show top" never hides a disqualification
     });
     const range=(val("tpFrom")||val("tpTo"))?`${val("tpFrom")?new Date(val("tpFrom")+"T00:00:00").toLocaleDateString():"start"} → ${val("tpTo")?new Date(val("tpTo")+"T00:00:00").toLocaleDateString():"today"}`:"";
     const meta={cls:clsF?clsLabel(clsF):"Class 11 & 12",range,centre:ME.role==="master"?(centreF?centreName(centreF):"All centres"):centreName(ME.centreId)};
@@ -4388,10 +4485,13 @@ async function loadToppers(){
     el("tpPrintBtn").style.display="inline-flex";
     el("tpResults").innerHTML=list.map(g=>`<div class="card" style="margin-bottom:16px">
       <h3 class="serif" style="margin:0 0 2px;font-size:19px">${esc(g.title)}</h3>
-      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)} · ${g.entries} student${g.entries===1?"":"s"} took this test${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
+      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
       ${tableHTML(["Rank","Name","Centre","Class","Questions","Attempted","Correct","Wrong","Skipped","Score","Accuracy %","Percentile"],
         g.rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.qs,r.att,r.correct,r.wrong,r.skipped,
-          `${r.score}/${r.total}`,r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))}
+          `${r.score}/${r.total}`,r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`])
+        .concat((g.dq||[]).map(r=>["—",`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),"—","—","—","—","—",
+          `<b style="color:var(--danger)">DISQUALIFIED</b>`,"—","—"])))}
+      ${g.dqCount?`<p class="muted" style="font-size:12px;margin:8px 0 0">Disqualified students are listed by name but are not ranked, and their marks count towards nobody's percentile.</p>`:""}
       </div>`).join("")
       +`<p class="muted" style="font-size:12px">Accuracy = correct ÷ attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are never added up.</p>`;
   }catch(e){ el("tpResults").innerHTML=errBox(e); setBtn("tpBtn",false,"Show toppers"); }
@@ -4424,10 +4524,12 @@ function printToppers(){
   const blocks=list.map((g,gi)=>{
     const body=g.rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
       <td>${esc(clsLabel(r.cls))}</td><td>${r.qs}</td><td>${r.att}</td><td>${r.correct}</td><td>${r.wrong}</td><td>${r.skipped}</td>
-      <td>${r.score}/${r.total}</td><td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("");
+      <td>${r.score}/${r.total}</td><td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("")
+      +(g.dq||[]).map(r=>`<tr class="dq"><td class="rk">&mdash;</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
+      <td>${esc(clsLabel(r.cls))}</td><td colspan="8"><b>DISQUALIFIED</b> &mdash; malpractice during the test; not ranked</td></tr>`).join("");
     return `<div class="block"${gi?' style="page-break-before:always"':""}>
       <div class="tname">${esc(g.title)}</div>
-      <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; ${g.entries} student${g.entries===1?"":"s"}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
+      <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; ${g.entries} ranked${g.dqCount?` &middot; ${g.dqCount} disqualified`:""}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
       <table>${head}<tbody>${body}</tbody></table></div>`;
   }).join("");
   const docTitle=tpDocTitle(list);
@@ -4439,6 +4541,7 @@ function printToppers(){
     .tname{font-size:15px;font-weight:bold;margin-top:6px} .tmeta{color:#444;font-size:11.5px;margin:2px 0 8px}
     table{width:100%;border-collapse:collapse;margin-bottom:10px} th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;font-size:12px}
     th{background:#1f3d2f;color:#fff} tbody tr:nth-child(even){background:#f7f5ee} td.rk{text-align:center;font-weight:bold;width:40px}
+    tr.dq td{background:#fbeeea;color:#822f22}
     .foot{text-align:center;color:#999;font-size:10.5px;margin-top:14px;border-top:1px solid #ddd;padding-top:6px}
     @media print{body{padding:0}@page{margin:10mm;size:A4 landscape}}
   </style></head><body>
@@ -4934,7 +5037,7 @@ async function submitExam(auto,disqualify){
   try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,isPractice:!!EXAM.isPractice,
       studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
       lockedCount:(EXAM.locked?EXAM.locked.size:0),lockLog:(EXAM.lockLog||[]).slice(0,60),
-      questionOrder:order,answers,disqualified:!!disqualify,
+      questionOrder:order,answers,disqualified:!!disqualify,violations:EXAM.violations||0,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
   catch(e){ console.error("attempt save failed",e); }
