@@ -832,7 +832,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: sections open"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: toppers by centre"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -4282,13 +4282,13 @@ function pageToppers(){
     <p class="page-sub">Ranked test by test — each scheduled test has its own list. Practice attempts are not counted.</p>
     <div class="card" style="max-width:680px">
       <div class="grid cols-2">
-        <div><label>Class</label><select id="tpClass"><option value="">Both 11 &amp; 12</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
-        <div><label>Centre</label>${ME.role==="master"?`<select id="tpCentre"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div>
+        <div><label>Class</label><select id="tpClass" onchange="tpFillTests()"><option value="">Both 11 &amp; 12</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
+        <div><label>Centre</label>${ME.role==="master"?`<select id="tpCentre" onchange="tpFillTests()"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:`<input value="${centreName(ME.centreId)}" disabled/>`}</div>
         <div><label>Show top</label><select id="tpTopN"><option value="10">Top 10</option><option value="20">Top 20</option><option value="50">Top 50</option><option value="all">All ranked students</option></select></div>
       </div>
       <div class="grid cols-2">
-        <div><label>From date <span class="muted" style="font-weight:400">— optional</span></label><input id="tpFrom" type="date"/></div>
-        <div><label>To date <span class="muted" style="font-weight:400">— optional</span></label><input id="tpTo" type="date"/></div>
+        <div><label>From date <span class="muted" style="font-weight:400">— optional</span></label><input id="tpFrom" type="date" onchange="tpFillTests()"/></div>
+        <div><label>To date <span class="muted" style="font-weight:400">— optional</span></label><input id="tpTo" type="date" onchange="tpFillTests()"/></div>
       </div>
       <label>Test</label>
       <select id="tpTest"><option value="">Loading tests…</option></select>
@@ -4301,57 +4301,75 @@ function pageToppers(){
     <div id="tpResults" style="margin-top:18px"></div>`);
   tpFillTests();
 }
-// every scheduled test that has at least one attempt in this user's scope
-let TP_ATTEMPTS=null;
-async function tpFillTests(){
-  try{
+// every scheduled test that has at least one attempt matching the filters above
+let TP_ATTEMPTS=null,TP_STUDENTS=null;
+async function tpLoadData(){
+  if(!TP_ATTEMPTS){
     let aq=db.collection("attempts").where("isPractice","==",false);
     if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
     TP_ATTEMPTS=(await aq.get()).docs.map(d=>d.data());
-    const seen={};
-    TP_ATTEMPTS.forEach(a=>{ if(a.disqualified||!a.testId) return;
+  }
+  if(!TP_STUDENTS){
+    let uq=db.collection("users").where("role","==","student");
+    if(ME.role==="admin") uq=uq.where("centreId","==",ME.centreId);
+    const us=await uq.get(); TP_STUDENTS={}; us.docs.forEach(d=>TP_STUDENTS[d.id]={id:d.id,...d.data()});
+  }
+}
+// the centre a paper was actually written at: the one recorded on the attempt, or, for an older
+// attempt that has none, the student's own centre
+function tpCentreOf(a,stu){ return a.centreId||(stu&&stu.centreId)||""; }
+function tpFilters(){
+  return {cls:val("tpClass"),
+          centre:ME.role==="master"?val("tpCentre"):ME.centreId,
+          from:val("tpFrom")?new Date(val("tpFrom")+"T00:00:00").getTime()/1000:null,
+          to:val("tpTo")?new Date(val("tpTo")+"T23:59:59").getTime()/1000:null};
+}
+// returns the student when this attempt belongs in the list, otherwise null
+function tpKeep(a,f){
+  if(!a||a.disqualified||!a.testId) return null;
+  const stu=TP_STUDENTS?TP_STUDENTS[a.studentUid]:null; if(!stu) return null;
+  if(f.cls&&stu.class!==f.cls) return null;
+  if(f.centre&&tpCentreOf(a,stu)!==f.centre) return null;
+  const w=(a.submittedAt&&a.submittedAt.seconds)||0;
+  if(f.from&&w&&w<f.from) return null;
+  if(f.to&&w&&w>f.to) return null;
+  return stu;
+}
+async function tpFillTests(){
+  const box=el("tpTest"); if(!box) return;
+  const keep=box.value;
+  try{
+    await tpLoadData();
+    const f=tpFilters(),seen={};
+    TP_ATTEMPTS.forEach(a=>{ if(!tpKeep(a,f)) return;
       const w=(a.submittedAt&&a.submittedAt.seconds)||0;
       if(!seen[a.testId]) seen[a.testId]={title:a.testTitle||"(untitled test)",when:w,n:0};
       seen[a.testId].n++; if(w>seen[a.testId].when) seen[a.testId].when=w; });
     const list=Object.keys(seen).map(id=>({id,...seen[id]})).sort((x,y)=>y.when-x.when);
-    el("tpTest").innerHTML=`<option value="">Every test — each ranked on its own</option>`
+    box.innerHTML=`<option value="">Every test — each ranked on its own</option>`
       +list.map(t=>`<option value="${t.id}">${esc(t.title)}${t.when?" · "+new Date(t.when*1000).toLocaleDateString():""} · ${t.n} student${t.n===1?"":"s"}</option>`).join("");
-  }catch(e){ el("tpTest").innerHTML=`<option value="">Every test — each ranked on its own</option>`; }
+    if(keep&&seen[keep]) box.value=keep;
+  }catch(e){ box.innerHTML=`<option value="">Every test — each ranked on its own</option>`; }
 }
 let LAST_TOPPERS=null;
 async function loadToppers(){
-  const clsF=val("tpClass"),centreF=ME.role==="master"?val("tpCentre"):ME.centreId,topN=val("tpTopN"),testF=val("tpTest");
+  const F=tpFilters(),clsF=F.cls,centreF=F.centre,topN=val("tpTopN"),testF=val("tpTest");
   // optional date range — tests taken on or between these two days
-  const fromS=val("tpFrom")?new Date(val("tpFrom")+"T00:00:00").getTime()/1000:null;
-  const toS=val("tpTo")?new Date(val("tpTo")+"T23:59:59").getTime()/1000:null;
+  const fromS=F.from,toS=F.to;
   if(fromS&&toS&&toS<fromS){ setMsg("tpMsg","\"To date\" must be on or after \"From date\".","err"); setBtn("tpBtn",false,"Show toppers"); return; }
   setMsg("tpMsg","","");
   setBtn("tpBtn",true,"Calculating…"); el("tpPrintBtn").style.display="none"; LAST_TOPPERS=null;
   try{
-    if(!TP_ATTEMPTS){
-      let aq=db.collection("attempts").where("isPractice","==",false);
-      if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
-      TP_ATTEMPTS=(await aq.get()).docs.map(d=>d.data());
-    }
-    let uq=db.collection("users").where("role","==","student");
-    if(ME.role==="admin") uq=uq.where("centreId","==",ME.centreId);
-    const usnap=await uq.get();
-    const stuMap={}; usnap.docs.forEach(d=>stuMap[d.id]={id:d.id,...d.data()});
+    await tpLoadData();
     // one group per test — nothing is added up across tests
     const groups={};
     TP_ATTEMPTS.forEach(a=>{
-      if(a.disqualified) return;
       if(testF&&a.testId!==testF) return;
-      const when=(a.submittedAt&&a.submittedAt.seconds)||0;
-      if(fromS&&when&&when<fromS) return;
-      if(toS&&when&&when>toS) return;
-      const stu=stuMap[a.studentUid]; if(!stu) return;       // only current, in-scope students
-      if(clsF&&stu.class!==clsF) return;
-      if(centreF&&stu.centreId!==centreF) return;
+      const stu=tpKeep(a,F); if(!stu) return;                // the one rule, shared with the Test list
       const g=groups[a.testId]||(groups[a.testId]={id:a.testId,title:a.testTitle||"(untitled test)",exam:a.exam||"—",when:0,rows:[]});
       const w=(a.submittedAt&&a.submittedAt.seconds)||0; if(w>g.when) g.when=w;
       const c=a.correct||0,wr=a.wrong||0,sk=a.unattempted||0,att=c+wr;
-      g.rows.push({name:stu.name,centre:stu.centreId,cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
+      g.rows.push({name:stu.name,centre:tpCentreOf(a,stu),cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
         score:a.score||0,total:a.total||0,acc:att?c/att*100:null,when:w});
     });
     let list=Object.keys(groups).map(k=>groups[k]).sort((x,y)=>y.when-x.when);
@@ -4379,6 +4397,25 @@ async function loadToppers(){
   }catch(e){ el("tpResults").innerHTML=errBox(e); setBtn("tpBtn",false,"Show toppers"); }
 }
 function medal(rank){ return rank===1?"🥇 1":rank===2?"🥈 2":rank===3?"🥉 3":String(rank); }
+// The name the browser offers when the sheet is saved as a PDF.
+// One test  -> "01-10-2026 - RESULTS - Chemical bonding & Periodic table"
+// Many      -> "28-09-2026 to 01-10-2026 - RESULTS - 6 tests"
+function tpDocTitle(list){
+  const clean=x=>String(x||"").replace(/[\\/:*?"<>|]+/g," ").replace(/\s+/g," ").trim();
+  const dateOf=g=>{
+    const m=String(g.title||"").match(/^\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+    if(m) return `${m[1].padStart(2,"0")}-${m[2].padStart(2,"0")}-${m[3]}`;
+    return g.when?dmy(new Date(g.when*1000)).replace(/\//g,"-"):"";
+  };
+  if(!list||!list.length) return "Results";
+  if(list.length===1){
+    const g=list[0];
+    return clean([dateOf(g),"RESULTS",stripTestTitle(g.title)||g.title||"Test"].filter(Boolean).join(" - "));
+  }
+  const ds=list.map(dateOf).filter(Boolean);
+  const span=ds.length?(ds[ds.length-1]===ds[0]?ds[0]:`${ds[ds.length-1]} to ${ds[0]}`):"";
+  return clean([span,"RESULTS",`${list.length} tests`].filter(Boolean).join(" - "));
+}
 function printToppers(){
   if(!LAST_TOPPERS||!LAST_TOPPERS.list||!LAST_TOPPERS.list.length) return;
   const {meta,list}=LAST_TOPPERS;
@@ -4393,7 +4430,8 @@ function printToppers(){
       <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; ${g.entries} student${g.entries===1?"":"s"}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
       <table>${head}<tbody>${body}</tbody></table></div>`;
   }).join("");
-  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Toppers List</title>
+  const docTitle=tpDocTitle(list);
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(docTitle)}</title>
   <style>
     *{box-sizing:border-box} body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:28px 30px;font-size:13.5px}
     .head{text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}
@@ -4404,7 +4442,8 @@ function printToppers(){
     .foot{text-align:center;color:#999;font-size:10.5px;margin-top:14px;border-top:1px solid #ddd;padding-top:6px}
     @media print{body{padding:0}@page{margin:10mm;size:A4 landscape}}
   </style></head><body>
-  <div class="head"><img src="${LOGO}"/><div class="ttl">Toppers — test by test</div></div>
+  <div class="head"><img src="${LOGO}"/><div class="ttl">${esc(list.length===1?docTitle:"Toppers — test by test")}</div>
+    <div style="font-size:12px;color:#444;margin-top:2px">${esc(meta.centre)} &middot; ${esc(meta.cls)}</div></div>
   ${meta.range?`<div style="text-align:center;color:#444;font-size:12px;margin-bottom:8px">Tests taken ${esc(meta.range)}</div>`:""}
   ${blocks}
   <p style="font-size:10.5px;color:#555">Accuracy = correct &divide; attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are not added up.</p>
