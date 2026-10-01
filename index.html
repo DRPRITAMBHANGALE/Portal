@@ -56,9 +56,9 @@ a{color:var(--accent)}
 label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:14px 0 6px;letter-spacing:.2px}
 input,select,textarea{width:100%;padding:11px 13px;border:1px solid var(--line-2);border-radius:10px;background:#fff;font-size:15px;color:var(--ink);font-family:inherit}
 select.tbox{padding:11px 4px;flex:none;text-align:center;text-align-last:center;font-variant-numeric:tabular-nums}
-.dtpair{display:flex;gap:6px;flex-wrap:nowrap;align-items:center;min-width:0}
-.dtpair>input[type=date]{flex:1 1 92px;min-width:0;padding-left:8px;padding-right:4px;font-variant-numeric:tabular-nums}
-@media(max-width:430px){ .dtpair{flex-wrap:wrap;gap:6px 6px} .dtpair>input[type=date]{flex:1 1 100%} }
+.dtpair{display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-width:0}
+.dtpair>input[type=date]{flex:1 1 130px;min-width:0;padding-left:8px;padding-right:4px;font-variant-numeric:tabular-nums}
+.dtpair.tight>input[type=date]{flex:1 1 92px}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 18px;border-radius:10px;border:1px solid transparent;font-weight:700;font-size:14.5px;background:var(--accent);color:#fff;transition:.15s}
 .btn:hover{background:var(--accent-ink)}
@@ -97,8 +97,9 @@ main.content{flex:1;padding:28px 30px;min-width:0}
 .page-sub{color:var(--ink-soft);margin:0 0 22px;font-size:14.5px}
 
 .grid{display:grid;gap:16px}
-.cols-3{grid-template-columns:repeat(3,1fr)}
-.cols-2{grid-template-columns:repeat(2,1fr)}
+.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid>*{min-width:0}
 @media(max-width:900px){.cols-3,.cols-2{grid-template-columns:1fr}.layout{flex-direction:column}nav.side{width:auto;display:flex;flex-wrap:wrap;min-height:0;border-right:none;border-bottom:1px solid var(--line)}}
 .card{background:var(--paper-2);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
 .card h3{margin:0 0 4px;font-size:18px}
@@ -128,7 +129,7 @@ tr:last-child td{border-bottom:none}
 .modal-bg{position:fixed;inset:0;background:rgba(35,33,28,.46);display:none;place-items:center;z-index:90;padding:20px;overflow:auto}
 .modal-bg.show{display:grid}
 .modal{background:var(--paper-2);border-radius:16px;max-width:560px;width:100%;padding:26px;box-shadow:0 20px 60px rgba(0,0,0,.25);max-height:90vh;overflow:auto}
-.modal.wide{max-width:760px}
+.modal.wide{max-width:920px}
 .modal h2{margin:0 0 16px;font-size:22px}
 .modal .x{float:right;background:none;border:none;font-size:22px;color:var(--ink-soft);line-height:1;margin-top:-6px}
 
@@ -160,7 +161,7 @@ tr:last-child td{border-bottom:none}
 .opt.sel{border-color:var(--accent);background:var(--accent-soft)}
 /* the centre list: name, Opens, Closes as three tidy columns; stacked on a small screen */
 .cAsgBox{border:1px solid var(--line);border-radius:10px;padding:8px 12px;container-type:inline-size;overflow-x:auto}
-.cAsgHead,.cAsgRow{display:grid;grid-template-columns:minmax(104px,0.8fr) minmax(292px,1.25fr) minmax(292px,1.25fr);gap:6px 12px;align-items:center}
+.cAsgHead,.cAsgRow{display:grid;grid-template-columns:minmax(120px,1fr) minmax(292px,1.2fr) minmax(292px,1.2fr);gap:6px 12px;align-items:center}
 .cAsgHead{font-size:12px;font-weight:700;color:var(--ink-soft);padding:2px 0 7px;letter-spacing:.2px}
 .cAsgRow{padding:7px 0;border-top:1px dashed var(--line)}
 .cAsgName{display:flex;gap:8px;align-items:center;margin:0;min-width:0;font-size:13.5px}
@@ -831,7 +832,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centres unticked"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: sections open"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1643,7 +1644,7 @@ function setTimeBoxes(id,hhmm){
 }
 function dtPair(id,value,compact){
   const m=String(value||"").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
-  return `<div class="dtpair">
+  return `<div class="dtpair${compact?" tight":""}">
     <input type="date" id="${id}_d" value="${m?m[1]:""}" onchange="dtSync('${id}')"/>
     ${timeBoxes(id,m?m[2]:"",compact)}
     <input type="hidden" id="${id}" value="${esc(value||"")}"/></div>`;
@@ -2181,9 +2182,9 @@ function openSelfUpload(){
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
     <div id="suSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("suSolAt")}</div>
-    <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:600">Subjects by question number — only for a mixed paper (PCM / PCB)</summary>
+    <div style="margin-top:10px"><div style="font-weight:600">Subjects by question number — only for a mixed paper (PCM / PCB)</div>
       <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave empty for a single-subject paper. The subjects are applied when you click “Save as final paper”.</p>
-      <div id="suSections"></div></details>
+      <div id="suSections"></div></div>
     <div class="msg" id="suActionMsg"></div>
     <div class="row end" style="margin-top:16px;gap:8px">
       <button class="btn ghost" onclick="closeModal()">Close</button>
@@ -2569,9 +2570,9 @@ async function openFinalizeDraft(id){
       <div></div></div>
     <div class="grid cols-2"><div><label>Opens (common)</label>${dtPair("fdStart")}</div><div><label>Closes (common)</label>${dtPair("fdEnd")}</div></div>
     ${centreAssignHTML("fdA",null)}
-    <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number (for mixed PCM / PCB papers)</summary>
+    <div style="margin-top:10px"><div style="font-weight:600">Sections — set subject by question number (for mixed PCM / PCB papers)</div>
       <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave every box empty for a single-subject paper.</p>
-      ${sectionRowsHTML("fdSec",t.exam)}</details>
+      ${sectionRowsHTML("fdSec",t.exam)}</div>
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="fdSolMode" onchange="el('fdSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
       <option value="immediate">Immediately after each student submits</option>
@@ -2579,7 +2580,7 @@ async function openFinalizeDraft(id){
     <div id="fdSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("fdSolAt")}</div>
     <div class="msg" id="fdMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn" id="fdBtn" onclick="saveFinalizeDraft('${id}')">✓ Save as final paper</button></div>`);
+      <button class="btn" id="fdBtn" onclick="saveFinalizeDraft('${id}')">✓ Save as final paper</button></div>`,true);
 }
 async function saveFinalizeDraft(id){
   try{
@@ -3077,9 +3078,9 @@ async function openReschedule(id){
       <div><label>Closes</label>${dtPair("rsEnd",toLocal(t.endAt))}</div></div>
     <label>Duration (min)</label><input id="rsDur" type="number" value="${t.duration}"/>
     ${centreAssignHTML("rsA",t)}
-    ${ME.role!=="student"?`<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Sections — set subject by question number</summary>
+    ${ME.role!=="student"?`<div style="margin-top:10px"><div style="font-weight:600">Sections — set subject by question number</div>
       <p class="muted" style="font-size:12.5px;margin:6px 0 0">Use this for a mixed paper where every question got the same subject. Numbers follow the order of the questions in this paper. Leave all empty to change nothing.</p>
-      ${sectionRowsHTML("rsSec",t.exam)}</details>`:""}
+      ${sectionRowsHTML("rsSec",t.exam)}</div>`:""}
     <label>When should students see the answer key &amp; solutions?</label>
     <select id="rsSolMode" onchange="el('rsSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
       <option value="immediate" ${!t.solutionsAt?"selected":""}>Immediately after each student submits</option>
@@ -3087,7 +3088,7 @@ async function openReschedule(id){
     <div id="rsSolAtRow" style="display:${t.solutionsAt?"block":"none"}"><label>Show solutions from</label>${dtPair("rsSolAt",toLocal(t.solutionsAt))}</div>
     <div class="msg" id="rsMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn" id="rsBtn" onclick="saveReschedule('${id}')">Save changes</button></div>`);
+      <button class="btn" id="rsBtn" onclick="saveReschedule('${id}')">Save changes</button></div>`,true);
 }
 async function saveReschedule(id){
   setBtn("rsBtn",true,"Saving…");
@@ -3322,7 +3323,7 @@ function openCreateTest(){
     <div class="note" id="tMark"></div>
     <div class="msg" id="tMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn" id="tSaveBtn" onclick="createTest()">Create &amp; schedule</button></div>`);
+      <button class="btn" id="tSaveBtn" onclick="createTest()">Create &amp; schedule</button></div>`,true);
   tRebuild();
 }
 function tSolModeChanged(){
