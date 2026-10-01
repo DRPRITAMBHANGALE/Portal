@@ -835,7 +835,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: disqualified shown"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: instant test"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -896,6 +896,7 @@ async function pageQuestions(){
       <div class="spacer" style="flex:1"></div>
       <button class="btn gold" onclick="openAIGen()">✦ Generate with AI</button>
       <button class="btn gold" onclick="openAIGenAll()">✦ Generate all chapters</button>
+      ${ME.role==="master"?`<button class="btn gold" onclick="openInstantTest()">⚡ Instant test creation</button>`:""}
       <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
       <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
     </div>
@@ -980,8 +981,8 @@ async function existingFingerprints(meta){
 }
 /* Generate, throw away anything that repeats what is already there (or what this very run has just
    produced), and ask again for the shortfall. Stops after a few rounds so it can never spin. */
-async function aiGenerateUnique(meta,total,onProgress){
-  const pool=await existingFingerprints(meta);
+async function aiGenerateUnique(meta,total,onProgress,sharedPool){
+  const pool=sharedPool||await existingFingerprints(meta);
   const kept=[]; let dropped=0, rounds=0;
   while(kept.length<total && rounds<4){
     const want=total-kept.length;
@@ -1038,6 +1039,114 @@ async function runAIGen(){
     setBtn("genBtn",false,"Generate &amp; send to review");
     setTimeout(()=>{closeModal();go("review");},1400);
   }catch(e){ setMsg("genMsg","Generation failed: "+e.message,"err"); setBtn("genBtn",false,"Generate &amp; send to review"); }
+}
+
+/* ============================================================
+   INSTANT TEST CREATION — master only.
+   Type a chapter name, set the mix of difficulties and how many questions, and the portal writes
+   the questions and builds the paper in one go. It then opens the normal "Save as final paper"
+   box so the date, time and centres can be set.
+   ============================================================ */
+// split a total across the levels by their %, so the pieces always add back up to the total
+function splitByPct(total,weights){
+  const levels=Object.keys(weights).filter(l=>weights[l]>0);
+  if(!levels.length) return {Moderate:total};
+  const sum=levels.reduce((a,l)=>a+weights[l],0);
+  const exact=levels.map(l=>({l,v:total*weights[l]/sum}));
+  const out={}; let used=0;
+  exact.forEach(e=>{ out[e.l]=Math.floor(e.v); used+=out[e.l]; });
+  exact.sort((a,b)=>(b.v-Math.floor(b.v))-(a.v-Math.floor(a.v)));
+  for(let i=0;used<total;i++,used++) out[exact[i%exact.length].l]++;
+  return out;
+}
+function openInstantTest(){
+  if(ME.role!=="master") return;
+  modal(`<h2>⚡ Instant test creation</h2>
+    <p class="muted">Type the chapter, choose the mix, and the portal writes fresh questions and builds the paper in one go. Repeats of anything already in your bank are thrown away automatically.</p>
+    ${titleFieldHTML("it","","e.g. Chemical bonding — weekly test")}
+    <div class="grid cols-2">
+      <div><label>Exam</label><select id="itExam" onchange="itExamChanged()">${EXAM_KEYS.map(e=>`<option>${e}</option>`).join("")}</select></div>
+      <div><label>Class</label><select id="itClass" onchange="itExamChanged()"><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
+    </div>
+    <div class="grid cols-2">
+      <div><label>Subject</label><select id="itSubject" onchange="itFillChapterHints()"></select></div>
+      <div><label>How many questions</label><input id="itCount" type="number" min="1" max="60" value="25"/></div>
+    </div>
+    <label>Chapter — type any chapter name</label>
+    <input id="itTopic" list="itTopicList" placeholder="e.g. Chemical bonding and molecular structure" autocomplete="off"/>
+    <datalist id="itTopicList"></datalist>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 0">You can type a chapter that isn't in your syllabus list — the list is only there to save typing.</p>
+    <label style="margin-top:14px">Difficulty mix — % per level (they are scaled to your total, so they needn't add to exactly 100)</label>
+    <div id="itDiffs" style="margin-bottom:6px">${difficultyPctRows("itdiffpct")}</div>
+    <p class="muted" style="font-size:12.5px;margin:0 0 6px">Leave every box at 0 and the whole paper is set to Moderate. Previous Year questions are limited to ${PYQ_MIN_YEAR} onwards — check their year in the paper before scheduling it.</p>
+    <label>Duration (min)</label><input id="itDur" type="number" min="5" value="60"/>
+    <div id="itProgress"></div>
+    <div class="msg" id="itMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn gold" id="itBtn" onclick="runInstantTest()">⚡ Generate &amp; build the paper</button></div>`,true);
+  itExamChanged();
+}
+function itExamChanged(){ fillSubjects("itExam","itSubject",false); itFillChapterHints(); updTitlePrev("it"); }
+function itFillChapterHints(){
+  const list=el("itTopicList"); if(!list) return;
+  let chaps=[]; try{ chaps=topicsFor(val("itExam"),val("itClass"),val("itSubject"))||[]; }catch(_){ chaps=[]; }
+  list.innerHTML=chaps.map(c=>`<option value="${esc(c)}"></option>`).join("");
+}
+async function runInstantTest(){
+  if(ME.role!=="master") return;
+  if(AI_FUNCTION_URL.startsWith("PASTE")) return setMsg("itMsg","Deploy the Cloud Function first.","err");
+  const exam=val("itExam"),cls=val("itClass"),subject=val("itSubject"),topic=val("itTopic").trim();
+  const count=Math.min(60,Math.max(1,parseInt(val("itCount"))||25));
+  const title=composeTestTitle("it",topic||"Instant test");
+  if(!topic) return setMsg("itMsg","Type the chapter name first.","err");
+  const plan=splitByPct(count,gatherWeights(".itdiffpct"));
+  setMsg("itMsg","","");
+  setBtn("itBtn",true,`<span class="loader"></span> Working…`);
+  const log=t=>{ el("itProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">${t}</div>`; };
+  try{
+    // one shared pool for the whole run: no level repeats another level, or the bank
+    const pool=await existingFingerprints({exam,subject,cls,topic});
+    const items=[]; const short=[];
+    for(const level of Object.keys(plan)){
+      const n=plan[level]; if(n<=0) continue;
+      log(`${esc(level)} — asking for ${n}…`);
+      const r=await aiGenerateUnique({exam,subject,cls,topic,difficulty:level},n,
+        (d,t)=>log(`${esc(level)} — ${d}/${t}… (${items.length} of ${count} written so far)`),pool);
+      r.items.forEach(it=>items.push({...it,_level:level}));
+      if(r.items.length<n) short.push(`${level}: ${r.items.length}/${n}`);
+    }
+    if(!items.length) throw new Error("Nothing usable came back. Try a different chapter name, or fewer questions.");
+    log(`Saving ${items.length} question${items.length===1?"":"s"}…`);
+    const ids=await saveInstantQuestions(items,{exam,subject,cls,topic});
+    log("Building the paper…");
+    const ref=db.collection("tests").doc();
+    await ref.set({title,exam,type:"instant",subjects:[subject],class:cls,
+      questionIds:ids,qOrder:ids.slice(),pendingIds:[],duration:parseInt(val("itDur"))||60,
+      scope:"draft",finalScope:"all",draft:true,isPractice:false,
+      startAt:null,endAt:null,solutionsAt:null,topic,
+      createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    logCentreUpdate("draft_created","all",{testTitle:title,exam,questions:ids.length,forCentres:"—",windowText:"Instant draft — not scheduled yet"});
+    if(short.length) alert(`The paper was built with ${ids.length} question${ids.length===1?"":"s"} instead of ${count}.\n\nShort on:\n${short.join("\n")}\n\nThat usually means this chapter is already well covered in your bank, so the repeats were thrown away. You can add more by hand from the paper's "✎ Questions" screen.`);
+    openFinalizeDraft(ref.id);                      // straight into date / time / centres
+  }catch(e){
+    setMsg("itMsg","Couldn't build the paper: "+errMsg(e),"err");
+    setBtn("itBtn",false,"⚡ Generate &amp; build the paper");
+  }
+}
+// Instant questions go into the bank ready to use (the master wrote this paper deliberately), and
+// still carry source:"ai" so the Duplicate Finder keeps watching them.
+async function saveInstantQuestions(items,meta){
+  const ids=[]; const batch=db.batch();
+  items.forEach(it=>{
+    const ref=db.collection("questions").doc(); ids.push(ref.id);
+    batch.set(ref,{exam:meta.exam,subject:meta.subject,topic:meta.topic,class:meta.cls,difficulty:it._level,
+      text:it.question,options:it.options,correct:it.correctIndex,solution:it.solution,
+      year:it.year||null,numerical:!!it.isNumerical,
+      status:"live",source:"ai",instant:true,createdBy:ME.uid,centreId:"all",
+      createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+  });
+  await batch.commit();
+  return ids;
 }
 
 /* ---- Generate for ALL chapters in a subject's syllabus ---- */
