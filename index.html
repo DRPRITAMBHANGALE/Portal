@@ -844,7 +844,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: multiply sign"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: class filter"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -3717,7 +3717,7 @@ async function openParentPhones(){
     </div>
     <div class="row" style="gap:8px;align-items:center">
       <input id="ppSearch" placeholder="Search a student by name…" oninput="ppRender()" style="flex:1;min-width:160px"/>
-      <select id="ppClass" onchange="ppRender()" style="width:auto"><option value="">Class 11 &amp; 12</option><option value="11">Class 11 only</option><option value="12">Class 12 only</option></select>
+      <select id="ppClass" onchange="ppRender()" style="width:auto"><option value="11">Class 11</option><option value="12">Class 12</option></select>
       ${ME.role==="master"?`<select id="ppCentre" onchange="ppRender()" style="width:auto"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
     </div>
     <div id="ppList" class="muted" style="margin-top:10px">Loading students…</div>
@@ -3732,12 +3732,14 @@ function ppRender(){
   document.querySelectorAll(".ppNum").forEach(b=>{ const st=PP_STUDENTS.find(s=>s.id===b.dataset.uid);
     if(st&&b.value.trim()!==(st.parentPhone||"")) st._pending=b.value.trim(); });
   const q=(val("ppSearch")||"").toLowerCase().trim(), centre=ME.role==="master"?val("ppCentre"):ME.centreId;
-  const cls=val("ppClass");
-  const rows=PP_STUDENTS.filter(s=>(!centre||s.centreId===centre)&&(!cls||String(s.class)===cls)
+  const cls=val("ppClass")||"11";
+  const rows=PP_STUDENTS.filter(s=>(!centre||s.centreId===centre)&&String(s.class)===cls
     &&(!q||String(s.name||"").toLowerCase().includes(q)));
   const done=PP_STUDENTS.filter(s=>waNumber(s.parentPhone)).length;
   const unsaved=PP_STUDENTS.filter(s=>s._pending!==undefined&&s._pending!==(s.parentPhone||"")).length;
-  el("ppList").innerHTML=`<p class="muted" style="font-size:12.5px;margin:0 0 8px">${done} of ${PP_STUDENTS.length} students have a number saved. Showing ${rows.length}.${unsaved?` <b style="color:var(--gold)">${unsaved} typed but not yet saved</b> — press “Save numbers”.`:""}</p>`
+  // a student whose class is neither 11 nor 12 would otherwise never appear on this screen
+  const noClass=PP_STUDENTS.filter(s=>String(s.class)!=="11"&&String(s.class)!=="12").length;
+  el("ppList").innerHTML=`<p class="muted" style="font-size:12.5px;margin:0 0 8px">${done} of ${PP_STUDENTS.length} students have a number saved. Showing ${rows.length} in Class ${esc(cls)}.${unsaved?` <b style="color:var(--gold)">${unsaved} typed but not yet saved</b> — press “Save numbers”.`:""}${noClass?`<br>${noClass} student${noClass===1?" has no class":"s have no class"} set, so ${noClass===1?"it isn't":"they aren't"} listed here — ${noClass===1?"it is":"they are"} on the “Other” sheet of the download.`:""}</p>`
     +(rows.length?`<div style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px">`
       +rows.map(s=>`<div class="row" style="gap:10px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
         <span style="flex:1;min-width:0;font-size:13.5px"><b>${esc(s.name)}</b> <span class="muted">· Class ${esc(s.class||"?")} · ${esc(centreName(s.centreId))}</span></span>
