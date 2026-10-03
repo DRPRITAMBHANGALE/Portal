@@ -838,7 +838,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre percentile"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre permissions"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -3772,7 +3772,7 @@ async function ppSave(){
     setMsg("ppMsg",`✓ ${changed.length} number${changed.length===1?"":"s"} saved.`,"ok");
     setBtn("ppBtn",false,"Save numbers"); ppRender();
     if(el("stuList")) loadStudents();
-  }catch(e){ setMsg("ppMsg","Could not save: "+errMsg(e),"err"); setBtn("ppBtn",false,"Save numbers"); }
+  }catch(e){ setMsg("ppMsg","Could not save: "+permMsg(e,"save parent numbers"),"err"); setBtn("ppBtn",false,"Save numbers"); }
 }
 
 /* ---------- who missed the test, and the message for their parents ---------- */
@@ -3821,7 +3821,9 @@ async function loadAbsentees(){
       centres.includes(s.centreId) && testClassMatches(t,s.class)
       && (!exam || !s.stream || examsForStream(s.stream).includes(exam)));
     // everyone who actually sat it
-    const asnap=await db.collection("attempts").where("testId","==",id).get();
+    let aq=db.collection("attempts").where("testId","==",id);
+    if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
+    const asnap=await aq.get();
     const sat=new Set(); asnap.forEach(d=>{ const a=d.data(); if(!a.isPractice&&a.studentUid) sat.add(a.studentUid); });
     ABS_LIST=students.filter(s=>!sat.has(s.id))
       .sort((a,b)=>String(a.centreId).localeCompare(String(b.centreId))||String(a.name||"").localeCompare(String(b.name||"")));
@@ -3886,7 +3888,7 @@ async function abAddNumber(i){
   const clean=v.trim();
   if(clean&&!waNumber(clean)) return alert("That number doesn't look right — use 10 digits, or put the country code in front.");
   try{ await db.collection("users").doc(s.id).update({parentPhone:clean}); s.parentPhone=clean; loadAbsentees(); }
-  catch(e){ alert("Could not save: "+errMsg(e)); }
+  catch(e){ alert("Could not save: "+permMsg(e,"save parent numbers")); }
 }
 function abDownload(){
   const t=ABS_TEST||{};
@@ -3957,7 +3959,9 @@ async function loadSendMarks(){
     if(ME.role==="admin") centres=centres.filter(c=>c===ME.centreId);
     else if(val("smCentre")) centres=centres.filter(c=>c===val("smCentre"));
     const stu={}; (await allStudentDocs()).forEach(x=>stu[x.id]=x);
-    const asnap=await db.collection("attempts").where("testId","==",id).get();
+    let aq=db.collection("attempts").where("testId","==",id);
+    if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
+    const asnap=await aq.get();
     const attempts=asnap.docs.map(d=>d.data()).filter(a=>!a.isPractice);
     // Percentiles are worked out BEFORE any centre filter, so a student's standing is measured
     // against everyone who really sat the paper — once inside their own centre, once overall.
@@ -3983,7 +3987,7 @@ async function loadSendMarks(){
         score:a.score||0,total:a.total||0,correct:c,wrong:w,skipped:sk,
         accuracy:att?(Math.round(c/att*1000)/10)+"%":"—",
         percentile:percentileOf(a.score||0,byCentre[cId]||[]),
-        percentileAll:percentileOf(a.score||0,allScores)});
+        percentileAll:ME.role==="master"?percentileOf(a.score||0,allScores):"—"});
     });
     SM_ROWS.sort((x,y)=>String(x.centreId).localeCompare(String(y.centreId))||(x.dq?1:0)-(y.dq?1:0)||y.score-x.score);
     setBtn("smBtn",false,"Show results");
@@ -3995,7 +3999,9 @@ function smMessageFor(r){
   const t=SM_TEST||{};
   const when=(t.startAt&&t.startAt.toDate)?dmy(t.startAt.toDate()):"";
   const percent=r.total?(Math.round(r.score/r.total*1000)/10):0;
-  const body=r.dq?(val("smDqText")||SM_DQ_DEFAULT):(val("smMsgText")||SM_MSG_DEFAULT);
+  let body=r.dq?(val("smDqText")||SM_DQ_DEFAULT):(val("smMsgText")||SM_MSG_DEFAULT);
+  if(String(r.percentileAll)==="—")                     // nothing true to put there — drop the whole line
+    body=String(body).split("\n").filter(l=>!/\{percentileall\}/i.test(l)).join("\n");
   return String(body)
     .replace(/\{student\}/g,r.name||"your ward")
     .replace(/\{test\}/g,stripTestTitle(t.title)||t.title||"the test")
@@ -4017,7 +4023,9 @@ function smRender(){
   el("smResults").innerHTML=`<div class="card">
     <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
       <div><h3 class="serif" style="margin:0;font-size:19px">${SM_ROWS.length} message${SM_ROWS.length===1?"":"s"} ready to send</h3>
-        <p class="muted" style="margin:2px 0 0;font-size:12.5px">${withNum} parent number${withNum===1?"":"s"} on file${SM_ROWS.length-withNum?` · ${SM_ROWS.length-withNum} missing`:""}${dqCount?` · <b style="color:var(--danger)">${dqCount} disqualified</b> (they get the malpractice message instead of marks)`:""} · percentile is within each centre, with the all-centre figure beside it</p></div>
+        <p class="muted" style="margin:2px 0 0;font-size:12.5px">${withNum} parent number${withNum===1?"":"s"} on file${SM_ROWS.length-withNum?` · ${SM_ROWS.length-withNum} missing`:""}${dqCount?` · <b style="color:var(--danger)">${dqCount} disqualified</b> (they get the malpractice message instead of marks)`:""}</p>
+        ${ME.role==="master"?`<p class="muted" style="margin:2px 0 0;font-size:12.5px">Percentile is worked out within each centre, with the all-centre figure beside it.</p>`
+          :`<p class="muted" style="margin:2px 0 0;font-size:12.5px">Percentile is within ${esc(centreName(ME.centreId))}. The all-centre figure needs the other centres' papers, which a centre login can't see — that line is left out of the message and only the head office can send it.</p>`}</div>
       <div class="row" style="gap:8px">
         <button class="btn ghost sm" onclick="smDownload()">⤓ Download list</button>
         <button class="btn gold sm" onclick="smOpenNext()" id="smNextBtn" disabled>Start sending (${withNum})</button>
@@ -4071,7 +4079,7 @@ async function smAddNumber(i){
   const clean=v.trim();
   if(clean&&!waNumber(clean)) return alert("That number doesn't look right — use 10 digits, or put the country code in front.");
   try{ await db.collection("users").doc(r.uid).update({parentPhone:clean}); r.parentPhone=clean; smRender(); }
-  catch(e){ alert("Could not save: "+errMsg(e)); }
+  catch(e){ alert("Could not save: "+permMsg(e,"save parent numbers")); }
 }
 function smDownload(){
   const t=SM_TEST||{};
@@ -4416,7 +4424,7 @@ async function saveEditStudent(uid){
     if(el("ssResult")){ const c=(SS_STUDENTS||[]).find(x=>x.id===uid);
       if(c){ c.class=val("esClass"); c.stream=val("esStream"); ssSelectStudent(uid); } }
   }
-  catch(e){ setMsg("esMsg",errMsg(e),"err"); setBtn("esBtn",false,"Save"); }
+  catch(e){ setMsg("esMsg",permMsg(e,"change a student's details"),"err"); setBtn("esBtn",false,"Save"); }
 }
 function openAddStudent(){
   modal(`<h2>Add student</h2>
@@ -5647,6 +5655,7 @@ async function viewTestResults(testId){
   const t=(await db.collection("tests").doc(testId).get()).data();
   let aq=db.collection("attempts").where("testId","==",testId);
   if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
+  if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
   const snap=await aq.get();
   const docs=snap.docs.slice().sort((a,b)=>{
     const A=a.data(),B=b.data();
@@ -5708,6 +5717,14 @@ function askDelete(title,message,yesLabel){
 }
 function emptyState(t,s){return `<div class="empty"><div class="ico">◔</div><h3 class="serif" style="margin:10px 0 4px">${t}</h3><p class="muted">${s}</p></div>`;}
 function errBox(e){return `<div class="note">Couldn't load: ${esc(errMsg(e))}. ${/index/i.test(e.message||"")?'A Firestore index may be needed — click the link in the browser console (F12) to create it, then reload.':''}</div>`;}
+// Firestore's own wording ("Missing or insufficient permissions") tells a teacher nothing, so the
+// few places a centre login can legitimately be refused explain themselves.
+function permMsg(e,what){
+  const m=errMsg(e)||"";
+  if(/permission|insufficient/i.test(m))
+    return `Your centre login isn't allowed to ${what} yet. The head office needs to publish the updated security rules in Firebase once — ask them, then try again.`;
+  return m;
+}
 function errMsg(e){return (e&&e.message)||String(e);}
 /* ---- Log / Antilog reference tables (standard 4-figure format, computed exactly — same reference used in MHT-CET/JEE/NEET) ---- */
 function buildLogTableRows(){
