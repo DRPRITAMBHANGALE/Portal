@@ -821,12 +821,15 @@ const STAFF_NAV=[
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
   {id:"results",label:"Results & report cards",ic:"⤓"},
-  {id:"toppers",label:"Toppers",ic:"🏆"},{id:"centreupdates",label:"Centre updates",ic:"🕘"}
+  {id:"toppers",label:"Toppers",ic:"🏆"},{id:"absentees",label:"Absentees",ic:"📣"},
+  {id:"sendmarks",label:"Send marks",ic:"✉"},
+  {id:"centreupdates",label:"Centre updates",ic:"🕘"}
 ];
 const ADMIN_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},{id:"review",label:"Review queue",ic:"⚑"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
-  {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"}
+  {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"},
+  {id:"absentees",label:"Absentees",ic:"📣"},{id:"sendmarks",label:"Send marks",ic:"✉"}
 ];
 const NAV={ master:STAFF_NAV, admin:ADMIN_NAV,
   student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"pasttests",label:"Test history",ic:"▤"},{id:"history",label:"My results",ic:"⤓"}] };
@@ -835,7 +838,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: instant test"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre percentile"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -844,7 +847,7 @@ function go(page){
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
   ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
-    searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,pasttests:pagePastTests,history:pageHistory})[page]();
+    searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,absentees:pageAbsentees,sendmarks:pageSendMarks,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,pasttests:pagePastTests,history:pageHistory})[page]();
 }
 
 /* ============================================================
@@ -3663,11 +3666,423 @@ async function pageStudents(){
       <button class="btn ghost" onclick="openLoginSlips()">🖨 Print login slips</button>
       <button class="btn ghost danger" onclick="openBulkDeleteStudents()">🗑 Bulk delete students</button>
       <button class="btn ghost" onclick="openDupStudents()">👥 Find duplicate students</button>
+      <button class="btn ghost" onclick="openParentPhones()">📱 Parent numbers</button>
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
   loadStudents(); loadPracticeAccess();
   if(ME.role==="master") loadAdmins();
+}
+
+/* ============================================================
+   PARENT WHATSAPP NUMBERS  &  ABSENTEE MESSAGES
+   Nothing is sent behind your back: the portal opens WhatsApp with the message already typed,
+   and a person presses Send. No WhatsApp account or paid service is needed.
+   ============================================================ */
+// Turn whatever was typed into the digits WhatsApp needs. A plain 10-digit Indian number gets 91.
+function waNumber(raw){
+  let d=String(raw||"").replace(/\D/g,"");
+  if(!d) return "";
+  d=d.replace(/^0+/,"");
+  if(d.length===10) return "91"+d;
+  if(d.length===11&&d.startsWith("0")) return "91"+d.slice(1);
+  if(d.length>=11&&d.length<=15) return d;
+  return "";
+}
+function waLink(raw,text){ const n=waNumber(raw); return n?`https://wa.me/${n}?text=${encodeURIComponent(text)}`:""; }
+function waPretty(raw){ const n=waNumber(raw); return n?("+"+n):""; }
+
+/* ---------- filling in the numbers, in bulk ---------- */
+let PP_STUDENTS=[];
+async function openParentPhones(){
+  modal(`<h2>📱 Parent WhatsApp numbers</h2>
+    <p class="muted">These are used to message the parents of students who miss a test. A plain 10-digit number is fine — 91 is added for you.</p>
+    <div class="card" style="padding:14px 16px;margin-bottom:14px">
+      <b style="font-size:14px">Import from Excel</b>
+      <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Your sheet needs a <b>Name</b> column and a <b>Phone</b> column (a <b>Centre</b> column is optional). Students are matched by name.</p>
+      <input type="file" id="ppFile" accept=".xlsx,.xls" onchange="ppImportPreview()"/>
+      <div class="msg" id="ppImpMsg"></div>
+      <div id="ppImpPreview"></div>
+    </div>
+    <div class="row" style="gap:8px;align-items:center">
+      <input id="ppSearch" placeholder="Search a student by name…" oninput="ppRender()" style="flex:1"/>
+      ${ME.role==="master"?`<select id="ppCentre" onchange="ppRender()" style="width:auto"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
+    </div>
+    <div id="ppList" class="muted" style="margin-top:10px">Loading students…</div>
+    <div class="msg" id="ppMsg"></div>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Close</button>
+      <button class="btn" id="ppBtn" onclick="ppSave()">Save numbers</button></div>`,true);
+  try{ PP_STUDENTS=(await allStudentDocs()).sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))); ppRender(); }
+  catch(e){ el("ppList").innerHTML=errBox(e); }
+}
+function ppRender(){
+  const q=(val("ppSearch")||"").toLowerCase().trim(), centre=ME.role==="master"?val("ppCentre"):ME.centreId;
+  const rows=PP_STUDENTS.filter(s=>(!centre||s.centreId===centre)&&(!q||String(s.name||"").toLowerCase().includes(q)));
+  const done=PP_STUDENTS.filter(s=>waNumber(s.parentPhone)).length;
+  el("ppList").innerHTML=`<p class="muted" style="font-size:12.5px;margin:0 0 8px">${done} of ${PP_STUDENTS.length} students have a number saved. Showing ${rows.length}.</p>`
+    +(rows.length?`<div style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px">`
+      +rows.map(s=>`<div class="row" style="gap:10px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
+        <span style="flex:1;min-width:0;font-size:13.5px"><b>${esc(s.name)}</b> <span class="muted">· Class ${esc(s.class||"?")} · ${esc(centreName(s.centreId))}</span></span>
+        <input class="ppNum" data-uid="${s.id}" type="tel" inputmode="tel" value="${esc(s.parentPhone||"")}" placeholder="10-digit number" style="width:190px;flex:none"/>
+      </div>`).join("")+`</div>`
+      :`<p class="muted">No students match.</p>`);
+}
+async function ppImportPreview(){
+  const f=el("ppFile").files[0]; if(!f) return;
+  setMsg("ppImpMsg","Reading file…","ok"); el("ppImpPreview").innerHTML="";
+  try{
+    const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
+    const matched=[],unmatched=[];
+    rows.forEach(r=>{
+      const get=k=>{const key=Object.keys(r).find(x=>x.trim().toLowerCase()===k); return key?String(r[key]).trim():"";};
+      const name=get("name"); if(!name) return;
+      const phone=get("phone")||get("mobile")||get("whatsapp")||get("contact")||get("parent phone")||get("parent's whatsapp number");
+      if(!waNumber(phone)){ unmatched.push({name,why:phone?"number not understood":"no number in the row"}); return; }
+      const centre=(get("centre")||"").toLowerCase();
+      const hits=PP_STUDENTS.filter(s=>nameKey(s.name)===nameKey(name)&&(!centre||String(s.centreId).toLowerCase()===centre));
+      if(hits.length===1) matched.push({uid:hits[0].id,name:hits[0].name,phone});
+      else unmatched.push({name,why:hits.length?`${hits.length} students have this name — fill it in below instead`:"no student with this name"});
+    });
+    matched.forEach(m=>{ const box=document.querySelector(`.ppNum[data-uid="${m.uid}"]`); if(box) box.value=m.phone;
+      const st=PP_STUDENTS.find(x=>x.id===m.uid); if(st) st._pending=m.phone; });
+    setMsg("ppImpMsg",`${matched.length} number${matched.length===1?"":"s"} filled in below${unmatched.length?` · ${unmatched.length} row${unmatched.length===1?"":"s"} couldn't be matched`:""}. Press “Save numbers” to keep them.`,unmatched.length?"warn":"ok");
+    el("ppImpPreview").innerHTML=unmatched.length?`<div style="max-height:150px;overflow:auto;margin-top:8px">`
+      +tableHTML(["Not matched","Reason"],unmatched.slice(0,100).map(u=>[esc(u.name),esc(u.why)]))+`</div>`:"";
+  }catch(e){ setMsg("ppImpMsg","Could not read the file: "+errMsg(e),"err"); }
+}
+async function ppSave(){
+  const boxes=[...document.querySelectorAll(".ppNum")];
+  const changed=boxes.map(b=>({uid:b.dataset.uid,v:b.value.trim()}))
+    .filter(x=>{ const st=PP_STUDENTS.find(s=>s.id===x.uid); return st && (st.parentPhone||"")!==x.v; });
+  // numbers typed on a page of the list that is currently filtered out are kept too
+  PP_STUDENTS.forEach(s=>{ if(s._pending!==undefined && !changed.find(c=>c.uid===s.id) && (s.parentPhone||"")!==s._pending)
+    changed.push({uid:s.id,v:s._pending}); });
+  if(!changed.length) return setMsg("ppMsg","Nothing to save — no number was changed.","warn");
+  const bad=changed.filter(c=>c.v&&!waNumber(c.v));
+  if(bad.length) return setMsg("ppMsg",`${bad.length} number${bad.length===1?" doesn't":"s don't"} look right. A number should be 10 digits, or have the country code in front.`,"err");
+  setBtn("ppBtn",true,"Saving…");
+  try{
+    for(let i=0;i<changed.length;i+=400){
+      const batch=db.batch();
+      changed.slice(i,i+400).forEach(c=>batch.update(db.collection("users").doc(c.uid),{parentPhone:c.v}));
+      await batch.commit();
+    }
+    changed.forEach(c=>{ const st=PP_STUDENTS.find(s=>s.id===c.uid); if(st){ st.parentPhone=c.v; delete st._pending; } });
+    setMsg("ppMsg",`✓ ${changed.length} number${changed.length===1?"":"s"} saved.`,"ok");
+    setBtn("ppBtn",false,"Save numbers"); ppRender();
+    if(el("stuList")) loadStudents();
+  }catch(e){ setMsg("ppMsg","Could not save: "+errMsg(e),"err"); setBtn("ppBtn",false,"Save numbers"); }
+}
+
+/* ---------- who missed the test, and the message for their parents ---------- */
+const ABS_MSG_DEFAULT="Dear Parent,\n\n{student} did not appear for the online test \"{test}\" held on {date}.\n\nThese class tests are important practice for the board and entrance examinations. Kindly ensure that {student} attempts the next one.\n\n— Sonam Tuitions, {centre}";
+let ABS_LIST=[],ABS_TESTS=[],ABS_TEST=null;
+function pageAbsentees(){
+  setView(`<h1 class="page-title">Absentees</h1>
+    <p class="page-sub">Students who did not appear for a test — with a WhatsApp message ready for each parent.</p>
+    <div class="card" style="max-width:760px">
+      <label>Test</label><select id="abTest"><option value="">Loading tests…</option></select>
+      ${ME.role==="master"?`<label>Centre</label><select id="abCentre"><option value="">All centres this test was set for</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
+      <label>Message to the parent <span class="muted" style="font-weight:400">— {student}, {test}, {date} and {centre} are filled in for each one</span></label>
+      <textarea id="abMsgText" rows="7" style="font-family:inherit">${esc(ABS_MSG_DEFAULT)}</textarea>
+      <div class="msg" id="abMsg"></div>
+      <div class="row" style="gap:10px;margin-top:6px">
+        <button class="btn" id="abBtn" onclick="loadAbsentees()">Show absentees</button>
+      </div>
+    </div>
+    <div id="abResults" style="margin-top:18px"></div>`);
+  abFillTests();
+}
+async function abFillTests(){
+  try{
+    const snap=await db.collection("tests").where("isPractice","==",false).get();
+    ABS_TESTS=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(t=>!t.draft && !String(t.scope||"").startsWith("draft"))
+      .filter(t=>ME.role==="master"||assignedCentres(t).includes(ME.centreId))
+      .sort((a,b)=>((b.startAt&&b.startAt.seconds)||0)-((a.startAt&&a.startAt.seconds)||0));
+    el("abTest").innerHTML=ABS_TESTS.length
+      ? `<option value="">Choose a test…</option>`+ABS_TESTS.map(t=>`<option value="${t.id}">${esc(t.title||"(untitled)")}</option>`).join("")
+      : `<option value="">No scheduled tests yet</option>`;
+  }catch(e){ el("abTest").innerHTML=`<option value="">Could not load the tests</option>`; }
+}
+async function loadAbsentees(){
+  const id=val("abTest"); if(!id) return setMsg("abMsg","Choose a test first.","err");
+  setMsg("abMsg","","" ); setBtn("abBtn",true,"Checking…"); el("abResults").innerHTML="";
+  try{
+    const t=ABS_TESTS.find(x=>x.id===id)||{id};
+    ABS_TEST=t;
+    const exam=examOf(t);
+    let centres=assignedCentres(t);
+    if(ME.role==="admin") centres=centres.filter(c=>c===ME.centreId);
+    else if(val("abCentre")) centres=centres.filter(c=>c===val("abCentre"));
+    // everyone this paper was set for
+    const students=(await allStudentDocs()).filter(s=>
+      centres.includes(s.centreId) && testClassMatches(t,s.class)
+      && (!exam || !s.stream || examsForStream(s.stream).includes(exam)));
+    // everyone who actually sat it
+    const asnap=await db.collection("attempts").where("testId","==",id).get();
+    const sat=new Set(); asnap.forEach(d=>{ const a=d.data(); if(!a.isPractice&&a.studentUid) sat.add(a.studentUid); });
+    ABS_LIST=students.filter(s=>!sat.has(s.id))
+      .sort((a,b)=>String(a.centreId).localeCompare(String(b.centreId))||String(a.name||"").localeCompare(String(b.name||"")));
+    setBtn("abBtn",false,"Show absentees");
+    if(!students.length) return el("abResults").innerHTML=`<div class="card">${emptyState("Nobody was set this test","No student in these centres matches the paper's class and course.")}</div>`;
+    if(!ABS_LIST.length) return el("abResults").innerHTML=`<div class="card">${emptyState("Everybody appeared 🎉",`All ${students.length} student${students.length===1?"":"s"} who were set this test attempted it.`)}</div>`;
+    abRender(students.length);
+  }catch(e){ el("abResults").innerHTML=errBox(e); setBtn("abBtn",false,"Show absentees"); }
+}
+function abMessageFor(s){
+  const t=ABS_TEST||{};
+  const when=(t.startAt&&t.startAt.toDate)?dmy(t.startAt.toDate()):"";
+  return String(val("abMsgText")||ABS_MSG_DEFAULT)
+    .replace(/\{student\}/g,s.name||"your ward")
+    .replace(/\{test\}/g,stripTestTitle(t.title)||t.title||"the test")
+    .replace(/\{date\}/g,when)
+    .replace(/\{centre\}/g,centreName(s.centreId));
+}
+function abRender(totalSet){
+  const withNum=ABS_LIST.filter(s=>waNumber(s.parentPhone)).length;
+  el("abResults").innerHTML=`<div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+      <div><h3 class="serif" style="margin:0;font-size:19px">${ABS_LIST.length} absent of ${totalSet} set this test</h3>
+        <p class="muted" style="margin:2px 0 0;font-size:12.5px">${withNum} parent number${withNum===1?"":"s"} on file${ABS_LIST.length-withNum?` · ${ABS_LIST.length-withNum} missing — add them with “📱 Parent numbers” on the Students screen`:""}</p></div>
+      <div class="row" style="gap:8px">
+        <button class="btn ghost sm" onclick="abDownload()">⤓ Download list</button>
+        ${withNum?`<button class="btn gold sm" onclick="abOpenNext()" id="abNextBtn">Start sending (${withNum})</button>`:""}
+      </div></div>
+    ${tableHTML(["Student","Class","Centre","Parent WhatsApp","Message"],
+      ABS_LIST.map((s,i)=>[`<b>${esc(s.name)}</b>`,"Class "+esc(s.class||"?"),esc(centreName(s.centreId)),
+        waNumber(s.parentPhone)?`<span class="idfont">${esc(waPretty(s.parentPhone))}</span>`:`<span class="muted">not saved</span>`,
+        waNumber(s.parentPhone)
+          ? `<button class="btn gold sm" id="absend-${i}" onclick="abSend(${i})">Open WhatsApp</button>`
+          : `<button class="btn ghost sm" onclick="abAddNumber(${i})">+ Add number</button>`]))}
+    <p class="muted" style="font-size:12px;margin:10px 0 0">Pressing a button opens WhatsApp with the message already typed — you press Send there. Nothing is sent by the portal on its own.</p>
+  </div>`;
+}
+function abSend(i){
+  const s=ABS_LIST[i]; if(!s) return;
+  const link=waLink(s.parentPhone,abMessageFor(s));
+  if(!link) return alert("That number doesn't look right. Fix it on the Students screen.");
+  window.open(link,"_blank");
+  s._sent=true;
+  const b=el("absend-"+i); if(b){ b.className="btn ghost sm"; b.innerHTML="✓ Opened — send again"; }
+  abUpdateNextBtn();
+}
+function abUpdateNextBtn(){
+  const b=el("abNextBtn"); if(!b) return;
+  const left=ABS_LIST.filter(s=>waNumber(s.parentPhone)&&!s._sent).length;
+  b.innerHTML=left?`Next parent (${left} left)`:"✓ All opened";
+  b.disabled=!left;
+}
+function abOpenNext(){
+  const i=ABS_LIST.findIndex(s=>waNumber(s.parentPhone)&&!s._sent);
+  if(i<0) return abUpdateNextBtn();
+  abSend(i);
+}
+async function abAddNumber(i){
+  const s=ABS_LIST[i]; if(!s) return;
+  const v=prompt(`Parent's WhatsApp number for ${s.name}:`,s.parentPhone||"");
+  if(v===null) return;
+  const clean=v.trim();
+  if(clean&&!waNumber(clean)) return alert("That number doesn't look right — use 10 digits, or put the country code in front.");
+  try{ await db.collection("users").doc(s.id).update({parentPhone:clean}); s.parentPhone=clean; loadAbsentees(); }
+  catch(e){ alert("Could not save: "+errMsg(e)); }
+}
+function abDownload(){
+  const t=ABS_TEST||{};
+  const rows=ABS_LIST.map(s=>({Student:s.name||"",Class:s.class||"",Centre:centreName(s.centreId),
+    "Login ID":s.loginId||"","Parent WhatsApp":waPretty(s.parentPhone)||""}));
+  const ws=XLSX.utils.json_to_sheet(rows), wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Absentees");
+  XLSX.writeFile(wb,(tpDocTitle([{title:t.title,when:(t.startAt&&t.startAt.seconds)||0}]).replace(/RESULTS/,"ABSENTEES"))+".xlsx");
+}
+
+/* ============================================================
+   SEND MARKS TO PARENTS — one test, every student who appeared.
+   Same click-to-send idea as the absentee reminder: WhatsApp opens with the message already
+   typed and a person presses Send. The portal never sends anything by itself.
+   ============================================================ */
+const SM_MSG_DEFAULT=
+"Dear Parent,\n\n{student}'s result for the test \"{test}\" held on {date}:\n\n"+
+"Score: {score} out of {total} ({percent}%)\n"+
+"Correct: {correct}  |  Wrong: {wrong}  |  Unattempted: {skipped}\n"+
+"Accuracy: {accuracy}\n"+
+"Percentile in {centre}: {percentile}\n"+
+"Percentile across all centres: {percentileall}\n\n"+
+"Kindly go through the solutions with {student} in the student portal.\n\n— Sonam Tuitions, {centre}";
+const SM_DQ_DEFAULT=
+"Dear Parent,\n\n{student}'s online test \"{test}\" held on {date} was ended automatically by the system.\n\n"+
+"The test window was left repeatedly during the examination, which our rules record as malpractice. "+
+"No marks have been awarded for this attempt.\n\n"+
+"Kindly speak to {student} about following the test rules. Please contact the centre if you would like to discuss this.\n\n— Sonam Tuitions, {centre}";
+let SM_ROWS=[],SM_TESTS=[],SM_TEST=null;
+function pageSendMarks(){
+  setView(`<h1 class="page-title">Send marks</h1>
+    <p class="page-sub">Each parent gets their own child's result on WhatsApp — marks, correct, wrong, unattempted, accuracy and percentile.</p>
+    <div class="card" style="max-width:760px">
+      <label>Test</label><select id="smTest"><option value="">Loading tests…</option></select>
+      ${ME.role==="master"?`<label>Centre</label><select id="smCentre"><option value="">All centres this test was set for</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
+      <label>Message to the parent</label>
+      <textarea id="smMsgText" rows="12" style="font-family:inherit">${esc(SM_MSG_DEFAULT)}</textarea>
+      <p class="muted" style="font-size:12.5px;margin:4px 0 0">Filled in for each student: {student} {test} {date} {centre} {score} {total} {percent} {correct} {wrong} {skipped} {accuracy} <b>{percentile}</b> (their standing in their own centre) <b>{percentileall}</b> (their standing across all centres)</p>
+      <label style="margin-top:14px">Message when the attempt was disqualified</label>
+      <textarea id="smDqText" rows="9" style="font-family:inherit">${esc(SM_DQ_DEFAULT)}</textarea>
+      <p class="muted" style="font-size:12.5px;margin:4px 0 0">No marks are put in this one — the attempt was cancelled, so there is nothing to report.</p>
+      <div class="msg" id="smMsg"></div>
+      <div class="row" style="gap:10px;margin-top:6px">
+        <button class="btn" id="smBtn" onclick="loadSendMarks()">Show results</button>
+      </div>
+    </div>
+    <div id="smResults" style="margin-top:18px"></div>`);
+  smFillTests();
+}
+async function smFillTests(){
+  try{
+    const snap=await db.collection("tests").where("isPractice","==",false).get();
+    SM_TESTS=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(t=>!t.draft && !String(t.scope||"").startsWith("draft"))
+      .filter(t=>ME.role==="master"||assignedCentres(t).includes(ME.centreId))
+      .sort((a,b)=>((b.startAt&&b.startAt.seconds)||0)-((a.startAt&&a.startAt.seconds)||0));
+    el("smTest").innerHTML=SM_TESTS.length
+      ? `<option value="">Choose a test…</option>`+SM_TESTS.map(t=>`<option value="${t.id}">${esc(t.title||"(untitled)")}</option>`).join("")
+      : `<option value="">No scheduled tests yet</option>`;
+  }catch(e){ el("smTest").innerHTML=`<option value="">Could not load the tests</option>`; }
+}
+async function loadSendMarks(){
+  const id=val("smTest"); if(!id) return setMsg("smMsg","Choose a test first.","err");
+  setMsg("smMsg","",""); setBtn("smBtn",true,"Working…"); el("smResults").innerHTML="";
+  try{
+    const t=SM_TESTS.find(x=>x.id===id)||{id}; SM_TEST=t;
+    let centres=assignedCentres(t);
+    if(ME.role==="admin") centres=centres.filter(c=>c===ME.centreId);
+    else if(val("smCentre")) centres=centres.filter(c=>c===val("smCentre"));
+    const stu={}; (await allStudentDocs()).forEach(x=>stu[x.id]=x);
+    const asnap=await db.collection("attempts").where("testId","==",id).get();
+    const attempts=asnap.docs.map(d=>d.data()).filter(a=>!a.isPractice);
+    // Percentiles are worked out BEFORE any centre filter, so a student's standing is measured
+    // against everyone who really sat the paper — once inside their own centre, once overall.
+    // A disqualified attempt counts for neither.
+    const centreOfAttempt=a=>a.centreId||((stu[a.studentUid]||{}).centreId)||"";
+    const allScores=[],byCentre={};
+    attempts.forEach(a=>{ if(a.disqualified) return;
+      allScores.push(a.score||0);
+      const c=centreOfAttempt(a); (byCentre[c]=byCentre[c]||[]).push(a.score||0); });
+    SM_ROWS=[];
+    attempts.forEach(a=>{
+      const s=stu[a.studentUid]; if(!s) return;                       // student no longer on the rolls
+      const cId=centreOfAttempt(a)||s.centreId;
+      if(!centres.includes(cId)) return;
+      const base={uid:s.id,name:s.name,cls:s.class,centreId:cId,parentPhone:s.parentPhone||""};
+      if(a.disqualified){
+        SM_ROWS.push({...base,dq:true,score:0,total:a.total||0,correct:0,wrong:0,skipped:0,
+          accuracy:"—",percentile:"—",percentileAll:"—"});
+        return;
+      }
+      const c=a.correct||0,w=a.wrong||0,sk=a.unattempted||0,att=c+w;
+      SM_ROWS.push({...base,dq:false,
+        score:a.score||0,total:a.total||0,correct:c,wrong:w,skipped:sk,
+        accuracy:att?(Math.round(c/att*1000)/10)+"%":"—",
+        percentile:percentileOf(a.score||0,byCentre[cId]||[]),
+        percentileAll:percentileOf(a.score||0,allScores)});
+    });
+    SM_ROWS.sort((x,y)=>String(x.centreId).localeCompare(String(y.centreId))||(x.dq?1:0)-(y.dq?1:0)||y.score-x.score);
+    setBtn("smBtn",false,"Show results");
+    if(!SM_ROWS.length) return el("smResults").innerHTML=`<div class="card">${emptyState("No results to send","Nobody from these centres has an attempt recorded for this test yet.")}</div>`;
+    smRender();
+  }catch(e){ el("smResults").innerHTML=errBox(e); setBtn("smBtn",false,"Show results"); }
+}
+function smMessageFor(r){
+  const t=SM_TEST||{};
+  const when=(t.startAt&&t.startAt.toDate)?dmy(t.startAt.toDate()):"";
+  const percent=r.total?(Math.round(r.score/r.total*1000)/10):0;
+  const body=r.dq?(val("smDqText")||SM_DQ_DEFAULT):(val("smMsgText")||SM_MSG_DEFAULT);
+  return String(body)
+    .replace(/\{student\}/g,r.name||"your ward")
+    .replace(/\{test\}/g,stripTestTitle(t.title)||t.title||"the test")
+    .replace(/\{date\}/g,when)
+    .replace(/\{centre\}/g,centreName(r.centreId))
+    .replace(/\{score\}/g,r.score)
+    .replace(/\{total\}/g,r.total)
+    .replace(/\{percent\}/g,percent)
+    .replace(/\{correct\}/g,r.correct)
+    .replace(/\{wrong\}/g,r.wrong)
+    .replace(/\{skipped\}/g,r.skipped)
+    .replace(/\{accuracy\}/g,r.accuracy)
+    .replace(/\{percentileall\}/gi,r.percentileAll)
+    .replace(/\{percentile\}/g,r.percentile);
+}
+function smRender(){
+  const withNum=SM_ROWS.filter(r=>waNumber(r.parentPhone)).length;
+  const dqCount=SM_ROWS.filter(r=>r.dq).length;
+  el("smResults").innerHTML=`<div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+      <div><h3 class="serif" style="margin:0;font-size:19px">${SM_ROWS.length} message${SM_ROWS.length===1?"":"s"} ready to send</h3>
+        <p class="muted" style="margin:2px 0 0;font-size:12.5px">${withNum} parent number${withNum===1?"":"s"} on file${SM_ROWS.length-withNum?` · ${SM_ROWS.length-withNum} missing`:""}${dqCount?` · <b style="color:var(--danger)">${dqCount} disqualified</b> (they get the malpractice message instead of marks)`:""} · percentile is within each centre, with the all-centre figure beside it</p></div>
+      <div class="row" style="gap:8px">
+        <button class="btn ghost sm" onclick="smDownload()">⤓ Download list</button>
+        <button class="btn gold sm" onclick="smOpenNext()" id="smNextBtn" disabled>Start sending (${withNum})</button>
+      </div></div>
+    <div class="note" style="margin-bottom:12px">
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:0;font-weight:600">
+        <input type="checkbox" id="smChecked" style="width:auto;margin-top:2px" onchange="smArm()"/>
+        <span>I have checked that each number below belongs to that student's parent.<br>
+        <span class="muted" style="font-weight:400">Marks are personal — a number saved against the wrong student would send a child's result to a stranger. The send buttons switch on once this is ticked.</span></span>
+      </label></div>
+    ${tableHTML(["Student","Class","Centre","Score","C / W / S","Accuracy","Percentile<br><span style='font-weight:400'>in centre</span>","Percentile<br><span style='font-weight:400'>all centres</span>","Parent WhatsApp","Send"],
+      SM_ROWS.map((r,i)=>[`<b>${esc(r.name)}</b>`,"Class "+esc(r.cls||"?"),esc(centreName(r.centreId)),
+        r.dq?`<b style="color:var(--danger)">DISQUALIFIED</b>`:`<b>${r.score}/${r.total}</b>`,
+        r.dq?"—":`${r.correct} / ${r.wrong} / ${r.skipped}`,esc(r.accuracy),esc(r.percentile),esc(r.percentileAll),
+        waNumber(r.parentPhone)?`<span class="idfont">${esc(waPretty(r.parentPhone))}</span>`:`<span class="muted">not saved</span>`,
+        waNumber(r.parentPhone)
+          ? `<button class="btn ${r.dq?"ghost danger":"gold"} sm smSendBtn" id="smsend-${i}" onclick="smSend(${i})" disabled>${r.dq?"Send notice":"Open WhatsApp"}</button>`
+          : `<button class="btn ghost sm" onclick="smAddNumber(${i})">+ Add number</button>`]))}
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Pressing a button opens WhatsApp with that child's result already typed — you press Send there.</p>
+  </div>`;
+}
+function smArm(){
+  const on=!!(el("smChecked")&&el("smChecked").checked);
+  document.querySelectorAll(".smSendBtn").forEach(b=>{ b.disabled=!on; b.style.opacity=on?"1":".5"; });
+  const n=el("smNextBtn"); if(n){ n.disabled=!on; n.style.opacity=on?"1":".5"; }
+}
+function smSend(i){
+  const r=SM_ROWS[i]; if(!r) return;
+  const link=waLink(r.parentPhone,smMessageFor(r));
+  if(!link) return alert("That number doesn't look right. Fix it on the Students screen.");
+  window.open(link,"_blank");
+  r._sent=true;
+  const b=el("smsend-"+i); if(b){ b.className="btn ghost sm smSendBtn"; b.innerHTML="✓ Opened — send again"; b.style.opacity="1"; }
+  smUpdateNextBtn();
+}
+function smUpdateNextBtn(){
+  const b=el("smNextBtn"); if(!b) return;
+  const left=SM_ROWS.filter(r=>waNumber(r.parentPhone)&&!r._sent).length;
+  b.innerHTML=left?`Next parent (${left} left)`:"✓ All opened";
+  b.disabled=!left;
+}
+function smOpenNext(){
+  const i=SM_ROWS.findIndex(r=>waNumber(r.parentPhone)&&!r._sent);
+  if(i<0) return smUpdateNextBtn();
+  smSend(i);
+}
+async function smAddNumber(i){
+  const r=SM_ROWS[i]; if(!r) return;
+  const v=prompt(`Parent's WhatsApp number for ${r.name}:`,r.parentPhone||"");
+  if(v===null) return;
+  const clean=v.trim();
+  if(clean&&!waNumber(clean)) return alert("That number doesn't look right — use 10 digits, or put the country code in front.");
+  try{ await db.collection("users").doc(r.uid).update({parentPhone:clean}); r.parentPhone=clean; smRender(); }
+  catch(e){ alert("Could not save: "+errMsg(e)); }
+}
+function smDownload(){
+  const t=SM_TEST||{};
+  const rows=SM_ROWS.map(r=>({Student:r.name||"",Class:r.cls||"",Centre:centreName(r.centreId),
+    Status:r.dq?"Disqualified":"Appeared",
+    Score:r.dq?"":r.score,"Out of":r.total,Correct:r.dq?"":r.correct,Wrong:r.dq?"":r.wrong,Unattempted:r.dq?"":r.skipped,
+    Accuracy:r.accuracy,"Percentile in centre":r.percentile,"Percentile all centres":r.percentileAll,
+    "Parent WhatsApp":waPretty(r.parentPhone)||""}));
+  const ws=XLSX.utils.json_to_sheet(rows), wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Marks");
+  XLSX.writeFile(wb,tpDocTitle([{title:t.title,when:(t.startAt&&t.startAt.seconds)||0}])+".xlsx");
 }
 
 /* ===== Duplicate students: find people entered twice, and merge them into one login ===== */
@@ -3970,27 +4385,33 @@ async function loadStudents(){
   try{
     const snap=await q.limit(300).get();
     el("stuList").innerHTML=snap.empty?emptyState("No students yet","Add your first student above.")
-      :tableHTML(["Name","Login ID","Password","Class","Stream","Centre",""],
+      :tableHTML(["Name","Login ID","Password","Class","Stream","Centre","Parent WhatsApp",""],
         snap.docs.map(d=>{const s=d.data();return [`<b>${esc(s.name)}</b>`,`<span class="idfont">${esc(s.loginId||s.email||"—")}</span>`,`<span class="idfont">${esc(s.pw||"—")}</span>`,"Class "+s.class,s.stream||"—",centreName(s.centreId),
-          `<button class="btn ghost sm" onclick='printStudentSlip("${d.id}")'>🖨 Slip</button> ${ME.role==="master"?`<button class="btn ghost sm" onclick='openEditStudent("${d.id}")'>Class / course</button> `:""}<button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
+          s.parentPhone?`<span class="idfont">${esc(s.parentPhone)}</span>`:`<span class="muted">—</span>`,
+          `<button class="btn ghost sm" onclick='printStudentSlip("${d.id}")'>🖨 Slip</button> <button class="btn ghost sm" onclick='openEditStudent("${d.id}")'>Details</button> <button class="btn ghost sm" onclick='openResetPassword("${d.id}","${esc(s.name)}")'>Reset password</button> <button class="btn ghost sm danger" onclick="delStudent('${d.id}')">Delete</button>`];}));
   }catch(e){ el("stuList").innerHTML=errBox(e); }
 }
 // Master can correct a student's class or course (e.g. a PCM student who is really PCMB)
 async function openEditStudent(uid){
   const x=(await db.collection("users").doc(uid).get()).data()||{};
-  modal(`<h2>Class &amp; course</h2><p class="muted">${esc(x.name||"")} · ${centreName(x.centreId)}</p>
-    <label>Class</label><select id="esClass"><option value="11" ${x.class==="11"?"selected":""}>Class 11</option><option value="12" ${x.class==="12"?"selected":""}>Class 12</option></select>
+  modal(`<h2>Student details</h2><p class="muted">${esc(x.name||"")} · ${centreName(x.centreId)}</p>
+    ${ME.role==="master"?`<label>Class</label><select id="esClass"><option value="11" ${x.class==="11"?"selected":""}>Class 11</option><option value="12" ${x.class==="12"?"selected":""}>Class 12</option></select>`:`<p class="muted" style="font-size:12.5px;margin:0">Class ${esc(x.class||"?")} · ${esc(x.stream||"—")} — only the head office can change these.</p><div style="display:none">`}
     <label>Course</label><select id="esStream">
       <option value="PCM" ${x.stream==="PCM"?"selected":""}>PCM — JEE Main &amp; MHT-CET (PCM)</option>
       <option value="PCB" ${x.stream==="PCB"?"selected":""}>PCB — NEET &amp; MHT-CET (PCB)</option>
-      <option value="PCMB" ${x.stream==="PCMB"?"selected":""}>PCMB — JEE, NEET &amp; MHT-CET (both)</option></select>
+      <option value="PCMB" ${x.stream==="PCMB"?"selected":""}>PCMB — JEE, NEET &amp; MHT-CET (both)</option></select>${ME.role==="master"?"":"</div>"}
+    <label>Parent's WhatsApp number</label>
+    <input id="esPhone" type="tel" inputmode="tel" value="${esc(x.parentPhone||"")}" placeholder="e.g. 98765 43210"/>
     <div class="msg" id="esMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="esBtn" onclick="saveEditStudent('${uid}')">Save</button></div>`);
 }
 async function saveEditStudent(uid){
   setBtn("esBtn",true,"Saving…");
-  try{ await db.collection("users").doc(uid).update({class:val("esClass"),stream:val("esStream")}); closeModal();
+  try{
+    const upd={parentPhone:val("esPhone").trim()};
+    if(ME.role==="master"){ upd.class=val("esClass"); upd.stream=val("esStream"); }
+    await db.collection("users").doc(uid).update(upd); closeModal();
     if(el("stuList")) loadStudents();
     if(el("ssResult")){ const c=(SS_STUDENTS||[]).find(x=>x.id===uid);
       if(c){ c.class=val("esClass"); c.stream=val("esStream"); ssSelectStudent(uid); } }
@@ -4004,6 +4425,8 @@ function openAddStudent(){
     <label>Login ID (username)</label><input id="sLogin" placeholder="e.g. aarav01 — no spaces"/>
     <label>Password</label><input id="sPass" placeholder="min 6 characters"/>
     <label>Enrol in</label><select id="sClass"><option value="11">Class 11</option><option value="12">Class 12 (direct admission)</option></select>
+    <label>Parent's WhatsApp number <span class="muted" style="font-weight:400">— optional, used to message absentees</span></label>
+    <input id="sParentPhone" type="tel" inputmode="tel" placeholder="e.g. 98765 43210"/>
     <label>Course</label><select id="sStream" onchange="sStreamNote()">
       <option value="PCM">PCM — JEE Main &amp; MHT-CET (PCM)</option>
       <option value="PCB">PCB — NEET &amp; MHT-CET (PCB)</option>
@@ -4029,7 +4452,7 @@ async function addStudent(){
     }
     setBtn("sBtn",true,"Creating…");
     const cred=await secondaryApp.auth().createUserWithEmailAndPassword(toLoginEmail(loginId),pass);
-    await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),pw:pass,class:val("sClass")==="12"?"12":"11",stream:val("sStream"),
+    await db.collection("users").doc(cred.user.uid).set({role:"student",name,loginId,email:toLoginEmail(loginId),pw:pass,class:val("sClass")==="12"?"12":"11",stream:val("sStream"),parentPhone:val("sParentPhone").trim(),
       centreId,createdBy:ME.uid,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await secondaryApp.auth().signOut();
     logCentreUpdate("student_added",centreId,{studentName:name,loginId});
