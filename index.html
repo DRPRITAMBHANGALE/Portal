@@ -56,6 +56,7 @@ a{color:var(--accent)}
 label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:14px 0 6px;letter-spacing:.2px}
 input,select,textarea{width:100%;padding:11px 13px;border:1px solid var(--line-2);border-radius:10px;background:#fff;font-size:15px;color:var(--ink);font-family:inherit}
 select.tbox{padding:11px 4px;flex:none;text-align:center;text-align-last:center;font-variant-numeric:tabular-nums}
+table td.nowrap,table th.nowrap{white-space:nowrap}
 .dtpair{display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-width:0}
 .dtpair>input[type=date]{flex:1 1 130px;min-width:0;padding-left:8px;padding-right:4px;font-variant-numeric:tabular-nums}
 .dtpair.tight>input[type=date]{flex:1 1 92px}
@@ -838,7 +839,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre permissions"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: marks message"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -3697,11 +3698,15 @@ let PP_STUDENTS=[];
 async function openParentPhones(){
   modal(`<h2>📱 Parent WhatsApp numbers</h2>
     <p class="muted">These are used to message the parents of students who miss a test. A plain 10-digit number is fine — 91 is added for you.</p>
-    <div class="card" style="padding:14px 16px;margin-bottom:14px">
-      <b style="font-size:14px">Import from Excel</b>
-      <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Your sheet needs a <b>Name</b> column and a <b>Phone</b> column (a <b>Centre</b> column is optional). Students are matched by name.</p>
-      <input type="file" id="ppFile" accept=".xlsx,.xls" onchange="ppImportPreview()"/>
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;border-color:var(--accent)">
+      <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <b style="font-size:15px">⬆ Upload an Excel of parent numbers</b>
+        <button class="btn ghost sm" onclick="ppTemplate()">⤓ Download a template</button>
+      </div>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 8px">The sheet needs a <b>Phone</b> column, and either a <b>Login ID</b> column or a <b>Name</b> column to say who it belongs to. <b>Login ID</b> is the safer one — two students can share a name, but never a login ID. A <b>Centre</b> column is optional and only helps when names repeat.</p>
+      <input type="file" id="ppFile" accept=".xlsx,.xls,.csv" onchange="ppImportPreview()"/>
       <div class="msg" id="ppImpMsg"></div>
+      <div id="ppImpAction"></div>
       <div id="ppImpPreview"></div>
     </div>
     <div class="row" style="gap:8px;align-items:center">
@@ -3727,28 +3732,61 @@ function ppRender(){
       </div>`).join("")+`</div>`
       :`<p class="muted">No students match.</p>`);
 }
+function ppTemplate(){
+  const sample=PP_STUDENTS.slice(0,3);
+  const rows=sample.length?sample.map(s=>({"Login ID":s.loginId||"",Name:s.name||"",Centre:s.centreId||"",Phone:""}))
+    :[{"Login ID":"aarav234",Name:"Aarav Shah",Centre:"AMB",Phone:""}];
+  const ws=XLSX.utils.json_to_sheet(rows), wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Parent numbers");
+  XLSX.writeFile(wb,"Parent_Numbers_Template.xlsx");
+}
 async function ppImportPreview(){
   const f=el("ppFile").files[0]; if(!f) return;
-  setMsg("ppImpMsg","Reading file…","ok"); el("ppImpPreview").innerHTML="";
+  setMsg("ppImpMsg","Reading the file…","ok"); el("ppImpPreview").innerHTML=""; el("ppImpAction").innerHTML="";
   try{
     const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
     const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
-    const matched=[],unmatched=[];
+    const matched=[],unmatched=[],taken=new Set();
     rows.forEach(r=>{
-      const get=k=>{const key=Object.keys(r).find(x=>x.trim().toLowerCase()===k); return key?String(r[key]).trim():"";};
-      const name=get("name"); if(!name) return;
-      const phone=get("phone")||get("mobile")||get("whatsapp")||get("contact")||get("parent phone")||get("parent's whatsapp number");
-      if(!waNumber(phone)){ unmatched.push({name,why:phone?"number not understood":"no number in the row"}); return; }
-      const centre=(get("centre")||"").toLowerCase();
-      const hits=PP_STUDENTS.filter(s=>nameKey(s.name)===nameKey(name)&&(!centre||String(s.centreId).toLowerCase()===centre));
-      if(hits.length===1) matched.push({uid:hits[0].id,name:hits[0].name,phone});
-      else unmatched.push({name,why:hits.length?`${hits.length} students have this name — fill it in below instead`:"no student with this name"});
+      const get=(...keys)=>{ for(const k of keys){ const key=Object.keys(r).find(x=>x.trim().toLowerCase()===k);
+        if(key&&String(r[key]).trim()) return String(r[key]).trim(); } return ""; };
+      const name=get("name","student","student name","full name");
+      const login=get("login id","loginid","login","username","user id","id").toLowerCase();
+      if(!name&&!login) return;                                    // a blank row — skip it quietly
+      const who=name||login;
+      const phone=get("phone","mobile","whatsapp","contact","parent phone","parent's phone","parent mobile",
+                      "parent whatsapp","parent's whatsapp number","whatsapp number","mobile number","contact number");
+      if(!waNumber(phone)){ unmatched.push({who,why:phone?`"${phone}" isn't a usable number`:"no number in this row"}); return; }
+      // login ID first — it can only ever mean one student
+      let hits=login?PP_STUDENTS.filter(s=>String(s.loginId||"").toLowerCase()===login):[];
+      let by="login ID";
+      if(!hits.length&&name){
+        by="name";
+        const centre=get("centre","branch","center").toLowerCase();
+        hits=PP_STUDENTS.filter(s=>nameKey(s.name)===nameKey(name)
+          &&(!centre||String(s.centreId).toLowerCase()===centre||String(centreName(s.centreId)).toLowerCase()===centre));
+      }
+      if(hits.length===1){
+        if(taken.has(hits[0].id)){ unmatched.push({who,why:"this student appears more than once in the file"}); return; }
+        taken.add(hits[0].id); matched.push({uid:hits[0].id,name:hits[0].name,phone,by});
+      }
+      else if(hits.length>1) unmatched.push({who,why:`${hits.length} students share this name — add a Login ID or Centre column`});
+      else unmatched.push({who,why:login?"no student with this login ID":"no student with this name"});
     });
     matched.forEach(m=>{ const box=document.querySelector(`.ppNum[data-uid="${m.uid}"]`); if(box) box.value=m.phone;
       const st=PP_STUDENTS.find(x=>x.id===m.uid); if(st) st._pending=m.phone; });
-    setMsg("ppImpMsg",`${matched.length} number${matched.length===1?"":"s"} filled in below${unmatched.length?` · ${unmatched.length} row${unmatched.length===1?"":"s"} couldn't be matched`:""}. Press “Save numbers” to keep them.`,unmatched.length?"warn":"ok");
-    el("ppImpPreview").innerHTML=unmatched.length?`<div style="max-height:150px;overflow:auto;margin-top:8px">`
-      +tableHTML(["Not matched","Reason"],unmatched.slice(0,100).map(u=>[esc(u.name),esc(u.why)]))+`</div>`:"";
+    const byLogin=matched.filter(m=>m.by==="login ID").length;
+    setMsg("ppImpMsg",`Read ${rows.length} row${rows.length===1?"":"s"} · matched ${matched.length} student${matched.length===1?"":"s"}`
+      +(matched.length?` (${byLogin} by login ID, ${matched.length-byLogin} by name)`:"")
+      +(unmatched.length?` · ${unmatched.length} row${unmatched.length===1?"":"s"} not matched`:""),
+      matched.length?(unmatched.length?"warn":"ok"):"err");
+    el("ppImpAction").innerHTML=matched.length
+      ? `<button class="btn gold" style="margin-top:10px" id="ppImpSave" onclick="ppSave()">✓ Save these ${matched.length} number${matched.length===1?"":"s"}</button>`
+      : "";
+    el("ppImpPreview").innerHTML=unmatched.length?`<p class="muted" style="font-size:12.5px;margin:10px 0 4px">These rows were left alone — nothing was changed for them:</p>
+      <div style="max-height:180px;overflow:auto">`
+      +tableHTML(["Row","Why it wasn't used"],unmatched.slice(0,150).map(u=>[esc(u.who),esc(u.why)]))
+      +(unmatched.length>150?`<p class="muted" style="font-size:12px;margin:6px 0 0">…and ${unmatched.length-150} more.</p>`:"")+`</div>`:"";
   }catch(e){ setMsg("ppImpMsg","Could not read the file: "+errMsg(e),"err"); }
 }
 async function ppSave(){
@@ -3759,6 +3797,7 @@ async function ppSave(){
   PP_STUDENTS.forEach(s=>{ if(s._pending!==undefined && !changed.find(c=>c.uid===s.id) && (s.parentPhone||"")!==s._pending)
     changed.push({uid:s.id,v:s._pending}); });
   if(!changed.length) return setMsg("ppMsg","Nothing to save — no number was changed.","warn");
+  const impBtn=el("ppImpSave"); if(impBtn) setBtn("ppImpSave",true,"Saving…");
   const bad=changed.filter(c=>c.v&&!waNumber(c.v));
   if(bad.length) return setMsg("ppMsg",`${bad.length} number${bad.length===1?" doesn't":"s don't"} look right. A number should be 10 digits, or have the country code in front.`,"err");
   setBtn("ppBtn",true,"Saving…");
@@ -3770,9 +3809,14 @@ async function ppSave(){
     }
     changed.forEach(c=>{ const st=PP_STUDENTS.find(s=>s.id===c.uid); if(st){ st.parentPhone=c.v; delete st._pending; } });
     setMsg("ppMsg",`✓ ${changed.length} number${changed.length===1?"":"s"} saved.`,"ok");
+    if(el("ppImpSave")) setBtn("ppImpSave",true,`✓ ${changed.length} saved`);
+    if(el("ppImpMsg")) setMsg("ppImpMsg",`✓ ${changed.length} number${changed.length===1?"":"s"} saved to the students.`,"ok");
     setBtn("ppBtn",false,"Save numbers"); ppRender();
     if(el("stuList")) loadStudents();
-  }catch(e){ setMsg("ppMsg","Could not save: "+permMsg(e,"save parent numbers"),"err"); setBtn("ppBtn",false,"Save numbers"); }
+    if(el("smResults")&&SM_ROWS.length){ SM_ROWS.forEach(r=>{ const st=PP_STUDENTS.find(x=>x.id===r.uid); if(st) r.parentPhone=st.parentPhone||""; }); smRender(); }
+    if(el("abResults")&&ABS_LIST.length){ ABS_LIST.forEach(r=>{ const st=PP_STUDENTS.find(x=>x.id===r.id); if(st) r.parentPhone=st.parentPhone||""; }); }
+  }catch(e){ setMsg("ppMsg","Could not save: "+permMsg(e,"save parent numbers"),"err"); setBtn("ppBtn",false,"Save numbers");
+    if(el("ppImpSave")) setBtn("ppImpSave",false,"✓ Try saving again"); }
 }
 
 /* ---------- who missed the test, and the message for their parents ---------- */
@@ -3849,6 +3893,7 @@ function abRender(totalSet){
       <div><h3 class="serif" style="margin:0;font-size:19px">${ABS_LIST.length} absent of ${totalSet} set this test</h3>
         <p class="muted" style="margin:2px 0 0;font-size:12.5px">${withNum} parent number${withNum===1?"":"s"} on file${ABS_LIST.length-withNum?` · ${ABS_LIST.length-withNum} missing — add them with “📱 Parent numbers” on the Students screen`:""}</p></div>
       <div class="row" style="gap:8px">
+        <button class="btn ghost sm" onclick="openParentPhones()">📱 Upload parent numbers</button>
         <button class="btn ghost sm" onclick="abDownload()">⤓ Download list</button>
         ${withNum?`<button class="btn gold sm" onclick="abOpenNext()" id="abNextBtn">Start sending (${withNum})</button>`:""}
       </div></div>
@@ -3905,13 +3950,13 @@ function abDownload(){
    typed and a person presses Send. The portal never sends anything by itself.
    ============================================================ */
 const SM_MSG_DEFAULT=
-"Dear Parent,\n\n{student}'s result for the test \"{test}\" held on {date}:\n\n"+
+"Dear Parent,\n"+
+"{student}'s result for the online test \"{test}\" held on {date}:\n"+
 "Score: {score} out of {total} ({percent}%)\n"+
-"Correct: {correct}  |  Wrong: {wrong}  |  Unattempted: {skipped}\n"+
+"Correct: {correct} | Wrong: {wrong} | Unattempted: {skipped}\n"+
 "Accuracy: {accuracy}\n"+
-"Percentile in {centre}: {percentile}\n"+
-"Percentile across all centres: {percentileall}\n\n"+
-"Kindly go through the solutions with {student} in the student portal.\n\n— Sonam Tuitions, {centre}";
+"Percentile: {percentile}\n\n"+
+"— Sonam Tuitions, {centre}";
 const SM_DQ_DEFAULT=
 "Dear Parent,\n\n{student}'s online test \"{test}\" held on {date} was ended automatically by the system.\n\n"+
 "The test window was left repeatedly during the examination, which our rules record as malpractice. "+
@@ -3925,8 +3970,9 @@ function pageSendMarks(){
       <label>Test</label><select id="smTest"><option value="">Loading tests…</option></select>
       ${ME.role==="master"?`<label>Centre</label><select id="smCentre"><option value="">All centres this test was set for</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
       <label>Message to the parent</label>
-      <textarea id="smMsgText" rows="12" style="font-family:inherit">${esc(SM_MSG_DEFAULT)}</textarea>
-      <p class="muted" style="font-size:12.5px;margin:4px 0 0">Filled in for each student: {student} {test} {date} {centre} {score} {total} {percent} {correct} {wrong} {skipped} {accuracy} <b>{percentile}</b> (their standing in their own centre) <b>{percentileall}</b> (their standing across all centres)</p>
+      <textarea id="smMsgText" rows="10" style="font-family:inherit">${esc(SM_MSG_DEFAULT)}</textarea>
+      <p class="muted" style="font-size:12.5px;margin:4px 0 0">Filled in for each student: {student} {test} {date} {centre} {score} {total} {percent} {correct} {wrong} {skipped} {accuracy} {percentile}<br>
+        <b>{percentile}</b> is their standing within their own centre. To send their standing across all six centres as well, add a line using <b>{percentileall}</b> — that one only works on the master login.</p>
       <label style="margin-top:14px">Message when the attempt was disqualified</label>
       <textarea id="smDqText" rows="9" style="font-family:inherit">${esc(SM_DQ_DEFAULT)}</textarea>
       <p class="muted" style="font-size:12.5px;margin:4px 0 0">No marks are put in this one — the attempt was cancelled, so there is nothing to report.</p>
@@ -4027,6 +4073,7 @@ function smRender(){
         ${ME.role==="master"?`<p class="muted" style="margin:2px 0 0;font-size:12.5px">Percentile is worked out within each centre, with the all-centre figure beside it.</p>`
           :`<p class="muted" style="margin:2px 0 0;font-size:12.5px">Percentile is within ${esc(centreName(ME.centreId))}. The all-centre figure needs the other centres' papers, which a centre login can't see — that line is left out of the message and only the head office can send it.</p>`}</div>
       <div class="row" style="gap:8px">
+        <button class="btn ghost sm" onclick="openParentPhones()">📱 Upload parent numbers</button>
         <button class="btn ghost sm" onclick="smDownload()">⤓ Download list</button>
         <button class="btn gold sm" onclick="smOpenNext()" id="smNextBtn" disabled>Start sending (${withNum})</button>
       </div></div>
@@ -4036,14 +4083,14 @@ function smRender(){
         <span>I have checked that each number below belongs to that student's parent.<br>
         <span class="muted" style="font-weight:400">Marks are personal — a number saved against the wrong student would send a child's result to a stranger. The send buttons switch on once this is ticked.</span></span>
       </label></div>
-    ${tableHTML(["Student","Class","Centre","Score","C / W / S","Accuracy","Percentile<br><span style='font-weight:400'>in centre</span>","Percentile<br><span style='font-weight:400'>all centres</span>","Parent WhatsApp","Send"],
-      SM_ROWS.map((r,i)=>[`<b>${esc(r.name)}</b>`,"Class "+esc(r.cls||"?"),esc(centreName(r.centreId)),
-        r.dq?`<b style="color:var(--danger)">DISQUALIFIED</b>`:`<b>${r.score}/${r.total}</b>`,
-        r.dq?"—":`${r.correct} / ${r.wrong} / ${r.skipped}`,esc(r.accuracy),esc(r.percentile),esc(r.percentileAll),
+    ${tableHTML(["Student","Class","Centre","Score","<span class='nowrap'>C / W / S</span>","Accuracy","Percentile<br><span style='font-weight:400'>in centre</span>","Percentile<br><span style='font-weight:400'>all centres</span>","Parent WhatsApp","Send"],
+      SM_ROWS.map((r,i)=>[`<b>${esc(r.name)}</b>`,`<span class="nowrap">Class ${esc(r.cls||"?")}</span>`,esc(centreName(r.centreId)),
+        r.dq?`<b style="color:var(--danger)">DISQUALIFIED</b>`:`<b class="nowrap">${r.score}/${r.total}</b>`,
+        r.dq?"—":`<span class="nowrap">${r.correct} / ${r.wrong} / ${r.skipped}</span>`,esc(r.accuracy),esc(r.percentile),esc(r.percentileAll),
         waNumber(r.parentPhone)?`<span class="idfont">${esc(waPretty(r.parentPhone))}</span>`:`<span class="muted">not saved</span>`,
         waNumber(r.parentPhone)
-          ? `<button class="btn ${r.dq?"ghost danger":"gold"} sm smSendBtn" id="smsend-${i}" onclick="smSend(${i})" disabled>${r.dq?"Send notice":"Open WhatsApp"}</button>`
-          : `<button class="btn ghost sm" onclick="smAddNumber(${i})">+ Add number</button>`]))}
+          ? `<button class="btn ${r.dq?"ghost danger":"gold"} sm smSendBtn nowrap" id="smsend-${i}" onclick="smSend(${i})" disabled>${r.dq?"Send notice":"Open WhatsApp"}</button>`
+          : `<button class="btn ghost sm nowrap" onclick="smAddNumber(${i})">+ Add number</button>`]))}
     <p class="muted" style="font-size:12px;margin:8px 0 0">Pressing a button opens WhatsApp with that child's result already typed — you press Send there.</p>
   </div>`;
 }
