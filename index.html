@@ -839,7 +839,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: marks message"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: number register"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -3701,16 +3701,17 @@ async function openParentPhones(){
     <div class="card" style="padding:14px 16px;margin-bottom:14px;border-color:var(--accent)">
       <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <b style="font-size:15px">⬆ Upload an Excel of parent numbers</b>
-        <button class="btn ghost sm" onclick="ppTemplate()">⤓ Download a template</button>
+        <button class="btn ghost sm" onclick="ppTemplate()">⤓ Download the student list to fill in</button>
       </div>
-      <p class="muted" style="font-size:12.5px;margin:6px 0 8px">The sheet needs a <b>Phone</b> column, and either a <b>Login ID</b> column or a <b>Name</b> column to say who it belongs to. <b>Login ID</b> is the safer one — two students can share a name, but never a login ID. A <b>Centre</b> column is optional and only helps when names repeat.</p>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 8px">Start with the button above — it gives you every student on your list, <b>Class 11 and Class 12 on separate sheets</b>, with an empty Phone column to fill in. Send the same file back here. Sheets are all read, so you can fill in one class first and the other later. Rows you leave blank are simply skipped.</p>
       <input type="file" id="ppFile" accept=".xlsx,.xls,.csv" onchange="ppImportPreview()"/>
       <div class="msg" id="ppImpMsg"></div>
       <div id="ppImpAction"></div>
       <div id="ppImpPreview"></div>
     </div>
     <div class="row" style="gap:8px;align-items:center">
-      <input id="ppSearch" placeholder="Search a student by name…" oninput="ppRender()" style="flex:1"/>
+      <input id="ppSearch" placeholder="Search a student by name…" oninput="ppRender()" style="flex:1;min-width:160px"/>
+      <select id="ppClass" onchange="ppRender()" style="width:auto"><option value="">Class 11 &amp; 12</option><option value="11">Class 11 only</option><option value="12">Class 12 only</option></select>
       ${ME.role==="master"?`<select id="ppCentre" onchange="ppRender()" style="width:auto"><option value="">All centres</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
     </div>
     <div id="ppList" class="muted" style="margin-top:10px">Loading students…</div>
@@ -3721,32 +3722,50 @@ async function openParentPhones(){
   catch(e){ el("ppList").innerHTML=errBox(e); }
 }
 function ppRender(){
+  // keep anything typed before the search or a filter changed what is on screen
+  document.querySelectorAll(".ppNum").forEach(b=>{ const st=PP_STUDENTS.find(s=>s.id===b.dataset.uid);
+    if(st&&b.value.trim()!==(st.parentPhone||"")) st._pending=b.value.trim(); });
   const q=(val("ppSearch")||"").toLowerCase().trim(), centre=ME.role==="master"?val("ppCentre"):ME.centreId;
-  const rows=PP_STUDENTS.filter(s=>(!centre||s.centreId===centre)&&(!q||String(s.name||"").toLowerCase().includes(q)));
+  const cls=val("ppClass");
+  const rows=PP_STUDENTS.filter(s=>(!centre||s.centreId===centre)&&(!cls||String(s.class)===cls)
+    &&(!q||String(s.name||"").toLowerCase().includes(q)));
   const done=PP_STUDENTS.filter(s=>waNumber(s.parentPhone)).length;
-  el("ppList").innerHTML=`<p class="muted" style="font-size:12.5px;margin:0 0 8px">${done} of ${PP_STUDENTS.length} students have a number saved. Showing ${rows.length}.</p>`
+  const unsaved=PP_STUDENTS.filter(s=>s._pending!==undefined&&s._pending!==(s.parentPhone||"")).length;
+  el("ppList").innerHTML=`<p class="muted" style="font-size:12.5px;margin:0 0 8px">${done} of ${PP_STUDENTS.length} students have a number saved. Showing ${rows.length}.${unsaved?` <b style="color:var(--gold)">${unsaved} typed but not yet saved</b> — press “Save numbers”.`:""}</p>`
     +(rows.length?`<div style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px">`
       +rows.map(s=>`<div class="row" style="gap:10px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
         <span style="flex:1;min-width:0;font-size:13.5px"><b>${esc(s.name)}</b> <span class="muted">· Class ${esc(s.class||"?")} · ${esc(centreName(s.centreId))}</span></span>
-        <input class="ppNum" data-uid="${s.id}" type="tel" inputmode="tel" value="${esc(s.parentPhone||"")}" placeholder="10-digit number" style="width:190px;flex:none"/>
+        <input class="ppNum" data-uid="${s.id}" type="tel" inputmode="tel" value="${esc(s._pending!==undefined?s._pending:(s.parentPhone||""))}" placeholder="10-digit number" style="width:190px;flex:none"/>
       </div>`).join("")+`</div>`
       :`<p class="muted">No students match.</p>`);
 }
+// The template is the real register: every student the login can see, Class 11 and Class 12 on
+// their own sheets, with any number already saved filled in so re-uploading never wipes one.
 function ppTemplate(){
-  const sample=PP_STUDENTS.slice(0,3);
-  const rows=sample.length?sample.map(s=>({"Login ID":s.loginId||"",Name:s.name||"",Centre:s.centreId||"",Phone:""}))
-    :[{"Login ID":"aarav234",Name:"Aarav Shah",Centre:"AMB",Phone:""}];
-  const ws=XLSX.utils.json_to_sheet(rows), wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,"Parent numbers");
-  XLSX.writeFile(wb,"Parent_Numbers_Template.xlsx");
+  const centre=ME.role==="master"?val("ppCentre"):ME.centreId;
+  const all=PP_STUDENTS.filter(s=>!centre||s.centreId===centre)
+    .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
+  if(!all.length) return alert("No students to put in the template yet.");
+  const row=s=>({"Login ID":s.loginId||"",Name:s.name||"",Class:s.class||"",Centre:s.centreId||"",Phone:s.parentPhone||""});
+  const wb=XLSX.utils.book_new();
+  const sheets=[["Class 11",all.filter(s=>String(s.class)==="11")],
+                ["Class 12",all.filter(s=>String(s.class)==="12")],
+                ["Other",   all.filter(s=>String(s.class)!=="11"&&String(s.class)!=="12")]];
+  let added=0;
+  sheets.forEach(([name,list])=>{ if(!list.length) return;
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(list.map(row)),name); added++; });
+  if(!added) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(all.map(row)),"Students");
+  const tag=centre?centreName(centre).replace(/[^A-Za-z0-9]+/g,"_"):"All_centres";
+  XLSX.writeFile(wb,`Parent_Numbers_${tag}_${all.length}_students.xlsx`);
 }
 async function ppImportPreview(){
   const f=el("ppFile").files[0]; if(!f) return;
   setMsg("ppImpMsg","Reading the file…","ok"); el("ppImpPreview").innerHTML=""; el("ppImpAction").innerHTML="";
   try{
     const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
-    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
-    const matched=[],unmatched=[],taken=new Set();
+    // read Class 11, Class 12 and anything else in the same workbook
+    let rows=[]; wb.SheetNames.forEach(n=>{ rows=rows.concat(XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:""})); });
+    const matched=[],unmatched=[],taken=new Set(); let blank=0;
     rows.forEach(r=>{
       const get=(...keys)=>{ for(const k of keys){ const key=Object.keys(r).find(x=>x.trim().toLowerCase()===k);
         if(key&&String(r[key]).trim()) return String(r[key]).trim(); } return ""; };
@@ -3756,7 +3775,8 @@ async function ppImportPreview(){
       const who=name||login;
       const phone=get("phone","mobile","whatsapp","contact","parent phone","parent's phone","parent mobile",
                       "parent whatsapp","parent's whatsapp number","whatsapp number","mobile number","contact number");
-      if(!waNumber(phone)){ unmatched.push({who,why:phone?`"${phone}" isn't a usable number`:"no number in this row"}); return; }
+      if(!phone){ blank++; return; }                               // still to be filled in — not a fault
+      if(!waNumber(phone)){ unmatched.push({who,why:`"${phone}" isn't a usable number`}); return; }
       // login ID first — it can only ever mean one student
       let hits=login?PP_STUDENTS.filter(s=>String(s.loginId||"").toLowerCase()===login):[];
       let by="login ID";
@@ -3776,14 +3796,16 @@ async function ppImportPreview(){
     matched.forEach(m=>{ const box=document.querySelector(`.ppNum[data-uid="${m.uid}"]`); if(box) box.value=m.phone;
       const st=PP_STUDENTS.find(x=>x.id===m.uid); if(st) st._pending=m.phone; });
     const byLogin=matched.filter(m=>m.by==="login ID").length;
-    setMsg("ppImpMsg",`Read ${rows.length} row${rows.length===1?"":"s"} · matched ${matched.length} student${matched.length===1?"":"s"}`
+    setMsg("ppImpMsg",`Read ${rows.length} row${rows.length===1?"":"s"} from ${wb.SheetNames.length} sheet${wb.SheetNames.length===1?"":"s"} · `
+      +`found ${matched.length} number${matched.length===1?"":"s"}`
       +(matched.length?` (${byLogin} by login ID, ${matched.length-byLogin} by name)`:"")
-      +(unmatched.length?` · ${unmatched.length} row${unmatched.length===1?"":"s"} not matched`:""),
-      matched.length?(unmatched.length?"warn":"ok"):"err");
+      +(blank?` · ${blank} student${blank===1?"":"s"} still blank — fine, fill them in whenever you like`:"")
+      +(unmatched.length?` · ⚠ ${unmatched.length} row${unmatched.length===1?"":"s"} need a look`:""),
+      matched.length?(unmatched.length?"warn":"ok"):(blank?"warn":"err"));
     el("ppImpAction").innerHTML=matched.length
       ? `<button class="btn gold" style="margin-top:10px" id="ppImpSave" onclick="ppSave()">✓ Save these ${matched.length} number${matched.length===1?"":"s"}</button>`
       : "";
-    el("ppImpPreview").innerHTML=unmatched.length?`<p class="muted" style="font-size:12.5px;margin:10px 0 4px">These rows were left alone — nothing was changed for them:</p>
+    el("ppImpPreview").innerHTML=unmatched.length?`<p class="muted" style="font-size:12.5px;margin:10px 0 4px">These rows had a number but it couldn't be used — nothing was changed for them:</p>
       <div style="max-height:180px;overflow:auto">`
       +tableHTML(["Row","Why it wasn't used"],unmatched.slice(0,150).map(u=>[esc(u.who),esc(u.why)]))
       +(unmatched.length>150?`<p class="muted" style="font-size:12px;margin:6px 0 0">…and ${unmatched.length-150} more.</p>`:"")+`</div>`:"";
