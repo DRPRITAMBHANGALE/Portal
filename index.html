@@ -844,7 +844,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: malpractice notice"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: pdf name exam"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -5125,14 +5125,23 @@ function tpDocTitle(list){
     if(m) return `${m[1].padStart(2,"0")}-${m[2].padStart(2,"0")}-${m[3]}`;
     return g.when?dmy(new Date(g.when*1000)).replace(/\//g,"-"):"";
   };
+  // the exam: taken from the test record when it has one, otherwise read out of its own title
+  const examOf_=g=>{
+    const keys=(typeof EXAM_KEYS!=="undefined"?EXAM_KEYS:[]);
+    if(g.exam&&keys.includes(g.exam)) return g.exam;
+    const m=String(g.title||"").match(/^\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*-\s*([^-]+?)\s*-\s*/);
+    const found=m?m[1].trim():"";
+    return keys.includes(found)?found:(g.exam&&g.exam!=="—"?g.exam:"");
+  };
   if(!list||!list.length) return "Results";
   if(list.length===1){
     const g=list[0];
-    return clean([dateOf(g),"RESULTS",stripTestTitle(g.title)||g.title||"Test"].filter(Boolean).join(" - "));
+    return clean([dateOf(g),examOf_(g),"RESULTS",stripTestTitle(g.title)||g.title||"Test"].filter(Boolean).join(" - "));
   }
   const ds=list.map(dateOf).filter(Boolean);
   const span=ds.length?(ds[ds.length-1]===ds[0]?ds[0]:`${ds[ds.length-1]} to ${ds[0]}`):"";
-  return clean([span,"RESULTS",`${list.length} tests`].filter(Boolean).join(" - "));
+  const exams=[...new Set(list.map(examOf_).filter(Boolean))];
+  return clean([span,exams.length===1?exams[0]:"","RESULTS",`${list.length} tests`].filter(Boolean).join(" - "));
 }
 function printToppers(){
   if(!LAST_TOPPERS||!LAST_TOPPERS.list||!LAST_TOPPERS.list.length) return;
