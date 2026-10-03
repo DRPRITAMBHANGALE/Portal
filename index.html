@@ -844,7 +844,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: class filter"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: malpractice notice"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -3988,10 +3988,11 @@ const SM_MSG_DEFAULT=
 "Percentile: {percentile}\n\n"+
 "— Sonam Tuitions, {centre}";
 const SM_DQ_DEFAULT=
-"Dear Parent,\n\n{student}'s online test \"{test}\" held on {date} was ended automatically by the system.\n\n"+
-"The test window was left repeatedly during the examination, which our rules record as malpractice. "+
+"Dear Parent,\n\n"+
+"{student}'s online test \"{test}\" held on {date} was ended automatically by the system.\n\n"+
+"The test window was left repeatedly during the examination, which the system detects as malpractice. "+
 "No marks have been awarded for this attempt.\n\n"+
-"Kindly speak to {student} about following the test rules. Please contact the centre if you would like to discuss this.\n\n— Sonam Tuitions, {centre}";
+"— Sonam Tuitions, {centre}";
 let SM_ROWS=[],SM_TESTS=[],SM_TEST=null;
 function pageSendMarks(){
   setView(`<h1 class="page-title">Send marks</h1>
@@ -4004,7 +4005,7 @@ function pageSendMarks(){
       <p class="muted" style="font-size:12.5px;margin:4px 0 0">Filled in for each student: {student} {test} {date} {centre} {score} {total} {percent} {correct} {wrong} {skipped} {accuracy} {percentile}<br>
         <b>{percentile}</b> is their standing within their own centre. To send their standing across all six centres as well, add a line using <b>{percentileall}</b> — that one only works on the master login.</p>
       <label style="margin-top:14px">Message when the attempt was disqualified</label>
-      <textarea id="smDqText" rows="9" style="font-family:inherit">${esc(SM_DQ_DEFAULT)}</textarea>
+      <textarea id="smDqText" rows="8" style="font-family:inherit">${esc(SM_DQ_DEFAULT)}</textarea>
       <p class="muted" style="font-size:12.5px;margin:4px 0 0">No marks are put in this one — the attempt was cancelled, so there is nothing to report.</p>
       <div class="msg" id="smMsg"></div>
       <div class="row" style="gap:10px;margin-top:6px">
