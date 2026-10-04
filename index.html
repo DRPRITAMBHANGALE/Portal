@@ -855,7 +855,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: merged table cells"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: option labels"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -2498,18 +2498,33 @@ function parseSelfUploadDoc(raw,defaults,W){
     // First look for labels that START a line, a cell or a tab-separated column — that is how a real
     // option list is laid out. Only if that fails do we accept a label anywhere in the text, so
     // "…acceleration (a) in two systems…" inside the question can't be mistaken for option A.
-    return findMarksAtStart(text,"ABCD")||findMarksAtStart(text,"1234")
+    // Lowercase comes first: when a paper uses both, (a)(b)(c)(d) are the choices and (A)(B)(C)(D)
+    // belong to a list inside the question.
+    return findMarksAtStart(text,"abcd",true)||findMarksAtStart(text,"ABCD",true)
+      ||findMarksAtStart(text,"ABCD")||findMarksAtStart(text,"1234")
       ||findMarks(text,false,"ABCD")||findMarks(text,true,"ABCD")||findMarks(text,false,"1234")||findMarks(text,true,"1234");
   }
-  function findMarksAtStart(text,set){
+  function findMarksAtStart(text,set,caseSensitive){
     const L=(set||"ABCD").split("");
-    const at=(letter,from)=>{ const re=new RegExp("(?:^|[\\n\\t]|  +)[ \\t]*\\("+letter+"\\)","i");
+    const fl=caseSensitive?"":"i";
+    const at=(letter,from)=>{ const re=new RegExp("(?:^|[\\n\\t]|  +)[ \\t]*\\("+letter+"\\)",fl);
       const mm=re.exec(text.slice(from)); return mm?from+mm.index+mm[0].indexOf("("):-1; };
-    const aIdx=at(L[0],0); if(aIdx<0) return null;
-    const bIdx=at(L[1],aIdx+3); if(bIdx<0) return null;
-    const cIdx=at(L[2],bIdx+3); if(cIdx<0) return null;
-    const dIdx=at(L[3],cIdx+3); if(dIdx<0) return null;
-    return {aIdx,bIdx,cIdx,dIdx};
+    // a fifth label right after the fourth means this is a list of items, not the four choices
+    const fifth=/^[A-D]+$/.test(set||"ABCD")?"E":(/^[a-d]+$/.test(set||"")?"e":null);
+    let from=0;
+    for(let guard=0;guard<6;guard++){
+      const aIdx=at(L[0],from); if(aIdx<0) return null;
+      const bIdx=at(L[1],aIdx+3); if(bIdx<0) return null;
+      const cIdx=at(L[2],bIdx+3); if(cIdx<0) return null;
+      const dIdx=at(L[3],cIdx+3); if(dIdx<0) return null;
+      if(fifth){
+        const near=text.slice(dIdx+3,dIdx+3+300);
+        const em=new RegExp("(?:^|[\\n\\t]|  +)[ \\t]*\\("+fifth+"\\)",fl).exec(near);
+        if(em){ from=dIdx+3+em.index+1; continue; }     // skip this run and look for the real choices
+      }
+      return {aIdx,bIdx,cIdx,dIdx};
+    }
+    return null;
   }
   // strict: "(a)"; loose (fallback): also "a)" when it stands on its own, e.g. "a) 0.2  (b) 0.4".
   // Papers that number the options (1)(2)(3)(4) instead of (a)(b)(c)(d) are read the same way.
