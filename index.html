@@ -695,12 +695,23 @@ function fmtMathPlain(s,subject){
 }
 // "Match List-I with List-II" and any other table from the Word file
 function renderQTable(payload,subject){
-  const rows=String(payload||"").split("~||~").map(r=>r.split("~|~"));
+  // a cell may carry "~#3#~" in front, meaning it covers 3 columns in the original Word table
+  const cellOf=c=>{ const m=String(c==null?"":c).match(/^~#(\d+)#~([\s\S]*)$/);
+    return m?{span:Math.max(1,Math.min(20,parseInt(m[1])||1)),t:m[2]}:{span:1,t:String(c==null?"":c)}; };
+  const rows=String(payload||"").split("~||~").map(r=>r.split("~|~").map(cellOf));
   if(!rows.length) return "";
+  const width=r=>r.reduce((n,c)=>n+c.span,0);
+  const cols=Math.max(...rows.map(width));
   const head=rows[0], rest=rows.slice(1);
-  const headerLooksLikeHeading=head.every(c=>c.length<40);
-  return `<table class="qtbl">${headerLooksLikeHeading?`<thead><tr>${head.map(c=>`<th>${fmtMathPlain(c,subject)}</th>`).join("")}</tr></thead>`:""}
-    <tbody>${(headerLooksLikeHeading?rest:rows).map(r=>`<tr>${r.map(c=>`<td>${fmtMathPlain(c,subject)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const headerLooksLikeHeading=head.every(c=>c.t.length<40);
+  // a short row is padded so the columns below a heading still line up with it
+  const cellsHTML=(r,tag)=>{
+    const pad=cols-width(r);
+    return r.map(c=>`<${tag}${c.span>1?` colspan="${c.span}"`:""}>${fmtMathPlain(c.t,subject)}</${tag}>`).join("")
+      +(pad>0?`<${tag}${pad>1?` colspan="${pad}"`:""}></${tag}>`:"");
+  };
+  return `<table class="qtbl">${headerLooksLikeHeading?`<thead><tr>${cellsHTML(head,"th")}</tr></thead>`:""}
+    <tbody>${(headerLooksLikeHeading?rest:rows).map(r=>`<tr>${cellsHTML(r,"td")}</tr>`).join("")}</tbody></table>`;
 }
 function fmtMathCore(s,subject){
   const parts=s.split(/(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g);
@@ -844,7 +855,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: pdf name exam"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: merged table cells"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=NAV[ME.role].map(n=>n.id);
@@ -1698,8 +1709,13 @@ async function readWordWithEquations(arrayBuffer){
   function tableToken(tbl){
     const rows=[];
     Array.from(tbl.getElementsByTagName("w:tr")).forEach(tr=>{
-      const cells=Array.from(tr.getElementsByTagName("w:tc")).map(tc=>
-        Array.from(tc.getElementsByTagName("w:p")).map(q=>paraText(q)).join(" ").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim());
+      const cells=Array.from(tr.getElementsByTagName("w:tc")).map(tc=>{
+        const txt=Array.from(tc.getElementsByTagName("w:p")).map(q=>paraText(q)).join(" ")
+          .replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
+        const gs=tc.getElementsByTagName("w:gridSpan")[0];
+        const span=gs?(parseInt(gs.getAttribute("w:val")||"1")||1):1;
+        return (span>1?"~#"+span+"#~":"")+txt;      // a cell that covers more than one column
+      });
       if(cells.length) rows.push(cells.map(c=>c.replace(/~\|~|~\|\|~/g," ")));
     });
     if(!rows.length) return "";
