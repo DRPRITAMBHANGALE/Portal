@@ -950,7 +950,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: cross product"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: subject-wise marks"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -5076,15 +5076,17 @@ async function loadStudentResults(uid){
   const stu=stuDoc.data();
   const adocs=attempts.docs.filter(d=>!d.data().isPractice);
   if(!adocs.length){ el("rResults").innerHTML=`<div class="card">${emptyState("No attempts yet",esc(stu.name)+" hasn't taken any scheduled tests.")}</div>`; return; }
+  R_SUBMAP=await subjectMarksForDocs(adocs);
   const rows=adocs.map(d=>{const a=d.data();
-    if(a.disqualified) return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`<span class="tag danger">Disqualified</span>`,"—","—",`<button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>`];
+    if(a.disqualified) return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`<span class="tag danger">Disqualified</span>`,"—","—","—",`<button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>`];
     return [`<b>${esc(a.testTitle)}</b>`,examTag(a.exam),fmtDate(a.submittedAt),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+    esc(subjectLine(R_SUBMAP&&R_SUBMAP.get?R_SUBMAP.get(d.id):null)),
     `<span class="tag live">${a.correct}✓</span> <span class="tag pending">${a.wrong}✗</span>`,`<button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>`];});
   el("rResults").innerHTML=`<div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:8px">
       <h3>${esc(stu.name)} <span class="muted">· Class ${stu.class} ${stu.stream||""} · ${centreName(stu.centreId)}</span></h3>
       <button class="btn gold" onclick='downloadReportCard("${uid}")'>⤓ Download report card</button></div>
-    ${tableHTML(["Test","Exam","Date","Score","%","Breakdown",""],rows)}</div>`;
+    ${tableHTML(["Test","Exam","Date","Score","%","Subject-wise marks","Breakdown",""],rows)}</div>`;
 }
 // Draws one student's report card onto the CURRENT page of an open jsPDF doc (call doc.addPage() before this, except for the first student)
 // Percentile of a score within one test: % of (non-disqualified) attempts scoring the same or lower.
@@ -5096,7 +5098,7 @@ async function testScoreLists(testIds,cache){
 }
 function percentileOf(score,list){ if(!list||!list.length) return "—"; const le=list.filter(x=>x<=score).length; return (le/list.length*100).toFixed(1); }
 function accuracyOf(a){ const att=(a.correct||0)+(a.wrong||0); return att?Math.round((a.correct||0)/att*1000)/10+"%":"—"; }
-function drawReportCardPage(doc,stu,attemptDocs,scoreCache){
+function drawReportCardPage(doc,stu,attemptDocs,scoreCache,subMap){
   scoreCache=scoreCache||{};
   doc.setFillColor(31,92,82); doc.rect(0,0,210,30,"F");
   doc.setTextColor(255); doc.setFont("times","bold"); doc.setFontSize(20); doc.text("Sonam Tuitions",14,14);
@@ -5109,17 +5111,20 @@ function drawReportCardPage(doc,stu,attemptDocs,scoreCache){
   const real=shown.filter(d=>!d.data().disqualified); // disqualified attempts are shown but don't count toward the overall score
   const rows=shown.map(d=>{const a=d.data();
     return a.disqualified
-      ? [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),"DISQUALIFIED","—","—","—","—","—","—"]
-      : [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",accuracyOf(a),percentileOf(a.score,scoreCache[a.testId]),`${a.correct}`,`${a.wrong}`,`${a.unattempted}`];});
+      ? [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),"DISQUALIFIED","—","—","—","—","—","—","—"]
+      : [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",accuracyOf(a),percentileOf(a.score,scoreCache[a.testId]),`${a.correct}`,`${a.wrong}`,`${a.unattempted}`,
+         subjectLine(subMap&&subMap.get?subMap.get(d.id):null)];});
   // each test stands on its own — no combined score or averaged accuracy
   if(rows.length){
-    doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Accuracy","Percentile","Correct","Wrong","Skipped"]],body:rows,
-      headStyles:{fillColor:[31,92,82]},styles:{fontSize:7.5,cellPadding:2},alternateRowStyles:{fillColor:[246,243,236]},
+    doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Accuracy","Percentile","Correct","Wrong","Skipped","Subject-wise marks"]],body:rows,
+      headStyles:{fillColor:[31,92,82]},styles:{fontSize:6.8,cellPadding:1.6,overflow:"linebreak"},alternateRowStyles:{fillColor:[246,243,236]},
+      columnStyles:{0:{cellWidth:30},10:{cellWidth:36}},
       didParseCell:function(d){ if(d.section==="body"&&d.row.raw[3]==="DISQUALIFIED"){ d.cell.styles.textColor=[163,64,47]; d.cell.styles.fontStyle="bold"; } }});
-    let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(11);
+    let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(9.5);
     doc.text(`Tests taken: ${real.length}${shown.length>real.length?`   ·   Disqualified: ${shown.length-real.length}`:""}   ·   Every test is shown on its own — scores are not added up or averaged.`,14,y);
     doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(`Accuracy = correct ÷ attempted questions. Percentile = % of students (${ME.role==="admin"?"in "+centreName(ME.centreId):"all centres"}) who scored the same or lower in that test.`,14,y+6);
+    doc.text(`Subject-wise marks: Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.`,14,y+11);
     doc.setTextColor(35,33,28);
   } else {
     doc.setFont("helvetica","italic"); doc.setFontSize(10.5); doc.setTextColor(120);
@@ -5134,7 +5139,8 @@ async function downloadReportCard(uid){
   const [stuDoc,attempts]=await Promise.all([db.collection("users").doc(uid).get(), aq.orderBy("submittedAt","desc").get()]);
   const stu=stuDoc.data(); const {jsPDF}=window.jspdf; const doc=new jsPDF();
   const cache={}; await testScoreLists([...new Set(attempts.docs.map(d=>d.data().testId))],cache);
-  drawReportCardPage(doc,stu,attempts.docs,cache);
+  const subMap=await subjectMarksForDocs(attempts.docs.filter(d=>!d.data().isPractice));
+  drawReportCardPage(doc,stu,attempts.docs,cache,subMap);
   doc.save(`ReportCard_${stu.name.replace(/\s+/g,"_")}.pdf`);
 }
 async function downloadAllReportCards(){
@@ -5154,8 +5160,9 @@ async function downloadAllReportCards(){
       if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
       const attempts=await aq.orderBy("submittedAt","desc").get();
       await testScoreLists([...new Set(attempts.docs.map(d=>d.data().testId))],scoreCache);
+      const subMap=await subjectMarksForDocs(attempts.docs.filter(d=>!d.data().isPractice));
       if(n>0) doc.addPage();
-      drawReportCardPage(doc,stu,attempts.docs,scoreCache);
+      drawReportCardPage(doc,stu,attempts.docs,scoreCache,subMap);
       n++;
     }
     const fname=`ReportCards_${centreId?centreId:"AllCentres"}_${new Date().toISOString().slice(0,10)}.pdf`;
@@ -5240,6 +5247,7 @@ async function tpFillTests(){
     if(keep&&seen[keep]) box.value=keep;
   }catch(e){ box.innerHTML=`<option value="">Every test — each ranked on its own</option>`; }
 }
+let R_SUBMAP=null;
 let LAST_TOPPERS=null;
 async function loadToppers(){
   const F=tpFilters(),clsF=F.cls,centreF=F.centre,topN=val("tpTopN"),testF=val("tpTest");
@@ -5262,7 +5270,9 @@ async function loadToppers(){
         strikes:a.violations||0}); return; }
       const c=a.correct||0,wr=a.wrong||0,sk=a.unattempted||0,att=c+wr;
       g.rows.push({name:stu.name,centre:tpCentreOf(a,stu),cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
-        score:a.score||0,total:a.total||0,acc:att?c/att*100:null,when:w});
+        score:a.score||0,total:a.total||0,acc:att?c/att*100:null,when:w,
+        bySub:(a.bySubject&&Object.keys(a.bySubject).length)?a.bySubject:null,
+        order:a.questionOrder||null,ans:a.answers||null,exam:a.exam||g.exam});
     });
     let list=Object.keys(groups).map(k=>groups[k]).filter(g=>g.rows.length||(g.dq||[]).length).sort((x,y)=>y.when-x.when);
     list.forEach(g=>{
@@ -5274,6 +5284,18 @@ async function loadToppers(){
       (g.dq||[]).sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
       if(topN!=="all") g.rows=g.rows.slice(0,parseInt(topN));   // "Show top" never hides a disqualification
     });
+    // papers written before subject marks were recorded: work them back out from the questions,
+    // fetching each test's questions once however many students sat it
+    for(const g of list){
+      const need=g.rows.filter(r=>!r.bySub&&r.order&&r.order.length);
+      if(need.length){
+        const qmap=await qMapForTest(g.id,[...new Set(need[0].order)]);
+        need.forEach(r=>{ r.bySub=subjectMarksFrom({exam:r.exam,questionOrder:r.order,answers:r.ans},qmap); });
+      }
+      const seen=new Set(); g.rows.forEach(r=>{ if(r.bySub) Object.keys(r.bySub).forEach(x=>seen.add(x)); });
+      g.subjects=sortSubjects([...seen]);
+      g.rows.forEach(r=>{ delete r.order; delete r.ans; });      // not needed once the marks are worked out
+    }
     const range=(val("tpFrom")||val("tpTo"))?`${val("tpFrom")?new Date(val("tpFrom")+"T00:00:00").toLocaleDateString():"start"} → ${val("tpTo")?new Date(val("tpTo")+"T00:00:00").toLocaleDateString():"today"}`:"";
     const meta={cls:clsF?clsLabel(clsF):"Class 11 & 12",range,centre:ME.role==="master"?(centreF?centreName(centreF):"All centres"):centreName(ME.centreId)};
     LAST_TOPPERS={meta,list};
@@ -5283,14 +5305,16 @@ async function loadToppers(){
     el("tpResults").innerHTML=list.map(g=>`<div class="card" style="margin-bottom:16px">
       <h3 class="serif" style="margin:0 0 2px;font-size:19px">${esc(g.title)}</h3>
       <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
-      ${tableHTML(["Rank","Name","Centre","Class","Questions","Attempted","Correct","Wrong","Skipped","Score","Accuracy %","Percentile"],
+      ${tableHTML(["Rank","Name","Centre","Class","Questions","Attempted","Correct","Wrong","Skipped","Score"]
+          .concat((g.subjects||[]).map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy %","Percentile"]),
         g.rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.qs,r.att,r.correct,r.wrong,r.skipped,
-          `${r.score}/${r.total}`,r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`])
+          `${r.score}/${r.total}`].concat((g.subjects||[]).map(x=>subjectCell(r.bySub,x)))
+          .concat([r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))
         .concat((g.dq||[]).map(r=>["—",`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),"—","—","—","—","—",
-          `<b style="color:var(--danger)">DISQUALIFIED</b>`,"—","—"])))}
+          `<b style="color:var(--danger)">DISQUALIFIED</b>`].concat((g.subjects||[]).map(()=>"—")).concat(["—","—"]))))}
       ${g.dqCount?`<p class="muted" style="font-size:12px;margin:8px 0 0">Disqualified students are listed by name but are not ranked, and their marks count towards nobody's percentile.</p>`:""}
       </div>`).join("")
-      +`<p class="muted" style="font-size:12px">Accuracy = correct ÷ attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are never added up.</p>`;
+      +`<p class="muted" style="font-size:12px">Phy / Chem / Maths / Bio / Bot / Zoo are the marks scored in each subject of that paper. Accuracy = correct ÷ attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are never added up.</p>`;
   }catch(e){ el("tpResults").innerHTML=errBox(e); setBtn("tpBtn",false,"Show toppers"); }
 }
 function medal(rank){ return rank===1?"🥇 1":rank===2?"🥈 2":rank===3?"🥉 3":String(rank); }
@@ -5325,14 +5349,15 @@ function tpDocTitle(list){
 function printToppers(){
   if(!LAST_TOPPERS||!LAST_TOPPERS.list||!LAST_TOPPERS.list.length) return;
   const {meta,list}=LAST_TOPPERS;
-  const head=`<thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Questions</th><th>Attempted</th>
-    <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th><th>Accuracy %</th><th>Percentile</th></tr></thead>`;
   const blocks=list.map((g,gi)=>{
+    const subs=g.subjects||[];
+    const head=`<thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Questions</th><th>Attempted</th>
+      <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th>${subs.map(x=>`<th class="sub">${esc(SUBJ_SHORT[x]||x)}</th>`).join("")}<th>Accuracy %</th><th>Percentile</th></tr></thead>`;
     const body=g.rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
       <td>${esc(clsLabel(r.cls))}</td><td>${r.qs}</td><td>${r.att}</td><td>${r.correct}</td><td>${r.wrong}</td><td>${r.skipped}</td>
-      <td>${r.score}/${r.total}</td><td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("")
+      <td>${r.score}/${r.total}</td>${subs.map(x=>`<td class="sub">${esc(subjectCell(r.bySub,x))}</td>`).join("")}<td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("")
       +(g.dq||[]).map(r=>`<tr class="dq"><td class="rk">&mdash;</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
-      <td>${esc(clsLabel(r.cls))}</td><td colspan="8"><b>DISQUALIFIED</b> &mdash; malpractice during the test; not ranked</td></tr>`).join("");
+      <td>${esc(clsLabel(r.cls))}</td><td colspan="${8+subs.length}"><b>DISQUALIFIED</b> &mdash; malpractice during the test; not ranked</td></tr>`).join("");
     return `<div class="block"${gi?' style="page-break-before:always"':""}>
       <div class="tname">${esc(g.title)}</div>
       <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; ${g.entries} ranked${g.dqCount?` &middot; ${g.dqCount} disqualified`:""}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
@@ -5348,6 +5373,7 @@ function printToppers(){
     table{width:100%;border-collapse:collapse;margin-bottom:10px} th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;font-size:12px}
     th{background:#1f3d2f;color:#fff} tbody tr:nth-child(even){background:#f7f5ee} td.rk{text-align:center;font-weight:bold;width:40px}
     tr.dq td{background:#fbeeea;color:#822f22}
+    th.sub{background:#2c5a49} td.sub{text-align:center;font-weight:bold;background:#f2f6f3}
     .foot{text-align:center;color:#999;font-size:10.5px;margin-top:14px;border-top:1px solid #ddd;padding-top:6px}
     @media print{body{padding:0}@page{margin:10mm;size:A4 landscape}}
   </style></head><body>
@@ -5355,7 +5381,8 @@ function printToppers(){
     <div style="font-size:12px;color:#444;margin-top:2px">${esc(meta.centre)} &middot; ${esc(meta.cls)}</div></div>
   ${meta.range?`<div style="text-align:center;color:#444;font-size:12px;margin-bottom:8px">Tests taken ${esc(meta.range)}</div>`:""}
   ${blocks}
-  <p style="font-size:10.5px;color:#555">Accuracy = correct &divide; attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are not added up.</p>
+  <p style="font-size:10.5px;color:#555">The shaded columns are the marks scored in each subject of that paper &mdash; Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.<br>
+  Accuracy = correct &divide; attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are not added up.</p>
   <div class="foot">Sonam Tuitions &middot; generated ${new Date().toLocaleDateString()}</div>
   <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
   </body></html>`;
@@ -5955,21 +5982,24 @@ async function submitExam(auto,disqualify){
   let score=0,correct=0,wrong=0,unattempted=0;
   const order=EXAM.questions.map(q=>q.id);
   const answers=EXAM.questions.map((q,i)=>EXAM.answers[i]===undefined?null:EXAM.answers[i]);
-  EXAM.questions.forEach((q,i)=>{const sel=EXAM.answers[i],m=examMarks(exam,q.subject);
-    if(sel===undefined||sel===""){unattempted++;}
-    else if(isNumericQ(q)?numAnswerCorrect(q,sel):(sel===q.correct)){score+=m;correct++;}
-    else{score-=neg;wrong++;}});
+  const bySubject={};
+  EXAM.questions.forEach((q,i)=>{const sel=EXAM.answers[i],sub=q.subject||"—",m=examMarks(exam,sub);
+    const b=bySubject[sub]||(bySubject[sub]={score:0,total:0,correct:0,wrong:0,skipped:0});
+    b.total+=m;
+    if(sel===undefined||sel===""){unattempted++;b.skipped++;}
+    else if(isNumericQ(q)?numAnswerCorrect(q,sel):(sel===q.correct)){score+=m;correct++;b.score+=m;b.correct++;}
+    else{score-=neg;wrong++;b.score-=neg;b.wrong++;}});
   const total=EXAM.questions.reduce((s,q)=>s+examMarks(exam,q.subject),0);
   // every attempt is saved (practice too) so answers can be reviewed later
   try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,isPractice:!!EXAM.isPractice,
       studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
       lockedCount:(EXAM.locked?EXAM.locked.size:0),lockLog:(EXAM.lockLog||[]).slice(0,60),
-      overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,
+      overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,bySubject,
       questionOrder:order,answers,disqualified:!!disqualify,violations:EXAM.violations||0,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
   catch(e){ console.error("attempt save failed",e); }
-  if(disqualify) showMalpracticeResult(); else showResult({score,total,correct,wrong,unattempted});
+  if(disqualify) showMalpracticeResult(); else showResult({score,total,correct,wrong,unattempted,bySubject});
 }
 function showMalpracticeResult(){
   el("examScreen").style.display="none"; document.body.style.overflow=""; releaseLandscape();
@@ -5992,6 +6022,12 @@ function showResult(r){
       <div class="kpi w"><div class="n">${r.wrong}</div><div class="l">Wrong</div></div>
       <div class="kpi u"><div class="n">${r.unattempted}</div><div class="l">Skipped</div></div>
       <div class="kpi"><div class="n">${EXAM.questions.length}</div><div class="l">Total Q</div></div></div>
+    ${(r.bySubject&&Object.keys(r.bySubject).length>1)?`<div class="card" style="margin-bottom:18px">
+      <h3 style="margin:0 0 8px;font-size:17px">Subject by subject</h3>
+      ${tableHTML(["Subject","Marks","Correct","Wrong","Skipped"],
+        sortSubjects(Object.keys(r.bySubject)).map(sx=>{const b=r.bySubject[sx];
+          return [`<b>${esc(sx)}</b>`,`<b>${b.score}/${b.total}</b>`,b.correct,b.wrong,b.skipped];}))}
+      </div>`:""}
     ${solutionsUnlocked(EXAM.test,EXAM.isPractice)?`<h2 class="serif" style="font-size:22px;margin:8px 0 14px">Detailed solutions</h2><div id="solList"></div>`
       :`<div class="card" style="text-align:center;padding:30px 20px;margin-top:8px">
           <div style="font-size:30px;margin-bottom:6px">🔒</div>
@@ -6081,6 +6117,56 @@ function examOf(t){
 }
 function subjTag(s){const c={Physics:"phy",Chemistry:"chem",Mathematics:"math",Biology:"bio",Botany:"bot",Zoology:"zoo"}[s]||"";return `<span class="tag ${c}">${esc(s)}</span>`;}
 function subjChips(arr){return (arr||[]).map(subjTag).join(" ");}
+const SUBJ_FULL_ORDER=["Physics","Chemistry","Mathematics","Biology","Botany","Zoology"];
+const SUBJ_SHORT={Physics:"Phy",Chemistry:"Chem",Mathematics:"Maths",Biology:"Bio",Botany:"Bot",Zoology:"Zoo"};
+function sortSubjects(list){ return (list||[]).slice().sort((a,b)=>{
+  const i=SUBJ_FULL_ORDER.indexOf(a),j=SUBJ_FULL_ORDER.indexOf(b);
+  return (i<0?99:i)-(j<0?99:j)||String(a).localeCompare(String(b)); }); }
+const QMAP_CACHE={};                       // testId -> {questionId: question}
+async function qMapForTest(testId,ids){
+  if(QMAP_CACHE[testId]) return QMAP_CACHE[testId];
+  const m={};
+  try{ (await getQuestionDocs(ids||[])).forEach(q=>{ m[q.id]=q; }); }catch(e){ console.warn("subject lookup failed",e); }
+  QMAP_CACHE[testId]=m; return m;
+}
+// the marks one attempt scored in each subject: taken from the attempt when it was recorded there,
+// otherwise worked out from the questions it was given
+function subjectMarksFrom(a,qmap){
+  if(a&&a.bySubject&&Object.keys(a.bySubject).length) return a.bySubject;
+  if(!a||!qmap) return null;
+  const order=a.questionOrder||[],ans=a.answers||[];
+  if(!order.length) return null;
+  const exam=a.exam,neg=examNeg(exam),out={};
+  order.forEach((qid,i)=>{
+    const q=qmap[qid]; if(!q) return;
+    const sub=q.subject||"—",m=examMarks(exam,sub);
+    const b=out[sub]||(out[sub]={score:0,total:0,correct:0,wrong:0,skipped:0});
+    b.total+=m;
+    const sel=ans[i];
+    if(sel===undefined||sel===null||sel===""){ b.skipped++; return; }
+    if(isNumericQ(q)?numAnswerCorrect(q,sel):(sel===q.correct)){ b.score+=m; b.correct++; }
+    else { b.score-=neg; b.wrong++; }
+  });
+  return Object.keys(out).length?out:null;
+}
+function subjectCell(bs,sub){ const b=bs&&bs[sub]; return b?`${b.score}/${b.total}`:"—"; }
+// "Phy 28/50 · Chem 31/50 · Maths 22/50" — for places with room for one column, not several
+function subjectLine(bs){
+  if(!bs) return "—";
+  return sortSubjects(Object.keys(bs)).map(x=>`${SUBJ_SHORT[x]||x} ${bs[x].score}/${bs[x].total}`).join(" · ");
+}
+// fills in the subject marks for a set of attempt documents, fetching each test's questions once
+async function subjectMarksForDocs(docs){
+  const out=new Map(),byTest={};
+  (docs||[]).forEach(d=>{ const a=d.data();
+    if(a.bySubject&&Object.keys(a.bySubject).length){ out.set(d.id,a.bySubject); return; }
+    if(a.questionOrder&&a.questionOrder.length&&a.testId) (byTest[a.testId]=byTest[a.testId]||[]).push(d); });
+  for(const tid of Object.keys(byTest)){
+    const qmap=await qMapForTest(tid,[...new Set(byTest[tid][0].data().questionOrder)]);
+    byTest[tid].forEach(d=>{ const bs=subjectMarksFrom(d.data(),qmap); if(bs) out.set(d.id,bs); });
+  }
+  return out;
+}
 function tableHTML(head,rows){return `<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;}
 // Every delete in the portal goes through this: a clear Yes / No box, so nothing is removed by a stray click.
 function askDelete(title,message,yesLabel){
