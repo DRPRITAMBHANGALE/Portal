@@ -183,6 +183,7 @@ tr:last-child td{border-bottom:none}
   .cAsgName{font-weight:700;font-size:14.5px}
   .cAsgLab{display:block}
 }
+.figtip{font-size:12px;color:var(--ink-soft);margin:-2px 0 8px}
 .opt.locked{cursor:not-allowed;opacity:.65}
 .opt.locked:hover{border-color:var(--line-2)}
 .pgrid button.lockedq{border-style:dashed;border-color:var(--danger);color:var(--danger)}
@@ -202,9 +203,19 @@ tr:last-child td{border-bottom:none}
 .legend{font-size:12px;color:var(--ink-soft);margin-top:14px;line-height:1.9}
 .legend .dot{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 .solution{margin-top:16px;padding:16px;border-radius:11px;background:var(--accent-soft);border:1px solid #cfe0d7;font-size:14.5px;line-height:2;white-space:pre-line}
-.qfig{display:block;max-width:100%;max-height:320px;height:auto;margin:8px 0;border-radius:6px;background:#fff}
+.qfig{display:block;max-width:100%;max-height:360px;height:auto;margin:8px 0;border-radius:6px;background:#fff;cursor:zoom-in}
+.qfig:hover{outline:2px solid var(--accent);outline-offset:2px}
 .opt .qfig{max-height:150px}
+/* full-screen picture viewer — a wide "match the following" picture is unreadable when squeezed
+   into a phone, so here it is shown at a readable size and the student scrolls it */
+.figview{position:fixed;inset:0;background:rgba(15,14,11,.93);z-index:400;display:flex;flex-direction:column;padding:12px}
+.figview .figscroll{flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;-webkit-overflow-scrolling:touch}
+.figview img{width:auto;height:auto;max-width:none;min-width:min(100%,920px);background:#fff;border-radius:8px;display:block}
+.figclose{position:absolute;top:10px;right:12px;width:40px;height:40px;border:none;border-radius:50%;background:#fff;color:#241f1a;font-size:24px;line-height:1;cursor:pointer;z-index:2;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.fighint{text-align:center;color:#e8e3d9;font-size:12.5px;padding:10px 0 2px}
 body.exam-guard #examScreen{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+/* a pull downwards inside the paper must scroll it, never reload the page */
+body.exam-guard,body.exam-guard #examScreen,body.exam-guard #palette{overscroll-behavior:contain}
 #examScreen.shielded #qCard,#examScreen.shielded #palette{filter:blur(18px);opacity:.15}
 @media print{body.exam-guard *{display:none!important}}
 .katex{font-size:1.08em}
@@ -661,6 +672,24 @@ function prettyPlain(s,subject){
 }
 // Full math: renders LaTeX in \(...\), \[...\], $$...$$, $...$ with KaTeX; plain text via prettyPlain
 const QFIG_RE=/(\[\[img:data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+\]\])/;
+// Tapping a picture in a question opens it full screen, big enough to read, and scrollable.
+// Works the same on the question screen, in the Review queue and while a test is being written.
+function openFig(img){
+  if(!img||!img.src) return;
+  closeFig();
+  const bg=document.createElement("div");
+  bg.className="figview"; bg.id="figView";
+  bg.innerHTML=`<button class="figclose" onclick="closeFig()" aria-label="Close">&times;</button>
+    <div class="figscroll"></div>
+    <div class="fighint">Scroll or pinch to see it all · tap the dark area to close</div>`;
+  const big=new Image(); big.src=img.src; big.alt=img.alt||"diagram";
+  bg.querySelector(".figscroll").appendChild(big);
+  bg.addEventListener("click",e=>{ if(e.target===bg||e.target.classList.contains("figscroll")) closeFig(); });
+  document.body.appendChild(bg);
+  document.addEventListener("keydown",figEsc);
+}
+function closeFig(){ const v=el("figView"); if(v) v.remove(); document.removeEventListener("keydown",figEsc); }
+function figEsc(e){ if(e.key==="Escape") closeFig(); }
 // An assertion–reason or "two statements" question reads far better with each part on its own line.
 // Only the standard lead-ins are broken; nothing else about the text is changed.
 function breakStatements(s){
@@ -678,9 +707,59 @@ function breakStatements(s){
   if(lead!==null) s=s.replace(MARK,lead);
   return s.replace(/\n{2,}/g,"\n").replace(/^\n/,"");
 }
+const MC_ROMAN=/^(?:i|ii|iii|iv|v|vi|I|II|III|IV|V|VI)$/;
+const MC_ALPHA=/^[P-T]$/;
+const MC_DIGIT=/^[1-6]$/;
+const mcIsRight=l=>MC_ROMAN.test(l)||MC_ALPHA.test(l)||MC_DIGIT.test(l);
+const mcFamily=l=>MC_ROMAN.test(l)?"roman":(MC_ALPHA.test(l)?"alpha":"digit");
+// every "A." "(A)" "A)" "(i)" "P." style label in the text, and where it sits
+function mcLabels(t){
+  const re=/(^|[\s(])(?:\(\s*([A-Za-z0-9]{1,3})\s*\)|([A-Za-z0-9]{1,3})\s*[.)])(?=\s|$)/g;
+  const out=[]; let m;
+  while((m=re.exec(t))) out.push({lab:(m[2]||m[3]||"").trim(),at:m.index+m[1].length,end:re.lastIndex});
+  return out;
+}
+function matchColumnsTable(s){
+  const txt=String(s||"");
+  if(!/(column|list)\s*[-–—]?\s*(?:II|2)\b/i.test(txt)) return txt;   // only a declared matching question
+  const labs=mcLabels(txt);
+  if(labs.length<6) return txt;
+  // A label can turn up by accident — "…at 127 C." or "sqrt(8P/pi d)" — so instead of demanding that
+  // the labels sit next to each other we look for the one we expect and step over anything else.
+  const findLab=(want,from)=>{ for(let i=from;i<labs.length;i++) if(labs[i].lab===want) return i; return -1; };
+  const findRight=(from,before)=>{ for(let i=from;i<labs.length&&(before<0||i<before);i++) if(mcIsRight(labs[i].lab)) return i; return -1; };
+  const LETTERS=["A","B","C","D","E","F"];
+  const pairs=[]; let from=0, firstAt=-1;
+  for(let n=0;n<LETTERS.length;n++){
+    const li=findLab(LETTERS[n],from); if(li<0) break;
+    const nextLi=n+1<LETTERS.length?findLab(LETTERS[n+1],li+1):-1;     // where the next left item begins
+    const ri=findRight(li+1,nextLi); if(ri<0) break;
+    const leftText=txt.slice(labs[li].end,labs[ri].at).trim();
+    const rightText=txt.slice(labs[ri].end,nextLi>=0?labs[nextLi].at:txt.length).trim();
+    if(!leftText||!rightText) break;
+    if(firstAt<0) firstAt=labs[li].at;
+    pairs.push([LETTERS[n],leftText,labs[ri].lab,rightText]);
+    if(nextLi<0) break;
+    from=nextLi;
+  }
+  if(pairs.length<3) return txt;                                       // not a matching list after all
+  const rights=pairs.map(x=>x[2]);
+  if(new Set(rights).size!==rights.length) return txt;                 // a repeated label — leave it alone
+  if(new Set(rights.map(mcFamily)).size!==1) return txt;               // (i) mixed with P. — not a real list
+  // the words before the first item are the question; a trailing "Column-I  Column-II" is its heading
+  let stem=txt.slice(0,firstAt);
+  let h1="Column-I",h2="Column-II";
+  const hm=stem.match(/((?:column|list)\s*[-–—]?\s*(?:I|1))\s*[:.\-–—]?\s*((?:column|list)\s*[-–—]?\s*(?:II|2))\s*[:.\-–—]?\s*$/i);
+  if(hm){ h1=hm[1].trim(); h2=hm[2].trim(); stem=stem.slice(0,hm.index); }
+  const cell=x=>String(x).replace(/~\|~|~\|\|~|~#\d+#~/g," ").trim();
+  const rows=[`~#2#~${cell(h1)}~|~~#2#~${cell(h2)}`]
+    .concat(pairs.map(pr=>`${cell(pr[0])}.~|~${cell(pr[1])}~|~(${cell(pr[2])})~|~${cell(pr[3])}`));
+  return stem.trim()+"\n[[tbl:"+rows.join("~||~")+":tbl]]";
+}
 function fmtMath(s,subject){
   if(s==null) return "";
   s=breakStatements(String(s));
+  s=matchColumnsTable(s);
   if(s.includes("[[tbl:")) return s.split(/(\[\[tbl:[\s\S]*?:tbl\]\])/).map(p=>{
     const m=p.match(/^\[\[tbl:([\s\S]*?):tbl\]\]$/);
     return m?renderQTable(m[1],subject):fmtMathPlain(p,subject); }).join("");
@@ -690,7 +769,7 @@ function fmtMathPlain(s,subject){
   if(s==null) return "";
   s=String(s);
   if(s.includes("[[img:")) return s.split(QFIG_RE).map(p=>{ const m=p.match(/^\[\[img:(data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+)\]\]$/);
-    return m?`<img class="qfig" src="${m[1]}" alt="diagram"/>`:fmtMathCore(p,subject); }).join("");
+    return m?`<img class="qfig" src="${m[1]}" alt="diagram" onclick="openFig(this)" title="Tap to see it full screen"/>`:fmtMathCore(p,subject); }).join("");
   return fmtMathCore(s,subject);
 }
 // "Match List-I with List-II" and any other table from the Word file
@@ -805,11 +884,14 @@ auth.onAuthStateChanged(async user=>{
   }catch(e){ authMsg("Could not load profile: "+e.message,"err"); setBtn("loginBtn",false,"Sign in"); }
 });
 function showLogin(){ ME=null; el("app").style.display="none"; el("authWrap").style.display="grid"; setBtn("loginBtn",false,"Sign in"); }
-function enterApp(){
+async function enterApp(){
   el("authWrap").style.display="none"; el("app").style.display="block";
   el("meName").textContent=ME.name||ME.email;
   el("meRole").innerHTML=roleBadge(ME.role)+(ME.role!=="master"?` · ${centreName(ME.centreId)}`:"");
-  buildNav(); loadSyllabus(); go(NAV[ME.role][0].id);
+  await loadSendMarksAccessFlag();
+  buildNav(); loadSyllabus(); go(navFor()[0].id);
+  // a test interrupted by a reload is picked up straight away
+  if(ME.role==="student") resumeSavedExam().catch(e=>console.error("resume failed",e));
 }
 function roleBadge(r){return `<span class="pill ${r}">${r}</span>`;}
 
@@ -848,17 +930,30 @@ const ADMIN_NAV=[
   {id:"results",label:"Results & report cards",ic:"⤓"},{id:"toppers",label:"Toppers",ic:"🏆"},
   {id:"absentees",label:"Absentees",ic:"📣"},{id:"sendmarks",label:"Send marks",ic:"✉"}
 ];
+/* "Send marks" is off for centre logins unless the head office switches it on for that centre. */
+let SEND_MARKS_OK=false;
+async function loadSendMarksAccessFlag(){
+  if(ME.role==="master"){ SEND_MARKS_OK=true; return; }
+  try{ const d=await db.collection("settings").doc("sendMarksAccess").get();
+    SEND_MARKS_OK=!!(d.exists&&d.data()[ME.centreId]===true);   // missing = off
+  }catch(_){ SEND_MARKS_OK=false; }
+}
+function navFor(){
+  const list=NAV[ME.role]||[];
+  if(ME.role==="admin"&&!SEND_MARKS_OK) return list.filter(n=>n.id!=="sendmarks");
+  return list;
+}
 const NAV={ master:STAFF_NAV, admin:ADMIN_NAV,
   student:[{id:"myhome",label:"My tests",ic:"▣"},{id:"practice",label:"Practice",ic:"✎"},{id:"pasttests",label:"Test history",ic:"▤"},{id:"history",label:"My results",ic:"⤓"}] };
 function buildNav(){
   const wrap=el("sideNav"); wrap.innerHTML="";
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
-  NAV[ME.role].forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
+  navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: option labels"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: cross product"; wrap.appendChild(v);
 }
 function go(page){
-  const allowed=NAV[ME.role].map(n=>n.id);
+  const allowed=navFor().map(n=>n.id);
   if(!allowed.includes(page)) page=allowed[0]; // not permitted for this role — fall back to their first page
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
@@ -1373,6 +1468,7 @@ function mtefToLatex(bytes){
   if(ver!==3) throw new Error("MTEF v"+ver+" not supported");
   p += 5;
   const unknown = []; let SCRIPT=0;
+  let UNICODE_NUMBERING=false;   // worked out from the equation itself, just below
   const u8=()=>bytes[p++];
   const u16=()=>{const v=bytes[p]|(bytes[p+1]<<8);p+=2;return v;};
   function nudge(){ const a=u8(),b=u8(); if(a===128||b===128){p+=4;} }
@@ -1431,6 +1527,12 @@ function mtefToLatex(bytes){
     }
   }
   const root=readList();
+  // a character numbered above 255 (a minus sign at 8722, say) can only come from the Unicode
+  // scheme — once one turns up, the whole equation is read that way
+  (function scan(list){ for(const it of (list||[])){
+    if(it.t==="char"&&it.ch>=0x100&&it.ch<0xE000) UNICODE_NUMBERING=true;
+    if(it.items) scan(it.items);
+  } })(root);
 
   // ---- render ----
   const GREEK={"α":"\\alpha","β":"\\beta","γ":"\\gamma","δ":"\\delta","ε":"\\varepsilon","ϵ":"\\epsilon","ζ":"\\zeta","η":"\\eta","θ":"\\theta","ϑ":"\\vartheta","ι":"\\iota","κ":"\\kappa","λ":"\\lambda","μ":"\\mu","ν":"\\nu","ξ":"\\xi","π":"\\pi","ϖ":"\\varpi","ρ":"\\rho","σ":"\\sigma","ς":"\\varsigma","τ":"\\tau","υ":"\\upsilon","φ":"\\phi","ϕ":"\\phi","χ":"\\chi","ψ":"\\psi","ω":"\\omega",
@@ -1454,7 +1556,11 @@ function mtefToLatex(bytes){
     if(c.tf===4||c.tf===5){ // Greek typeface, may be Symbol-font letters
       if(/[A-Za-z]/.test(s)) return symbolFont(code);
     }
-    if(c.tf===6 && code<0x100 && !/[0-9+\-=()\[\]<>\/.,:;!?|]/.test(s)) return symbolFont(code);
+    if(c.tf===6 && code<0x100 && !/[0-9+\-=()\[\]<>\/.,:;!?|]/.test(s)){
+      // × and ÷ are the two whose meaning changes between the schemes; everything else reads the same
+      if(UNICODE_NUMBERING && (code===0xD7||code===0xF7)) return SYM[s]+" ";
+      return symbolFont(code);
+    }
     if(GREEK[s]) return GREEK[s]+" ";
     if(SYM[s]!==undefined) return SYM[s]+(/^\\[a-zA-Z]+$/.test(SYM[s])?" ":"");
     if(code<32) return "";
@@ -1656,7 +1762,14 @@ async function readWordWithEquations(arrayBuffer){
   const SYMF={a:"α",b:"β",c:"χ",d:"δ",e:"ε",f:"φ",g:"γ",h:"η",i:"ι",j:"ϕ",k:"κ",l:"λ",m:"μ",n:"ν",o:"ο",p:"π",q:"θ",r:"ρ",s:"σ",t:"τ",u:"υ",v:"ϖ",w:"ω",x:"ξ",y:"ψ",z:"ζ",
     A:"Α",B:"Β",C:"Χ",D:"Δ",E:"Ε",F:"Φ",G:"Γ",H:"Η",I:"Ι",K:"Κ",L:"Λ",M:"Μ",N:"Ν",O:"Ο",P:"Π",Q:"Θ",R:"Ρ",S:"Σ",T:"Τ",U:"Υ",W:"Ω",X:"Ξ",Y:"Ψ",Z:"Ζ",
     "£":"≤","³":"≥","¹":"≠","»":"≈","±":"±","´":"×","·":"·","®":"→","¬":"←","«":"↔","Þ":"⇒","Û":"⇔","¥":"∞","°":"°","¢":"′","²":"″","\\":"∴","¶":"∂","Ñ":"∇","µ":"∝","ò":"∫","å":"∑","Î":"∈","Ç":"∩","È":"∪","^":"⊥","Ð":"∠","¼":"…","-":"−","@":"≅","~":"∼","Æ":"∅","Ö":"√","×":"·"};
-  const symText=s=>[...s].map(ch=>{ const c=ch.charCodeAt(0); const k=c>=0xF000?String.fromCharCode(c-0xF000):ch; return SYMF[k]||k; }).join("");
+  // these are already the signs they look like — never remap them, whatever font the run claims
+  const SYM_ASIS=/[\u00d7\u00f7\u00b1\u00b0\u2212\u2264\u2265\u2260\u2248\u221e\u2022]/;
+  const symText=(str,literal)=>[...String(str)].map(ch=>{
+    const c=ch.charCodeAt(0);
+    if(c>=0xF000&&c<=0xF0FF){ const k=String.fromCharCode(c-0xF000); return SYMF[k]||k; }  // definitely a Symbol glyph
+    if(literal&&SYM_ASIS.test(ch)) return ch;        // a run only TAGGED Symbol: take the sign at face value
+    return SYMF[ch]||ch;
+  }).join("");
   function runIsSymbol(r){ const f=r.getElementsByTagName("w:rFonts")[0]; return !!f&&/^symbol$/i.test(f.getAttribute("w:ascii")||f.getAttribute("w:hAnsi")||""); }
   // "superscript" (a power, like 2⁵ or Cu²⁺) or "subscript" (like H₂O) set on the run itself
   function runVertAlign(r){
@@ -1678,11 +1791,15 @@ async function readWordWithEquations(arrayBuffer){
             s=s.slice(0,at)+(t?((va==="superscript"?"^{":"_{")+t+"}"):"");
           } else walk(c,runIsSymbol(c));
           continue; }
-        if(ln==="t") s+=sym?symText(c.textContent):c.textContent;
+        if(ln==="t") s+=sym?symText(c.textContent,true):c.textContent;
         else if(ln==="tab"){ if(local(c.parentNode)==="r") s+="\t"; }
         else if(ln==="br"||ln==="cr") s+="\n";
         else if(ln==="noBreakHyphen") s+="-";
-        else if(ln==="sym"){ const ch=parseInt(c.getAttribute("w:char")||"0",16); if(ch) s+=symText(String.fromCharCode(ch>=0xF000?ch-0xF000:ch)); }
+        else if(ln==="sym"){ const ch=parseInt(c.getAttribute("w:char")||"0",16);
+          if(ch){ const fn=c.getAttribute("w:font")||"", u=String.fromCharCode(ch);
+            // only a Symbol-style font means the code is a Symbol glyph; in any ordinary font
+            // U+00D7 is simply the multiplication sign
+            s+=(ch>=0xF000||/symbol|mt extra|wingding|webding/i.test(fn))?symText(u):u; } }
         else if(["del","instrText","delText","pPr","rPr","Fallback","txbxContent"].includes(ln)) continue;
         else if(ln==="object"){
           const oo=c.getElementsByTagName("o:OLEObject")[0], rid=oo&&oo.getAttribute("r:id"), prog=(oo&&oo.getAttribute("ProgID"))||"";
@@ -3692,6 +3809,10 @@ async function pageStudents(){
       <h3 style="margin:0 0 2px">Practice tests access</h3>
       <p class="muted" style="margin:0 0 10px;font-size:13px">Turn student self-practice on or off per centre — e.g. switch it off during exam week so students focus only on scheduled tests.</p>
       <div id="practiceAccessList" class="muted">Loading…</div></div>
+    ${ME.role==="master"?`<div class="card" style="margin-bottom:16px">
+      <h3 style="margin:0 0 2px">Send marks to parents — who may do it</h3>
+      <p class="muted" style="margin:0 0 10px;font-size:13px">Off everywhere to begin with: only you can send marks. Switch a centre on and that centre's admin gets the “Send marks” screen for their own students. The Absentees screen is not affected.</p>
+      <div id="sendMarksList" class="muted">Loading…</div></div>`:""}
     <div class="card" style="margin-bottom:16px">
       <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div><h3 style="margin:0 0 2px">Promote batch to next year</h3>
@@ -3708,7 +3829,7 @@ async function pageStudents(){
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
-  loadStudents(); loadPracticeAccess();
+  loadStudents(); loadPracticeAccess(); if(ME.role==="master") loadSendMarksAccess();
   if(ME.role==="master") loadAdmins();
 }
 
@@ -4026,6 +4147,11 @@ const SM_DQ_DEFAULT=
 "— Sonam Tuitions, {centre}";
 let SM_ROWS=[],SM_TESTS=[],SM_TEST=null;
 function pageSendMarks(){
+  if(ME.role!=="master"&&!SEND_MARKS_OK){
+    return setView(`<h1 class="page-title">Send marks</h1>
+      <div class="card">${emptyState("Not switched on for your centre",
+        "Sending marks to parents is handled by the head office for your centre. They can switch it on for you from the Students screen.")}</div>`);
+  }
   setView(`<h1 class="page-title">Send marks</h1>
     <p class="page-sub">Each parent gets their own child's result on WhatsApp — marks, correct, wrong, unattempted, accuracy and percentile.</p>
     <div class="card" style="max-width:760px">
@@ -4416,6 +4542,28 @@ async function loadPracticeAccess(){
     el("practiceAccessList").innerHTML=`<div>${rows}</div>`;
   }catch(e){ el("practiceAccessList").innerHTML=errBox(e); }
 }
+async function loadSendMarksAccess(){
+  if(!el("sendMarksList")) return;
+  try{
+    const doc=await db.collection("settings").doc("sendMarksAccess").get();
+    const flags=doc.exists?doc.data():{};
+    el("sendMarksList").innerHTML=`<div>${CENTRES.map(c=>{
+      const on=flags[c.id]===true;                       // missing = off
+      return `<div class="row" style="justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span>${esc(c.name)}</span>
+        <button class="btn ${on?'':'ghost'} sm" style="min-width:150px" onclick="toggleSendMarksAccess('${c.id}',${on})">${on?"✓ Centre can send":"✕ Master only"}</button></div>`;
+    }).join("")}</div>`;
+  }catch(e){ el("sendMarksList").innerHTML=errBox(e); }
+}
+async function toggleSendMarksAccess(centreId,currentlyOn){
+  const next=!currentlyOn;
+  if(next&&!confirm(`Let ${centreName(centreId)}'s admin send marks to parents?\n\nThey will be able to message the parents of their own centre's students.`)) return;
+  try{
+    await db.collection("settings").doc("sendMarksAccess").set({[centreId]:next},{merge:true});
+    logCentreUpdate("sendmarks_toggled",centreId,{enabled:next});
+    loadSendMarksAccess();
+  }catch(e){ alert("Could not update: "+errMsg(e)); }
+}
 async function togglePracticeAccess(centreId,currentlyOn){
   const next=!currentlyOn;
   try{
@@ -4472,7 +4620,7 @@ function pageCentreUpdates(){
     <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
   loadCentreUpdates();
 }
-function cuActionLabel(a){ return {draft_created:"📝 Draft paper created",paper_finalised:"📄 Paper saved as final",
+function cuActionLabel(a){ return {sendmarks_toggled:"✉ Send marks access changed",draft_created:"📝 Draft paper created",paper_finalised:"📄 Paper saved as final",
   test_created:"🗓 Test created & scheduled",test_updated:"✏ Test rescheduled / edited",test_deleted:"🗑 Test deleted",draft_deleted:"🗑 Draft deleted",
   students_bulk_deleted:"🗑 Bulk deleted",students_merged:"👥 Duplicate merged",student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
 async function loadCentreUpdates(){
@@ -5469,6 +5617,94 @@ async function pageHistory(){
    12. EXAM ENGINE (exam-aware scoring + negative marking)
    ============================================================ */
 let EXAM=null;
+/* ---------- the paper survives a reload ----------
+   Everything that makes up an attempt is written to this device as it happens. The closing time is
+   stored as a real clock time, not as "minutes left", so reloading can never hand out extra time. */
+const EX_SAVE="st_exam_";
+function exKey(testId,isPractice){ return EX_SAVE+((ME&&ME.uid)||"x")+"_"+(isPractice?"p_":"")+testId; }
+function saveExamState(){
+  if(!EXAM||!EXAM.live||!EXAM.test||!EXAM.test.id) return;
+  try{
+    localStorage.setItem(exKey(EXAM.test.id,EXAM.isPractice),JSON.stringify({
+      v:1,uid:ME.uid,testId:EXAM.test.id,isPractice:!!EXAM.isPractice,
+      title:EXAM.test.title,exam:EXAM.test.exam,duration:EXAM.test.duration,
+      order:EXAM.questions.map(q=>q.id),
+      answers:EXAM.answers,review:[...EXAM.review],locked:[...(EXAM.locked||[])],
+      lockLog:(EXAM.lockLog||[]).slice(0,60),cur:EXAM.cur,endTime:EXAM.endTime,
+      violations:EXAM.violations||0,overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,
+      savedAt:Date.now()
+    }));
+  }catch(_){}                       // a full store, or private browsing, must never break the test
+}
+function clearExamState(testId,isPractice){ try{ localStorage.removeItem(exKey(testId,isPractice)); }catch(_){} }
+function savedExamFor(testId,isPractice){
+  try{ const d=JSON.parse(localStorage.getItem(exKey(testId,isPractice))||"null");
+    return (d&&d.endTime&&(d.order||[]).length&&Date.now()<d.endTime)?d:null; }catch(_){ return null; }
+}
+// the most recent unfinished paper on this device, if there is one
+function findSavedExam(){
+  try{
+    const pre=EX_SAVE+ME.uid+"_", out=[], dead=[];
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i); if(!k||k.indexOf(pre)!==0) continue;
+      let d=null; try{ d=JSON.parse(localStorage.getItem(k)||"null"); }catch(_){}
+      if(!d||!d.testId||!d.endTime||!(d.order||[]).length){ dead.push(k); continue; }
+      if(Date.now()>d.endTime+30*60*1000){ dead.push(k); continue; }   // far too late to pick up
+      out.push(d);
+    }
+    dead.forEach(k=>{ try{ localStorage.removeItem(k); }catch(_){} });
+    out.sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
+    return out[0]||null;
+  }catch(_){ return null; }
+}
+// Picked up the moment the student's screen opens, so a reload lands straight back in the paper.
+async function resumeSavedExam(saved){
+  if(EXAM&&EXAM.live) return false;
+  const d=saved||findSavedExam(); if(!d) return false;
+  let test=null;
+  try{
+    if(d.isPractice){
+      test={id:d.testId,title:d.title||"Practice test",exam:d.exam||"JEE Main",subjects:[],
+            questionIds:d.order,duration:d.duration||60,isPractice:true};
+    }else{
+      const doc=await db.collection("tests").doc(d.testId).get();
+      if(!doc.exists){ clearExamState(d.testId,d.isPractice); return false; }
+      test=effWindow({id:d.testId,...doc.data()},ME.centreId);
+    }
+  }catch(e){ console.error("could not re-open the test",e); return false; }
+  // keep a place for every question, even one since removed from the bank, so the saved answers
+  // stay against the questions they were given for
+  const fetched=await getQuestionDocsInOrder(d.order);
+  if(!fetched.some(Boolean)){ return false; }       // nothing loaded — a connection problem, try again later
+  let subj=(fetched.find(Boolean)||{}).subject||"—";
+  const questions=fetched.map((q,i)=>{
+    if(q){ subj=q.subject||subj; return q; }
+    return {id:d.order[i],subject:subj,topic:"",options:["—","—","—","—"],correct:-1,gone:true,
+      text:"This question is no longer in the question bank, so it can't be shown. It is not counted against you."};
+  });
+  const subjectBlocks=[];
+  questions.forEach((q,i)=>{ const last=subjectBlocks[subjectBlocks.length-1];
+    if(last&&last.subject===q.subject) last.count++; else subjectBlocks.push({subject:q.subject,start:i,count:1}); });
+  EXAM={test,questions,subjectBlocks,
+    answers:d.answers||{},review:new Set(d.review||[]),locked:new Set(d.locked||[]),
+    lockLog:d.lockLog||[],cur:Math.min(Math.max(0,d.cur||0),questions.length-1),
+    isPractice:!!d.isPractice,endTime:d.endTime,violations:d.violations||0,
+    overlayCount:d.overlayCount||0,reloads:(d.reloads||0)+1,disqualified:false,live:true,resumed:true};
+  questions.forEach((q,i)=>{ if(q.gone) EXAM.locked.add(i); });
+  el("examTitle").textContent=test.title;
+  el("examScreen").style.display="block"; document.body.style.overflow="hidden";
+  document.body.classList.remove("rotate-ok"); askLandscape();
+  renderSubjectTabs(); renderPalette(); renderQ(); saveExamState();
+  const left=EXAM.endTime-Date.now();
+  if(left<=0){ await submitExam(true); return true; }   // the time ran out while they were away
+  startTimer(); attachCheatGuard();
+  const ans=Object.keys(EXAM.answers).filter(k=>EXAM.answers[k]!==undefined&&EXAM.answers[k]!=="").length;
+  const mins=Math.max(1,Math.ceil(left/60000));
+  setTimeout(()=>warnModal("Back in your test",
+    `The page reloaded, so your paper has been picked up exactly where you left it — ${ans} answer${ans===1?"":"s"} still saved, and about ${mins} minute${mins===1?"":"s"} left.\n\n`+
+    `The closing time hasn't moved: reloading doesn't give extra time.`),200);
+  return true;
+}
 async function startTest(testId){
   try{
     const doc=await db.collection("tests").doc(testId).get();
@@ -5484,6 +5720,8 @@ let VIS_HANDLER=null;
 async function launchExam(test,isPractice){
   const ids=(test&&test.questionIds)||[];
   if(!ids.length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
+  { const prev=test&&test.id?savedExamFor(test.id,isPractice):null;   // already begun on this device
+    if(prev&&await resumeSavedExam(prev)) return; }
   // fetch in batches so a long paper on a weak connection doesn't fire 150 requests at once
   let questions=await getQuestionDocs(ids);
   if(!questions.length){ alert("The questions for this paper can't be opened — they may have been removed from the question bank. Please tell your centre."); return; }
@@ -5498,14 +5736,14 @@ async function launchExam(test,isPractice){
     subjectBlocks.push({subject:s,start:grouped.length,count:shuffled.length});
     grouped=grouped.concat(shuffled);
   });
-  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),locked:new Set(),lockLog:[],cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,disqualified:false,live:true};
+  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),locked:new Set(),lockLog:[],cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,reloads:0,disqualified:false,live:true};
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
   document.body.classList.remove("rotate-ok"); askLandscape();
   renderSubjectTabs(); renderPalette(); renderQ(); startTimer();
-  attachCheatGuard();
+  attachCheatGuard(); saveExamState();
   if(!isPractice) setTimeout(()=>warnModal("Before you begin",
-    "Stay in this window until you submit.\n\nIf you leave the test — switch apps, minimise it, or open anything on top of it — the question you are on is locked, and its answer can no longer be changed. Notifications that pass in a moment don't lock anything."),150);
+    "Stay in this window until you submit.\n\nIf you leave the test — switch apps, minimise it, or open anything on top of it — the question you are on is locked, and its answer can no longer be changed. Notifications that pass in a moment don't lock anything.\n\nThis includes search and assistant panels drawn over the screen: the test can tell when it has been covered, and that is recorded on your paper as malpractice."),150);
 }
 // One shared strike counter for leaving the test AND screenshot / print attempts.
 // A notification banner, an incoming call or any other window coming on top only BLURS the paper —
@@ -5519,6 +5757,7 @@ function examStrike(reason){
   const now=Date.now(); if(now-(EXAM.lastStrike||0)<3000) return; // one action = one strike
   EXAM.lastStrike=now; EXAM.violations=(EXAM.violations||0)+1; EXAM.lastReason=reason;
   if(EXAM.violations>=4){ EXAM.disqualified=true; submitExam(false,true); return; }
+  saveExamState();
   if(!document.hidden) showStrikeWarning(); else EXAM.warnPending=true;
 }
 function showStrikeWarning(){
@@ -5558,6 +5797,7 @@ function lockCurrentQuestion(why){
   EXAM.locked.add(i);
   (EXAM.lockLog=EXAM.lockLog||[]).push({q:i+1,why:why||"left",at:Date.now()});
   EXAM.lockPending=true;                      // tell the student as soon as they are back
+  saveExamState();                            // a lock survives a reload too
 }
 function isLocked(i){ return !!(EXAM&&EXAM.locked&&EXAM.locked.has(i)); }
 function showLockNotice(){
@@ -5565,10 +5805,35 @@ function showLockNotice(){
   warnModal("Question locked",`You left the test while that question was open, so it has been locked with the answer as it stood. You can carry on with the rest of the paper.`);
 }
 function shieldExam(on){ const s=el("examScreen"); if(s) s.classList.toggle("shielded",!!on); }
+const OVERLAY_GAP_MS=1100;      // drawing stopped this long = something is on top
+const OVERLAY_MAX_MS=45000;     // longer than this is a sleeping phone, not an overlay
+let PAINT_AT=0, PAINT_HID=false;
+function paintTick(){
+  if(!EXAM||!EXAM.live){ GUARD.raf=0; return; }
+  const now=Date.now(), gap=now-PAINT_AT;
+  if(PAINT_AT&&gap>OVERLAY_GAP_MS&&gap<OVERLAY_MAX_MS
+     &&!document.hidden&&!PAINT_HID&&document.hasFocus()) overlaySuspected(gap);
+  if(!document.hidden) PAINT_HID=false;
+  PAINT_AT=now;
+  GUARD.raf=requestAnimationFrame(paintTick);
+}
+function overlaySuspected(gap){
+  if(!EXAM||!EXAM.live||EXAM.isPractice||EXAM.disqualified) return;
+  const now=Date.now();
+  if(EXAM.lastOverlay&&now-EXAM.lastOverlay<5000) return;      // one notice per episode
+  EXAM.lastOverlay=now;
+  EXAM.overlayCount=(EXAM.overlayCount||0)+1;
+  lockCurrentQuestion("the screen was covered");
+  renderQ();
+  warnModal("Question locked — screen was covered",
+    `Something covered this test for about ${(gap/1000).toFixed(1)} seconds — a search or assistant panel drawn over the screen, for instance.\n\n`+
+    `That question has been locked with your answer as it stood. Using any assistant during a test is malpractice and is recorded on your paper.\n\n`+
+    `If this was a call or a notification, carry on with the next question.`);
+}
 function attachCheatGuard(){
   detachCheatGuard();
   GUARD.vis=()=>{ if(!EXAM||!EXAM.live) return;
-    if(document.hidden){ shieldExam(true); lockCurrentQuestion("left the test"); examStrike("tab"); }
+    if(document.hidden){ PAINT_HID=true; shieldExam(true); lockCurrentQuestion("left the test"); examStrike("tab"); saveExamState(); }
     else { shieldExam(false); renderQ();
       if(EXAM.warnPending&&!EXAM.disqualified) showStrikeWarning(); else showLockNotice(); } };
   // window loses focus but tab still visible: snipping tool, screen-recorder controls, another app on top
@@ -5592,13 +5857,16 @@ function attachCheatGuard(){
   GUARD.print=()=>{ if(EXAM&&EXAM.live) examStrike("print"); };
   document.addEventListener("visibilitychange",GUARD.vis);
   window.addEventListener("blur",GUARD.blur); window.addEventListener("focus",GUARD.focus);
+  PAINT_AT=0; PAINT_HID=false; GUARD.raf=requestAnimationFrame(paintTick);   // the heartbeat
   document.addEventListener("keydown",GUARD.key,true); document.addEventListener("keyup",GUARD.key,true);
   ["contextmenu","copy","cut","dragstart","selectstart"].forEach(ev=>document.addEventListener(ev,GUARD.block,true));
   window.addEventListener("beforeprint",GUARD.print);
   window.addEventListener("beforeunload",BEFOREUNLOAD_HANDLER);
   document.body.classList.add("exam-guard");
+  try{ document.documentElement.style.overscrollBehavior="none"; }catch(_){}
 }
 function detachCheatGuard(){
+  if(GUARD.raf) cancelAnimationFrame(GUARD.raf);
   if(GUARD.vis) document.removeEventListener("visibilitychange",GUARD.vis);
   if(GUARD.blur){ window.removeEventListener("blur",GUARD.blur); window.removeEventListener("focus",GUARD.focus); clearTimeout(GUARD.lockT); }
   if(GUARD.key){ document.removeEventListener("keydown",GUARD.key,true); document.removeEventListener("keyup",GUARD.key,true); }
@@ -5606,6 +5874,7 @@ function detachCheatGuard(){
   if(GUARD.print) window.removeEventListener("beforeprint",GUARD.print);
   window.removeEventListener("beforeunload",BEFOREUNLOAD_HANDLER);
   GUARD={}; document.body.classList.remove("exam-guard"); shieldExam(false);
+  try{ document.documentElement.style.overscrollBehavior=""; }catch(_){}
 }
 function BEFOREUNLOAD_HANDLER(e){ if(EXAM&&EXAM.live){ e.preventDefault(); e.returnValue=""; } }
 function startTimer(){
@@ -5649,7 +5918,7 @@ function renderQ(){
       : q.options.map((o,k)=>`<div class="opt ${sel===k?'sel':''} ${lock?'locked':''}" ${lock?"":`onclick="pick(${k})"`}><div class="k">${"ABCD"[k]}</div><div>${fmtMath(o,q.subject)}</div></div>`).join("")}</div>`;
   el("reviewBtn").textContent=EXAM.review.has(i)?"Unmark review":"Mark for review";
   { const c=el("clearBtn"); if(c){ const has=(sel!==undefined&&sel!=="")&&!lock; c.disabled=!has; c.style.opacity=has?"1":".45"; } }
-  renderSubjectTabs(); renderPalette();
+  renderSubjectTabs(); renderPalette(); saveExamState();
 }
 function pick(k){ if(isLocked(EXAM.cur)) return; EXAM.answers[EXAM.cur]=k; renderQ(); }
 // typed answers must not redraw the box (that would lose the cursor) — just keep the palette in step
@@ -5657,7 +5926,7 @@ function pickNum(v){
   if(isLocked(EXAM.cur)) return;
   const t=String(v||"").trim();
   if(t==="") delete EXAM.answers[EXAM.cur]; else EXAM.answers[EXAM.cur]=t;
-  renderSubjectTabs(); renderPalette();
+  renderSubjectTabs(); renderPalette(); saveExamState();
   const box=el("numAns"); if(box) box.focus();
 }
 function navQ(d){ const n=EXAM.cur+d; if(n>=0&&n<EXAM.questions.length){EXAM.cur=n;renderQ();} }
@@ -5680,7 +5949,7 @@ function confirmSubmit(){
 }
 async function submitExam(auto,disqualify){
   if(EXAM.live===false) return; // already submitted (guards against a double-fire)
-  EXAM.live=false; detachCheatGuard();
+  EXAM.live=false; clearExamState(EXAM.test.id,EXAM.isPractice); detachCheatGuard();
   clearInterval(EXAM.timerInt);
   const exam=EXAM.test.exam,neg=examNeg(exam);
   let score=0,correct=0,wrong=0,unattempted=0;
@@ -5695,6 +5964,7 @@ async function submitExam(auto,disqualify){
   try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,isPractice:!!EXAM.isPractice,
       studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
       lockedCount:(EXAM.locked?EXAM.locked.size:0),lockLog:(EXAM.lockLog||[]).slice(0,60),
+      overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,
       questionOrder:order,answers,disqualified:!!disqualify,violations:EXAM.violations||0,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
@@ -5783,7 +6053,7 @@ async function viewTestResults(testId){
   modal(`<button class="x" onclick="closeModal()">×</button><h2>${esc(t.title)} — results</h2>
     ${!docs.length?emptyState("No attempts yet","No students have taken this test."):
       tableHTML(["Rank","Student","Centre","Score","%"],docs.map((d,i)=>{const a=d.data();
-        return [`#${i+1}`,esc(a.studentName)+(a.disqualified?' <span class="tag danger">Disqualified</span>':""),centreName(a.centreId),a.disqualified?"—":`${a.score}/${a.total}`,a.disqualified?"—":pct(a.score,a.total)+"%"];}))}`,true);
+        return [`#${i+1}`,esc(a.studentName)+(a.disqualified?' <span class="tag danger">Disqualified</span>':"")+(a.overlayCount?` <span class="tag danger" title="The screen was covered during the test — an assistant panel, for example">👁 screen covered ${a.overlayCount}×</span>`:"")+(a.reloads?` <span class="tag pending" title="The page reloaded during the test and the paper was picked up where it left off">↻ reloaded ${a.reloads}×</span>`:""),centreName(a.centreId),a.disqualified?"—":`${a.score}/${a.total}`,a.disqualified?"—":pct(a.score,a.total)+"%"];}))}`,true);
 }
 
 /* ============================================================
