@@ -950,7 +950,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre wifi check"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: practice access master only"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -3820,10 +3820,10 @@ async function pageStudents(){
   setView(`<h1 class="page-title">Students</h1>
     <p class="page-sub">${ME.role==="master"?"All centres":centreName(ME.centreId)} · create logins &amp; manage students</p>
     ${ME.role==="master"?`<div class="card" style="margin-bottom:16px"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h3 style="margin:0">Centre admins</h3><button class="btn ghost sm" onclick="openAddAdmin()">+ Add centre admin</button></div><div id="adminList" class="muted">Loading…</div></div>`:""}
-    <div class="card" style="margin-bottom:16px">
+    ${ME.role==="master"?`<div class="card" style="margin-bottom:16px">
       <h3 style="margin:0 0 2px">Practice tests access</h3>
-      <p class="muted" style="margin:0 0 10px;font-size:13px">Turn student self-practice on or off per centre — e.g. switch it off during exam week so students focus only on scheduled tests.</p>
-      <div id="practiceAccessList" class="muted">Loading…</div></div>
+      <p class="muted" style="margin:0 0 10px;font-size:13px">Turn student self-practice on or off per centre — e.g. switch it off during exam week so students focus only on scheduled tests. Centre admins cannot change this.</p>
+      <div id="practiceAccessList" class="muted">Loading…</div></div>`:""}
     ${ME.role==="master"?`<div class="card" style="margin-bottom:16px">
       <h3 style="margin:0 0 2px">Send marks to parents — who may do it</h3>
       <p class="muted" style="margin:0 0 10px;font-size:13px">Off everywhere to begin with: only you can send marks. Switch a centre on and that centre's admin gets the “Send marks” screen for their own students. The Absentees screen is not affected.</p>
@@ -3853,7 +3853,7 @@ async function pageStudents(){
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
-  loadStudents(); loadPracticeAccess(); loadCentreNets(); if(ME.role==="master") loadSendMarksAccess();
+  loadStudents(); loadCentreNets(); if(ME.role==="master"){ loadPracticeAccess(); loadSendMarksAccess(); }
   if(ME.role==="master") loadAdmins();
 }
 
@@ -4554,6 +4554,7 @@ function printLoginSlips(){
   setMsg("slMsg","✓ The print view opened in a new tab — choose “Save as PDF” or print directly.","ok");
 }
 async function loadPracticeAccess(){
+  if(!el("practiceAccessList")) return;         // the card is only on the master's screen
   try{
     const doc=await db.collection("settings").doc("practiceAccess").get();
     const flags=doc.exists?doc.data():{};
@@ -4651,6 +4652,7 @@ async function removeCentreNet(centreId,net){
   catch(e){ alert("Could not remove it: "+errMsg(e)); }
 }
 async function togglePracticeAccess(centreId,currentlyOn){
+  if(ME.role!=="master") return;
   const next=!currentlyOn;
   try{
     await db.collection("settings").doc("practiceAccess").set({[centreId]:next},{merge:true});
