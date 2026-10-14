@@ -950,7 +950,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: subject-wise marks"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: centre wifi check"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1067,6 +1067,21 @@ function openAIGen(){
   el("gClass").onchange=()=>fillTopics("gExam",val("gClass"),"gSubject","gTopic");
   el("gSubject").onchange=()=>fillTopics("gExam",val("gClass"),"gSubject","gTopic");
 }
+/* a plain call to the Cloud Function that hands back whatever it answered */
+async function fnCall(payload){
+  if(!AI_FUNCTION_URL||AI_FUNCTION_URL.startsWith("PASTE")) throw new Error("The Cloud Function link is not set in index.html.");
+  const token=await auth.currentUser.getIdToken();
+  let res;
+  try{
+    res=await fetch(AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
+  }catch(err){ throw new Error("couldn't reach the server (check the internet connection)"); }
+  let data={}; try{ data=await res.json(); }catch(_){}
+  if(!res.ok) throw new Error(data.error||data.message||("the server answered "+res.status));
+  return data;
+}
+/* Asks the server which internet connection this device is on, and whether it is the centre's.
+   Passing a testId also writes the answer down against that student and test. */
+function centreGate(testId){ return fnCall({action:"centreCheck",testId:testId||null}); }
 async function aiGenerate(payload){
   if(!AI_FUNCTION_URL || AI_FUNCTION_URL.startsWith("PASTE"))
     throw new Error("AI function link is not set. In index.html, AI_FUNCTION_URL is still blank/placeholder — paste your function URL and re-upload to GitHub.");
@@ -3814,6 +3829,15 @@ async function pageStudents(){
       <p class="muted" style="margin:0 0 10px;font-size:13px">Off everywhere to begin with: only you can send marks. Switch a centre on and that centre's admin gets the “Send marks” screen for their own students. The Absentees screen is not affected.</p>
       <div id="sendMarksList" class="muted">Loading…</div></div>`:""}
     <div class="card" style="margin-bottom:16px">
+      <h3 style="margin:0 0 2px">Tests only at the centre</h3>
+      <p class="muted" style="margin:0 0 10px;font-size:13px">A scheduled test can be made to open only on the centre's own internet connection, so a student cannot sit at home and take it. Register the connection first — press the button while you are <b>at that centre, on its WiFi</b> — then switch the centre on. Practice tests are never affected.</p>
+      <div class="row" style="gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn ghost sm" onclick="whichConnection()">📶 Which connection am I on?</button>
+        <span id="cnNow" class="muted" style="font-size:12.5px">Walk into a classroom, join that room's WiFi and press this to see whether the room is already covered.</span></div>
+      <div id="centreNetList" class="muted">Loading…</div>
+      <p class="muted" style="margin:10px 0 0;font-size:12px">A centre with a router in every classroom usually needs registering only once, because the rooms share the centre's one connection — press “Register this connection” in a second room and it will simply tell you it is already registered. If a room turns out to be on a line of its own, registering there adds it as well; a centre can hold up to 20.<br>
+      Students must be on the centre's WiFi: mobile data is refused. If the centre's broadband address changes, register again from the centre — until then that centre's tests will not open, so switch the centre back to “Anywhere” if you are ever stuck.</p></div>
+    <div class="card" style="margin-bottom:16px">
       <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div><h3 style="margin:0 0 2px">Promote batch to next year</h3>
           <p class="muted" style="margin:0;font-size:13px">Moves every Class 11 student ${ME.role==="master"?"in the chosen centre":"in "+esc(centreName(ME.centreId))} to Class 12 in one click — no need to migrate students one by one when a new academic year starts.</p></div>
@@ -3829,7 +3853,7 @@ async function pageStudents(){
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
-  loadStudents(); loadPracticeAccess(); if(ME.role==="master") loadSendMarksAccess();
+  loadStudents(); loadPracticeAccess(); loadCentreNets(); if(ME.role==="master") loadSendMarksAccess();
   if(ME.role==="master") loadAdmins();
 }
 
@@ -4564,6 +4588,68 @@ async function toggleSendMarksAccess(centreId,currentlyOn){
     loadSendMarksAccess();
   }catch(e){ alert("Could not update: "+errMsg(e)); }
 }
+let CN_CACHE={};
+async function loadCentreNets(){
+  const box=el("centreNetList"); if(!box) return;
+  const ids=ME.role==="master"?CENTRES.map(c=>c.id):[ME.centreId];
+  try{
+    const docs=await Promise.all(ids.map(id=>db.collection("centreNetworks").doc(id).get()));
+    CN_CACHE={}; docs.forEach((d,i)=>{ CN_CACHE[ids[i]]=d.exists?d.data():{nets:[],enforce:false}; });
+    box.innerHTML=ids.map(id=>{
+      const c=CN_CACHE[id]||{},nets=c.nets||[],on=c.enforce===true;
+      return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+        <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <span><b>${esc(centreName(id))}</b> ${on?`<span class="tag live">Centre only</span>`:`<span class="tag pending">Anywhere</span>`}</span>
+          <div class="row" style="gap:8px">
+            <button class="btn ghost sm" onclick="registerCentreNet('${id}')">+ Register this connection</button>
+            ${ME.role==="master"?`<button class="btn ${on?"":"ghost"} sm" style="min-width:150px" onclick="toggleCentreNet('${id}',${on})">${on?"✓ Centre only":"✕ Anywhere"}</button>`:""}
+          </div></div>
+        <div style="font-size:12.5px;margin-top:5px">${nets.length
+          ? nets.map(n=>`<span class="tag" style="margin-right:6px;font-family:'Courier New',monospace">${esc(n)}${ME.role==="master"?` <a href="#" onclick="removeCentreNet('${id}','${esc(n)}');return false" style="color:var(--danger);text-decoration:none">✕</a>`:""}</span>`).join("")
+          : `<span class="muted">No connection registered yet.</span>`}</div></div>`;
+    }).join("");
+  }catch(e){ box.innerHTML=errBox(e); }
+}
+/* Just says where this device is, and whether that connection is already covered. Changes nothing. */
+async function whichConnection(){
+  const box=el("cnNow"); if(!box) return;
+  box.textContent="Checking…";
+  try{
+    const r=await fnCall({action:"centreCheck"});
+    const key=r.key||r.ip||"";
+    const hits=Object.keys(CN_CACHE).filter(id=>((CN_CACHE[id]||{}).nets||[]).includes(key));
+    box.innerHTML=`This device is on <b style="font-family:'Courier New',monospace">${esc(key)}</b> — `+(hits.length
+      ? `already registered as <b>${hits.map(centreName).map(esc).join(", ")}</b>. Tests set to “Centre only” will open in this room.`
+      : `<b style="color:var(--danger)">not registered for any centre yet.</b> If you are at a centre right now, press “Register this connection” on its row below.`);
+  }catch(e){ box.innerHTML=`<span style="color:var(--danger)">Could not check: ${esc(errMsg(e))}</span>`; }
+}
+async function registerCentreNet(centreId){
+  if(!confirm(`Register the internet connection THIS device is on right now as ${centreName(centreId)}'s?\n\nOnly do this while you are at the centre, on the centre's own WiFi.`)) return;
+  try{
+    const r=await fnCall({action:"centreRegisterIp",centreId});
+    alert(r.already
+      ? `This room is already covered.\n\n${r.key} is registered for ${centreName(centreId)} — the rooms here share the same internet connection, so there is nothing more to do.`
+      : `Registered for ${centreName(centreId)}:\n\n${r.key}\n\nTests set to “Centre only” will now open on this connection. ${centreName(centreId)} now has ${(r.nets||[]).length} registered connection${(r.nets||[]).length===1?"":"s"}.`);
+    loadCentreNets();
+  }catch(e){ alert("Could not register this connection:\n\n"+errMsg(e)); }
+}
+async function toggleCentreNet(centreId,currentlyOn){
+  const next=!currentlyOn,c=CN_CACHE[centreId]||{};
+  if(next&&!((c.nets||[]).length)){
+    alert(`Register ${centreName(centreId)}'s connection first.\n\nOtherwise nobody at the centre would be able to start a test either.`); return; }
+  if(next&&!confirm(`Only allow ${centreName(centreId)}'s scheduled tests to be started on the centre's own connection?\n\nStudents on mobile data or home internet will be refused. Practice tests are not affected.`)) return;
+  try{
+    await db.collection("centreNetworks").doc(centreId).set({enforce:next},{merge:true});
+    logCentreUpdate("centre_network_enforce",centreId,{enabled:next});
+    loadCentreNets();
+  }catch(e){ alert("Could not change it: "+errMsg(e)); }
+}
+async function removeCentreNet(centreId,net){
+  if(!confirm(`Remove ${net} from ${centreName(centreId)}?\n\nTests will no longer open on that connection.`)) return;
+  const nets=((CN_CACHE[centreId]||{}).nets||[]).filter(x=>x!==net);
+  try{ await db.collection("centreNetworks").doc(centreId).set({nets},{merge:true}); loadCentreNets(); }
+  catch(e){ alert("Could not remove it: "+errMsg(e)); }
+}
 async function togglePracticeAccess(centreId,currentlyOn){
   const next=!currentlyOn;
   try{
@@ -4620,7 +4706,7 @@ function pageCentreUpdates(){
     <div class="card" style="margin-top:14px"><div id="cuList" class="muted">Loading…</div></div>`);
   loadCentreUpdates();
 }
-function cuActionLabel(a){ return {sendmarks_toggled:"✉ Send marks access changed",draft_created:"📝 Draft paper created",paper_finalised:"📄 Paper saved as final",
+function cuActionLabel(a){ return {centre_network_enforce:"📶 “Tests only at the centre” changed",centre_network_registered:"📶 Centre connection registered",sendmarks_toggled:"✉ Send marks access changed",draft_created:"📝 Draft paper created",paper_finalised:"📄 Paper saved as final",
   test_created:"🗓 Test created & scheduled",test_updated:"✏ Test rescheduled / edited",test_deleted:"🗑 Test deleted",draft_deleted:"🗑 Draft deleted",
   students_bulk_deleted:"🗑 Bulk deleted",students_merged:"👥 Duplicate merged",student_added:"➕ Added",students_bulk_added:"⬆ Bulk added",student_deleted:"✕ Deleted",students_promoted:"🎓 Promoted to Class 12",student_password_reset:"🔑 Password reset",practice_toggled:"🔁 Practice access changed"}[a]||a; }
 async function loadCentreUpdates(){
@@ -5269,7 +5355,7 @@ async function loadToppers(){
       if(a.disqualified){ g.dq.push({name:stu.name,centre:tpCentreOf(a,stu),cls:stu.class,when:w,
         strikes:a.violations||0}); return; }
       const c=a.correct||0,wr=a.wrong||0,sk=a.unattempted||0,att=c+wr;
-      g.rows.push({name:stu.name,centre:tpCentreOf(a,stu),cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
+      g.rows.push({name:stu.name,offsite:a.atCentre===false,centre:tpCentreOf(a,stu),cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
         score:a.score||0,total:a.total||0,acc:att?c/att*100:null,when:w,
         bySub:(a.bySubject&&Object.keys(a.bySubject).length)?a.bySubject:null,
         order:a.questionOrder||null,ans:a.answers||null,exam:a.exam||g.exam});
@@ -5307,7 +5393,7 @@ async function loadToppers(){
       <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
       ${tableHTML(["Rank","Name","Centre","Class","Questions","Attempted","Correct","Wrong","Skipped","Score"]
           .concat((g.subjects||[]).map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy %","Percentile"]),
-        g.rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),r.qs,r.att,r.correct,r.wrong,r.skipped,
+        g.rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`+(r.offsite?` <span class="tag danger" title="This paper was started away from the centre's own internet connection">🏠</span>`:""),centreName(r.centre),clsLabel(r.cls),r.qs,r.att,r.correct,r.wrong,r.skipped,
           `${r.score}/${r.total}`].concat((g.subjects||[]).map(x=>subjectCell(r.bySub,x)))
           .concat([r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))
         .concat((g.dq||[]).map(r=>["—",`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),"—","—","—","—","—",
@@ -5659,7 +5745,7 @@ function saveExamState(){
       answers:EXAM.answers,review:[...EXAM.review],locked:[...(EXAM.locked||[])],
       lockLog:(EXAM.lockLog||[]).slice(0,60),cur:EXAM.cur,endTime:EXAM.endTime,
       violations:EXAM.violations||0,overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,
-      savedAt:Date.now()
+      gate:EXAM.gate||null,savedAt:Date.now()
     }));
   }catch(_){}                       // a full store, or private browsing, must never break the test
 }
@@ -5716,7 +5802,7 @@ async function resumeSavedExam(saved){
     answers:d.answers||{},review:new Set(d.review||[]),locked:new Set(d.locked||[]),
     lockLog:d.lockLog||[],cur:Math.min(Math.max(0,d.cur||0),questions.length-1),
     isPractice:!!d.isPractice,endTime:d.endTime,violations:d.violations||0,
-    overlayCount:d.overlayCount||0,reloads:(d.reloads||0)+1,disqualified:false,live:true,resumed:true};
+    overlayCount:d.overlayCount||0,reloads:(d.reloads||0)+1,disqualified:false,live:true,resumed:true,gate:d.gate||null};
   questions.forEach((q,i)=>{ if(q.gone) EXAM.locked.add(i); });
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
@@ -5739,12 +5825,22 @@ async function startTest(testId){
     const t=effWindow({id:testId,...doc.data()},ME.centreId);
     if(testStatus(t)!=="open"){ alert(testStatus(t)==="scheduled"?"This test hasn't opened yet for your centre.":"This test has closed for your centre."); return; }
     if(!(t.questionIds||[]).length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
-    await launchExam(t,false);
+    // where is this student sitting? the server decides, so the answer can't be faked here
+    let gate=null;
+    try{ gate=await centreGate(testId); }
+    catch(e){
+      alert("This test couldn't check which internet connection you are on, so it can't be started.\n\n"+errMsg(e)
+        +"\n\nConnect to the centre's WiFi and tap the test again. If it keeps happening, tell your centre.");
+      return; }
+    if(gate&&gate.allow===false){
+      alert("This test can only be taken at the centre.\n\nYou are not on "+centreName(ME.centreId)+"'s internet connection, so the paper cannot be opened from here.\n\nConnect to the centre's WiFi and try again.");
+      return; }
+    await launchExam(t,false,gate);
   }catch(e){ console.error("startTest failed",e); alert("Could not start the test.\n\n"+errMsg(e)+"\n\nCheck your internet connection and try again — if it keeps happening, show this message to your centre."); }
 }
 window.addEventListener("unhandledrejection",e=>{ console.error("Unhandled error:",e&&e.reason); });
 let VIS_HANDLER=null;
-async function launchExam(test,isPractice){
+async function launchExam(test,isPractice,gate){
   const ids=(test&&test.questionIds)||[];
   if(!ids.length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
   { const prev=test&&test.id?savedExamFor(test.id,isPractice):null;   // already begun on this device
@@ -5763,7 +5859,7 @@ async function launchExam(test,isPractice){
     subjectBlocks.push({subject:s,start:grouped.length,count:shuffled.length});
     grouped=grouped.concat(shuffled);
   });
-  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),locked:new Set(),lockLog:[],cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,reloads:0,disqualified:false,live:true};
+  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),locked:new Set(),lockLog:[],cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,reloads:0,disqualified:false,live:true,gate:gate||null};
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
   document.body.classList.remove("rotate-ok"); askLandscape();
@@ -5995,6 +6091,9 @@ async function submitExam(auto,disqualify){
       studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
       lockedCount:(EXAM.locked?EXAM.locked.size:0),lockLog:(EXAM.lockLog||[]).slice(0,60),
       overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,bySubject,
+      startIp:(EXAM.gate&&EXAM.gate.ip)||null,
+      atCentre:EXAM.gate?!!EXAM.gate.matched:null,
+      netEnforced:!!(EXAM.gate&&EXAM.gate.enforce),
       questionOrder:order,answers,disqualified:!!disqualify,violations:EXAM.violations||0,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
@@ -6089,7 +6188,7 @@ async function viewTestResults(testId){
   modal(`<button class="x" onclick="closeModal()">×</button><h2>${esc(t.title)} — results</h2>
     ${!docs.length?emptyState("No attempts yet","No students have taken this test."):
       tableHTML(["Rank","Student","Centre","Score","%"],docs.map((d,i)=>{const a=d.data();
-        return [`#${i+1}`,esc(a.studentName)+(a.disqualified?' <span class="tag danger">Disqualified</span>':"")+(a.overlayCount?` <span class="tag danger" title="The screen was covered during the test — an assistant panel, for example">👁 screen covered ${a.overlayCount}×</span>`:"")+(a.reloads?` <span class="tag pending" title="The page reloaded during the test and the paper was picked up where it left off">↻ reloaded ${a.reloads}×</span>`:""),centreName(a.centreId),a.disqualified?"—":`${a.score}/${a.total}`,a.disqualified?"—":pct(a.score,a.total)+"%"];}))}`,true);
+        return [`#${i+1}`,esc(a.studentName)+(a.disqualified?' <span class="tag danger">Disqualified</span>':"")+(a.overlayCount?` <span class="tag danger" title="The screen was covered during the test — an assistant panel, for example">👁 screen covered ${a.overlayCount}×</span>`:"")+(a.reloads?` <span class="tag pending" title="The page reloaded during the test and the paper was picked up where it left off">↻ reloaded ${a.reloads}×</span>`:"")+(a.atCentre===false?` <span class="tag danger" title="Started from ${esc(a.startIp||"an unknown connection")} — not the centre's own internet">🏠 not at the centre</span>`:""),centreName(a.centreId),a.disqualified?"—":`${a.score}/${a.total}`,a.disqualified?"—":pct(a.score,a.total)+"%"];}))}`,true);
 }
 
 /* ============================================================
