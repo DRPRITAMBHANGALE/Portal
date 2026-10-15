@@ -111,6 +111,10 @@ main.content{flex:1;padding:28px 30px;min-width:0}
 .bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px}
 .bar .grow{flex:1;min-width:160px}
 
+.tablewrap{width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+.tablewrap table{min-width:100%}
+.tablewrap.dense table{font-size:13px}
+.tablewrap.dense th,.tablewrap.dense td{padding:8px 7px}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line)}
 th{font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft);font-weight:700}
@@ -950,7 +954,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: faster loading"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: tidier toppers table"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -4060,14 +4064,17 @@ async function ppSave(){
 /* ---------- who missed the test, and the message for their parents ---------- */
 const ABS_MSG_DEFAULT="Dear Parent,\n\n{student} did not appear for the online test \"{test}\" held on {date}.\n\nThese class tests are important practice for the board and entrance examinations. Kindly ensure that {student} attempts the next one.\n\n— Sonam Tuitions, {centre}";
 let ABS_LIST=[],ABS_TESTS=[],ABS_TEST=null;
+function abCanMessage(){ return ME.role==="master"; }   // parents are contacted by the head office only
 function pageAbsentees(){
   setView(`<h1 class="page-title">Absentees</h1>
-    <p class="page-sub">Students who did not appear for a test — with a WhatsApp message ready for each parent.</p>
+    <p class="page-sub">${abCanMessage()
+      ? "Students who did not appear for a test — with a WhatsApp message ready for each parent."
+      : "Students of "+esc(centreName(ME.centreId))+" who did not appear for a test. Print the list to follow up — parents are contacted by the head office."}</p>
     <div class="card" style="max-width:760px">
       <label>Test</label><select id="abTest"><option value="">Loading tests…</option></select>
       ${ME.role==="master"?`<label>Centre</label><select id="abCentre"><option value="">All centres this test was set for</option>${CENTRES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}</select>`:""}
-      <label>Message to the parent <span class="muted" style="font-weight:400">— {student}, {test}, {date} and {centre} are filled in for each one</span></label>
-      <textarea id="abMsgText" rows="7" style="font-family:inherit">${esc(ABS_MSG_DEFAULT)}</textarea>
+      ${abCanMessage()?`<label>Message to the parent <span class="muted" style="font-weight:400">— {student}, {test}, {date} and {centre} are filled in for each one</span></label>
+      <textarea id="abMsgText" rows="7" style="font-family:inherit">${esc(ABS_MSG_DEFAULT)}</textarea>`:""}
       <div class="msg" id="abMsg"></div>
       <div class="row" style="gap:10px;margin-top:6px">
         <button class="btn" id="abBtn" onclick="loadAbsentees()">Show absentees</button>
@@ -4118,31 +4125,71 @@ async function loadAbsentees(){
 function abMessageFor(s){
   const t=ABS_TEST||{};
   const when=(t.startAt&&t.startAt.toDate)?dmy(t.startAt.toDate()):"";
-  return String(val("abMsgText")||ABS_MSG_DEFAULT)
+  return String((el("abMsgText")&&val("abMsgText"))||ABS_MSG_DEFAULT)
     .replace(/\{student\}/g,s.name||"your ward")
     .replace(/\{test\}/g,stripTestTitle(t.title)||t.title||"the test")
     .replace(/\{date\}/g,when)
     .replace(/\{centre\}/g,centreName(s.centreId));
 }
 function abRender(totalSet){
+  const msg=abCanMessage();
   const withNum=ABS_LIST.filter(s=>waNumber(s.parentPhone)).length;
   el("abResults").innerHTML=`<div class="card">
     <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
       <div><h3 class="serif" style="margin:0;font-size:19px">${ABS_LIST.length} absent of ${totalSet} set this test</h3>
-        <p class="muted" style="margin:2px 0 0;font-size:12.5px">${withNum} parent number${withNum===1?"":"s"} on file${ABS_LIST.length-withNum?` · ${ABS_LIST.length-withNum} missing — add them with “📱 Parent numbers” on the Students screen`:""}</p></div>
+        ${msg?`<p class="muted" style="margin:2px 0 0;font-size:12.5px">${withNum} parent number${withNum===1?"":"s"} on file${ABS_LIST.length-withNum?` · ${ABS_LIST.length-withNum} missing — add them with “📱 Parent numbers” on the Students screen`:""}</p>`:""}</div>
       <div class="row" style="gap:8px">
-        <button class="btn ghost sm" onclick="openParentPhones()">📱 Upload parent numbers</button>
-        <button class="btn ghost sm" onclick="abDownload()">⤓ Download list</button>
-        ${withNum?`<button class="btn gold sm" onclick="abOpenNext()" id="abNextBtn">Start sending (${withNum})</button>`:""}
+        ${msg?`<button class="btn ghost sm" onclick="openParentPhones()">📱 Upload parent numbers</button>`:""}
+        <button class="btn ghost sm" onclick="abDownload()">⤓ Download as Excel</button>
+        <button class="btn gold sm" onclick="abPrint()">🖶 Print / Save as PDF</button>
+        ${msg&&withNum?`<button class="btn gold sm" onclick="abOpenNext()" id="abNextBtn">Start sending (${withNum})</button>`:""}
       </div></div>
-    ${tableHTML(["Student","Class","Centre","Parent WhatsApp","Message"],
-      ABS_LIST.map((s,i)=>[`<b>${esc(s.name)}</b>`,"Class "+esc(s.class||"?"),esc(centreName(s.centreId)),
-        waNumber(s.parentPhone)?`<span class="idfont">${esc(waPretty(s.parentPhone))}</span>`:`<span class="muted">not saved</span>`,
-        waNumber(s.parentPhone)
-          ? `<button class="btn gold sm" id="absend-${i}" onclick="abSend(${i})">Open WhatsApp</button>`
-          : `<button class="btn ghost sm" onclick="abAddNumber(${i})">+ Add number</button>`]))}
-    <p class="muted" style="font-size:12px;margin:10px 0 0">Pressing a button opens WhatsApp with the message already typed — you press Send there. Nothing is sent by the portal on its own.</p>
+    ${msg
+      ? tableHTML(["Student","Class","Centre","Parent WhatsApp","Message"],
+          ABS_LIST.map((s,i)=>[`<b>${esc(s.name)}</b>`,"Class "+esc(s.class||"?"),esc(centreName(s.centreId)),
+            waNumber(s.parentPhone)?`<span class="idfont">${esc(waPretty(s.parentPhone))}</span>`:`<span class="muted">not saved</span>`,
+            waNumber(s.parentPhone)
+              ? `<button class="btn gold sm" id="absend-${i}" onclick="abSend(${i})">Open WhatsApp</button>`
+              : `<button class="btn ghost sm" onclick="abAddNumber(${i})">+ Add number</button>`]))
+      : tableHTML(["#","Student","Class","Centre"],
+          ABS_LIST.map((s,i)=>[i+1,`<b>${esc(s.name)}</b>`,"Class "+esc(s.class||"?"),esc(centreName(s.centreId))]))}
+    <p class="muted" style="font-size:12px;margin:10px 0 0">${msg
+      ? "Pressing a button opens WhatsApp with the message already typed — you press Send there. Nothing is sent by the portal on its own."
+      : "Parents of absent students are contacted by the head office."}</p>
   </div>`;
+}
+/* A printed sheet of who missed the test, with room to note down what was done about each one. */
+function abPrint(){
+  if(!ABS_LIST||!ABS_LIST.length) return;
+  const t=ABS_TEST||{};
+  const when=(t.startAt&&t.startAt.toDate)?dmy(t.startAt.toDate()):"";
+  const centreLabel=ME.role==="master"
+    ? (val("abCentre")?centreName(val("abCentre")):"All centres this test was set for")
+    : centreName(ME.centreId);
+  const docTitle=tpDocTitle([{title:t.title,exam:examOf(t),when:(t.startAt&&t.startAt.seconds)||0}]).replace(/RESULTS/,"ABSENTEES");
+  const rows=ABS_LIST.map((st,i)=>`<tr><td class="rk">${i+1}</td><td>${esc(st.name||"")}</td>
+    <td>${esc("Class "+(st.class||"?"))}</td><td>${esc(centreName(st.centreId))}</td><td class="note"></td></tr>`).join("");
+  openPaperWindow(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(docTitle)}</title>
+  <style>
+    *{box-sizing:border-box} body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:28px 30px;font-size:13.5px}
+    .head{text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}
+    .head img{height:72px;display:block;margin:0 auto 4px} .head .ttl{font-size:17px;font-weight:bold;margin-top:2px}
+    .tname{font-size:15px;font-weight:bold;margin-top:6px} .tmeta{color:#444;font-size:11.5px;margin:2px 0 10px}
+    table{width:100%;border-collapse:collapse} th,td{border:1px solid #ccc;padding:7px 8px;text-align:left;font-size:12.5px}
+    th{background:#1f3d2f;color:#fff} tbody tr:nth-child(even){background:#f7f5ee}
+    td.rk{text-align:center;font-weight:bold;width:40px} td.note{width:34%}
+    .foot{text-align:center;color:#999;font-size:10.5px;margin-top:16px;border-top:1px solid #ddd;padding-top:6px}
+    @media print{body{padding:0}@page{margin:12mm;size:A4 portrait}}
+  </style></head><body>
+  <div class="head"><img src="${LOGO}"/><div class="ttl">Absentees</div>
+    <div style="font-size:12px;color:#444;margin-top:2px">${esc(centreLabel)}</div></div>
+  <div class="tname">${esc(t.title||"Test")}</div>
+  <div class="tmeta">${esc(examOf(t)||"—")}${when?" &middot; held "+esc(when):""} &middot; ${ABS_LIST.length} student${ABS_LIST.length===1?"":"s"} absent</div>
+  <table><thead><tr><th>#</th><th>Student</th><th>Class</th><th>Centre</th><th>Remarks / action taken</th></tr></thead>
+  <tbody>${rows}</tbody></table>
+  <div class="foot">Sonam Tuitions &middot; generated ${new Date().toLocaleDateString()}</div>
+  <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
+  </body></html>`);
 }
 function abSend(i){
   const s=ABS_LIST[i]; if(!s) return;
@@ -5429,18 +5476,32 @@ async function loadToppers(){
     setBtn("tpBtn",false,"Show toppers");
     if(!list.length){ el("tpResults").innerHTML=`<div class="card">${emptyState("No ranked results yet","No class-test attempts match these filters"+(range?" between "+esc(range):"")+".")}</div>`; return; }
     el("tpPrintBtn").style.display="inline-flex";
-    el("tpResults").innerHTML=list.map(g=>`<div class="card" style="margin-bottom:16px">
-      <h3 class="serif" style="margin:0 0 2px;font-size:19px">${esc(g.title)}</h3>
-      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(meta.cls)} · ${esc(meta.centre)} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
-      ${tableHTML(["Rank","Name","Centre","Class","Questions","Attempted","Correct","Wrong","Skipped","Score"]
-          .concat((g.subjects||[]).map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy %","Percentile"]),
-        g.rows.map((r,i)=>[medal(i+1),`<b>${esc(r.name)}</b>`+(r.offsite?` <span class="tag danger" title="This paper was started away from the centre's own internet connection">🏠</span>`:""),centreName(r.centre),clsLabel(r.cls),r.qs,r.att,r.correct,r.wrong,r.skipped,
-          `${r.score}/${r.total}`].concat((g.subjects||[]).map(x=>subjectCell(r.bySub,x)))
+    el("tpResults").innerHTML=list.map(g=>{
+      const subs=g.subjects||[], everyone=g.rows.concat(g.dq||[]);
+      // a value that is the same for every single student belongs in the heading, not in a column
+      const same=(list,pick)=>{ if(!list.length) return null; const v=list.map(pick);
+        return v.every(x=>x!=null&&x===v[0])?v[0]:null; };
+      const oneCentre=same(everyone,r=>r.centre), oneCls=same(everyone,r=>r.cls), oneQs=same(g.rows,r=>r.qs);
+      const head=["Rank","Name"]
+        .concat(oneCentre?[]:["Centre"]).concat(oneCls?[]:["Class"]).concat(oneQs?[]:["Questions"])
+        .concat(["Attempted","Correct","Wrong","Skipped","Score"])
+        .concat(subs.map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy %","Percentile"]);
+      const body=g.rows.map((r,i)=>[medal(i+1),
+          `<b>${esc(r.name)}</b>`+(r.offsite?` <span class="tag danger" title="This paper was started away from the centre's own internet connection">🏠</span>`:"")]
+          .concat(oneCentre?[]:[centreName(r.centre)]).concat(oneCls?[]:[clsLabel(r.cls)]).concat(oneQs?[]:[r.qs])
+          .concat([r.att,r.correct,r.wrong,r.skipped,`${r.score}/${r.total}`])
+          .concat(subs.map(x=>subjectCell(r.bySub,x)))
           .concat([r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))
-        .concat((g.dq||[]).map(r=>["—",`<b>${esc(r.name)}</b>`,centreName(r.centre),clsLabel(r.cls),"—","—","—","—","—",
-          `<b style="color:var(--danger)">DISQUALIFIED</b>`].concat((g.subjects||[]).map(()=>"—")).concat(["—","—"]))))}
+        .concat((g.dq||[]).map(r=>["—",`<b>${esc(r.name)}</b>`]
+          .concat(oneCentre?[]:[centreName(r.centre)]).concat(oneCls?[]:[clsLabel(r.cls)]).concat(oneQs?[]:["—"])
+          .concat(["—","—","—","—",`<b style="color:var(--danger)">DISQUALIFIED</b>`])
+          .concat(subs.map(()=>"—")).concat(["—","—"])));
+      return `<div class="card" style="margin-bottom:16px">
+      <h3 class="serif" style="margin:0 0 2px;font-size:19px">${esc(g.title)}</h3>
+      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(oneCls?clsLabel(oneCls):meta.cls)} · ${esc(oneCentre?centreName(oneCentre):meta.centre)}${oneQs?` · ${oneQs} question${oneQs===1?"":"s"}`:""} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
+      ${tableHTML(head,body,"dense")}
       ${g.dqCount?`<p class="muted" style="font-size:12px;margin:8px 0 0">Disqualified students are listed by name but are not ranked, and their marks count towards nobody's percentile.</p>`:""}
-      </div>`).join("")
+      </div>`;}).join("")
       +`<p class="muted" style="font-size:12px">Phy / Chem / Maths / Bio / Bot / Zoo are the marks scored in each subject of that paper. Accuracy = correct ÷ attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are never added up.</p>`;
   }catch(e){ el("tpResults").innerHTML=errBox(e); setBtn("tpBtn",false,"Show toppers"); }
 }
@@ -6307,7 +6368,7 @@ async function subjectMarksForDocs(docs){
   }
   return out;
 }
-function tableHTML(head,rows){return `<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;}
+function tableHTML(head,rows,cls){return `<div class="tablewrap${cls?" "+cls:""}"><table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;}
 // Every delete in the portal goes through this: a clear Yes / No box, so nothing is removed by a stray click.
 function askDelete(title,message,yesLabel){
   return new Promise(res=>{
