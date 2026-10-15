@@ -954,7 +954,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: tidier toppers table"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: names-only absentee sheet"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -4151,8 +4151,9 @@ function abRender(totalSet){
             waNumber(s.parentPhone)
               ? `<button class="btn gold sm" id="absend-${i}" onclick="abSend(${i})">Open WhatsApp</button>`
               : `<button class="btn ghost sm" onclick="abAddNumber(${i})">+ Add number</button>`]))
-      : tableHTML(["#","Student","Class","Centre"],
-          ABS_LIST.map((s,i)=>[i+1,`<b>${esc(s.name)}</b>`,"Class "+esc(s.class||"?"),esc(centreName(s.centreId))]))}
+      : tableHTML(["#","Student"],
+          ABS_LIST.map((s,i)=>[i+1,`<b>${esc(s.name)}</b>`
+            +(ABS_LIST.every(x=>x.class===ABS_LIST[0].class)?"":` <span class="muted" style="font-weight:400;font-size:12px">· Class ${esc(s.class||"?")}</span>`)]))}
     <p class="muted" style="font-size:12px;margin:10px 0 0">${msg
       ? "Pressing a button opens WhatsApp with the message already typed — you press Send there. Nothing is sent by the portal on its own."
       : "Parents of absent students are contacted by the head office."}</p>
@@ -4167,26 +4168,25 @@ function abPrint(){
     ? (val("abCentre")?centreName(val("abCentre")):"All centres this test was set for")
     : centreName(ME.centreId);
   const docTitle=tpDocTitle([{title:t.title,exam:examOf(t),when:(t.startAt&&t.startAt.seconds)||0}]).replace(/RESULTS/,"ABSENTEES");
-  const rows=ABS_LIST.map((st,i)=>`<tr><td class="rk">${i+1}</td><td>${esc(st.name||"")}</td>
-    <td>${esc("Class "+(st.class||"?"))}</td><td>${esc(centreName(st.centreId))}</td><td class="note"></td></tr>`).join("");
+  const oneCls=ABS_LIST.every(x=>x.class===ABS_LIST[0].class)?ABS_LIST[0].class:null;
+  const rows=ABS_LIST.map((st,i)=>`<tr><td class="rk">${i+1}</td><td>${esc(st.name||"")}${oneCls?"":` <span class="cls">Class ${esc(st.class||"?")}</span>`}</td></tr>`).join("");
   openPaperWindow(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(docTitle)}</title>
   <style>
     *{box-sizing:border-box} body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:28px 30px;font-size:13.5px}
     .head{text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}
     .head img{height:72px;display:block;margin:0 auto 4px} .head .ttl{font-size:17px;font-weight:bold;margin-top:2px}
     .tname{font-size:15px;font-weight:bold;margin-top:6px} .tmeta{color:#444;font-size:11.5px;margin:2px 0 10px}
-    table{width:100%;border-collapse:collapse} th,td{border:1px solid #ccc;padding:7px 8px;text-align:left;font-size:12.5px}
+    table{width:100%;max-width:460px;border-collapse:collapse} th,td{border:1px solid #ccc;padding:7px 10px;text-align:left;font-size:13px}
     th{background:#1f3d2f;color:#fff} tbody tr:nth-child(even){background:#f7f5ee}
-    td.rk{text-align:center;font-weight:bold;width:40px} td.note{width:34%}
+    td.rk{text-align:center;font-weight:bold;width:40px} .cls{color:#666;font-size:11px}
     .foot{text-align:center;color:#999;font-size:10.5px;margin-top:16px;border-top:1px solid #ddd;padding-top:6px}
     @media print{body{padding:0}@page{margin:12mm;size:A4 portrait}}
   </style></head><body>
   <div class="head"><img src="${LOGO}"/><div class="ttl">Absentees</div>
     <div style="font-size:12px;color:#444;margin-top:2px">${esc(centreLabel)}</div></div>
   <div class="tname">${esc(t.title||"Test")}</div>
-  <div class="tmeta">${esc(examOf(t)||"—")}${when?" &middot; held "+esc(when):""} &middot; ${ABS_LIST.length} student${ABS_LIST.length===1?"":"s"} absent</div>
-  <table><thead><tr><th>#</th><th>Student</th><th>Class</th><th>Centre</th><th>Remarks / action taken</th></tr></thead>
-  <tbody>${rows}</tbody></table>
+  <div class="tmeta">${esc(examOf(t)||"—")}${oneCls?" &middot; Class "+esc(oneCls):""}${when?" &middot; held "+esc(when):""} &middot; ${ABS_LIST.length} student${ABS_LIST.length===1?"":"s"} absent</div>
+  <table><thead><tr><th>#</th><th>Student</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="foot">Sonam Tuitions &middot; generated ${new Date().toLocaleDateString()}</div>
   <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
   </body></html>`);
