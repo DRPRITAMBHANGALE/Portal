@@ -12,11 +12,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<!-- The PDF, Excel and Word libraries used to sit here and were downloaded by every phone on every
+     load — about 1.9 MB that no student ever uses. They are fetched on demand now; see loadLib(). -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
 
 <style>
@@ -889,6 +888,7 @@ async function enterApp(){
   el("meName").textContent=ME.name||ME.email;
   el("meRole").innerHTML=roleBadge(ME.role)+(ME.role!=="master"?` · ${centreName(ME.centreId)}`:"");
   await loadSendMarksAccessFlag();
+  if(ME.role!=="student"){ needPdf().catch(()=>{}); needWord().catch(()=>{}); }  // quietly, in the background
   buildNav(); loadSyllabus(); go(navFor()[0].id);
   // a test interrupted by a reload is picked up straight away
   if(ME.role==="student") resumeSavedExam().catch(e=>console.error("resume failed",e));
@@ -950,7 +950,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: practice access master only"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: faster loading"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1068,6 +1068,31 @@ function openAIGen(){
   el("gSubject").onchange=()=>fillTopics("gExam",val("gClass"),"gSubject","gTopic");
 }
 /* a plain call to the Cloud Function that hands back whatever it answered */
+/* ---------- tool libraries, fetched only when something needs them ----------
+   A student's phone never downloads any of these. A staff login starts fetching them quietly in the
+   background, so by the time anyone presses "Download report card" they are already there. */
+const LIB={
+  pdf:"https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+  pdfTable:"https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js",
+  excel:"https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+  word:"https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js"
+};
+const LIB_PENDING={};
+function loadLib(src){
+  if(LIB_PENDING[src]) return LIB_PENDING[src];
+  return LIB_PENDING[src]=new Promise((ok,fail)=>{
+    const t=document.createElement("script"); t.src=src; t.async=true;
+    t.onload=()=>ok(true);
+    t.onerror=()=>{ delete LIB_PENDING[src]; t.remove();
+      fail(new Error("A part of the portal couldn't be downloaded — check the internet connection and try again.")); };
+    document.head.appendChild(t);
+  });
+}
+const needPdf  =()=>loadLib(LIB.pdf).then(()=>loadLib(LIB.pdfTable));   // the add-on needs the writer first
+const needExcel=()=>loadLib(LIB.excel);
+const needWord =()=>Promise.all([loadLib(LIB.word),loadLib(LIB.excel)]); // equations are read out of the file with the Excel library
+/* Returns false (having said so) instead of throwing, so a button press can simply stop. */
+async function ready(fn){ try{ await fn(); return true; }catch(e){ alert(errMsg(e)); return false; } }
 async function fnCall(payload){
   if(!AI_FUNCTION_URL||AI_FUNCTION_URL.startsWith("PASTE")) throw new Error("The Cloud Function link is not set in index.html.");
   const token=await auth.currentUser.getIdToken();
@@ -1399,6 +1424,7 @@ SOLUTION: explanation shown after the test</code>
 }
 async function handleUploadFile(){
   const f=el("uFile").files[0]; if(!f) return;
+  if(!await ready(needWord)) return;
   setMsg("uMsg","Reading file…","ok"); el("uPreview").innerHTML=""; el("uImportBtn").disabled=true;
   try{
     let raw;
@@ -1707,6 +1733,7 @@ function mtefToLatex(bytes){
    PNG/JPEG diagrams are kept as small embedded pictures. The returned text has the same layout as
    mammoth's raw text, with placeholders ⟦E0⟧ (equation), ⟦F0⟧ (picture), ⟦EQ?⟧ / ⟦FIG?⟧ (unreadable). */
 async function readWordWithEquations(arrayBuffer){
+  await needExcel();                                  // already loaded in practice; costs nothing
   const CFBlib=(window.XLSX&&XLSX.CFB)||window.CFB;
   if(!CFBlib) throw new Error("Word reader didn't load — check your internet and reload.");
   const u8=new Uint8Array(arrayBuffer);
@@ -2197,6 +2224,7 @@ function tqAddWord(){
 }
 async function tqWordRead(){
   const f=el("twFile").files[0]; if(!f) return;
+  if(!await ready(needWord)) return;
   setMsg("twMsg","Reading file and converting equations…","ok"); el("twAdd").disabled=true; TQ_WORD=[];
   try{
     if(!f.name.toLowerCase().endsWith(".docx")) throw new Error("Please choose a .docx file (save a .doc as .docx in Word first).");
@@ -2412,6 +2440,7 @@ async function openAddSolutions(testId){
 }
 async function solRead(testId){
   const f=el("solFile").files[0]; if(!f) return;
+  if(!await ready(needWord)) return;
   setMsg("solMsg","Reading the file and converting equations…","ok"); el("solBtn").disabled=true;
   try{
     if(!f.name.toLowerCase().endsWith(".docx")) throw new Error("Please choose a .docx file (open a .doc in Word, then File → Save As → Word Document).");
@@ -2512,6 +2541,7 @@ function suSolModeChanged(){
 let SELF_UPLOAD_LIVE_IDS=[], SELF_UPLOAD_DRAFT_ID=null;
 async function handleSelfUpload(){
   const f=el("suFile").files[0]; if(!f) return;
+  if(!await ready(needWord)) return;
   setMsg("suMsg","Reading file…","ok"); el("suPreview").innerHTML="";
   el("suTestBtn").disabled=true; SELF_UPLOAD_LIVE_IDS=[]; SELF_UPLOAD_DRAFT_ID=null; setMsg("suActionMsg","","ok");
   try{
@@ -3925,7 +3955,8 @@ function ppRender(){
 }
 // The template is the real register: every student the login can see, Class 11 and Class 12 on
 // their own sheets, with any number already saved filled in so re-uploading never wipes one.
-function ppTemplate(){
+async function ppTemplate(){
+  if(!await ready(needExcel)) return;
   const centre=ME.role==="master"?val("ppCentre"):ME.centreId;
   const all=PP_STUDENTS.filter(s=>!centre||s.centreId===centre)
     .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
@@ -3944,6 +3975,7 @@ function ppTemplate(){
 }
 async function ppImportPreview(){
   const f=el("ppFile").files[0]; if(!f) return;
+  if(!await ready(needExcel)) return;
   setMsg("ppImpMsg","Reading the file…","ok"); el("ppImpPreview").innerHTML=""; el("ppImpAction").innerHTML="";
   try{
     const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
@@ -4141,7 +4173,8 @@ async function abAddNumber(i){
   try{ await db.collection("users").doc(s.id).update({parentPhone:clean}); s.parentPhone=clean; loadAbsentees(); }
   catch(e){ alert("Could not save: "+permMsg(e,"save parent numbers")); }
 }
-function abDownload(){
+async function abDownload(){
+  if(!await ready(needExcel)) return;
   const t=ABS_TEST||{};
   const rows=ABS_LIST.map(s=>({Student:s.name||"",Class:s.class||"",Centre:centreName(s.centreId),
     "Login ID":s.loginId||"","Parent WhatsApp":waPretty(s.parentPhone)||""}));
@@ -4340,7 +4373,8 @@ async function smAddNumber(i){
   try{ await db.collection("users").doc(r.uid).update({parentPhone:clean}); r.parentPhone=clean; smRender(); }
   catch(e){ alert("Could not save: "+permMsg(e,"save parent numbers")); }
 }
-function smDownload(){
+async function smDownload(){
+  if(!await ready(needExcel)) return;
   const t=SM_TEST||{};
   const rows=SM_ROWS.map(r=>({Student:r.name||"",Class:r.cls||"",Centre:centreName(r.centreId),
     Status:r.dq?"Disqualified":"Appeared",
@@ -4931,7 +4965,8 @@ function openBulkStudents(){
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Close</button>
       <button class="btn" id="bBtn" onclick="runBulkStudents()" disabled>Create logins</button></div>`);
 }
-function downloadStudentTemplate(){
+async function downloadStudentTemplate(){
+  if(!await ready(needExcel)) return;
   const headers = ME.role==="master" ? ["Name","Course","Centre"] : ["Name","Course"];
   const sample = ME.role==="master"
     ? [["Aarav Shah","PCM","AMB"],["Diya Patil","PCB","KW"],["Ishan Rao","PCMB","AMB"]]
@@ -4943,6 +4978,7 @@ function downloadStudentTemplate(){
 let BULK_ROWS=[];
 async function bulkPreview(){
   const f=el("bFile").files[0]; if(!f) return;
+  if(!await ready(needExcel)) return;
   el("bPreview").innerHTML=""; el("bBtn").disabled=true; setMsg("bMsg","Reading file…","ok");
   try{
     const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
@@ -4997,6 +5033,7 @@ async function createStudentsOnServer(rows,defCentre){
 async function runBulkStudents(rowsIn){
   const rows=Array.isArray(rowsIn)?rowsIn:BULK_ROWS;
   if(!rows.length) return;
+  if(!await ready(needExcel)) return;
   setBtn("bBtn",true,`<span class="loader"></span> Creating…`);
   const created=[], fails=[], defCentre=ME.role==="master"?val("bDefCentre"):ME.centreId;
   const prog=t=>{ if(el("bProgress")) el("bProgress").innerHTML=`<div class="muted" style="font-size:13px;margin-top:8px">${t}</div>`; };
@@ -5222,6 +5259,7 @@ function drawReportCardPage(doc,stu,attemptDocs,scoreCache,subMap){
   doc.text("Computer-generated by the Sonam Tuitions test portal.",14,285);
 }
 async function downloadReportCard(uid){
+  if(!await ready(needPdf)) return;
   let aq=db.collection("attempts").where("studentUid","==",uid);
   if(ME.role==="admin") aq=aq.where("centreId","==",ME.centreId);
   const [stuDoc,attempts]=await Promise.all([db.collection("users").doc(uid).get(), aq.orderBy("submittedAt","desc").get()]);
@@ -5232,6 +5270,7 @@ async function downloadReportCard(uid){
   doc.save(`ReportCard_${stu.name.replace(/\s+/g,"_")}.pdf`);
 }
 async function downloadAllReportCards(){
+  if(!await ready(needPdf)) return;
   const centreId=ME.role==="master"?val("rCentre"):ME.centreId;
   setBtn("rAllBtn",true,"Building…"); setMsg("rMsg","Fetching students…","ok");
   try{
