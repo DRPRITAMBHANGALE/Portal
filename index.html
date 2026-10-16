@@ -954,7 +954,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: time taken"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: time out of total"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -5285,7 +5285,7 @@ function drawReportCardPage(doc,stu,attemptDocs,scoreCache,subMap){
     return a.disqualified
       ? [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),"DISQUALIFIED","—","—","—","—","—","—"]
       : [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
-         fmtTaken(attemptTimeSec(a))+(a.durationMin?" / "+a.durationMin+" min":""),
+         fmtTakenOf(attemptTimeSec(a),a.durationMin),
          accuracyOf(a),percentileOf(a.score,scoreCache[a.testId]),
          `${a.correct} / ${a.wrong} / ${a.unattempted}`,
          subjectLine(subMap&&subMap.get?subMap.get(d.id):null)];});
@@ -5485,15 +5485,14 @@ async function loadToppers(){
       const same=(list,pick)=>{ if(!list.length) return null; const v=list.map(pick);
         return v.every(x=>x!=null&&x===v[0])?v[0]:null; };
       const oneCentre=same(everyone,r=>r.centre), oneCls=same(everyone,r=>r.cls), oneQs=same(g.rows,r=>r.qs);
-      const oneDur=same(g.rows,r=>r.durMin);
       const head=["Rank","Name"]
         .concat(oneCentre?[]:["Centre"]).concat(oneCls?[]:["Class"]).concat(oneQs?[]:["Questions"])
-        .concat(["Attempted","Correct","Wrong","Skipped","Score","Time"])   // "Time taken" in full on the printed sheet
-        .concat(subs.map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy %","Percentile"]);
+        .concat(["Att.","Correct","Wrong","Skip","Score","Time"])   // full words on the printed sheet
+        .concat(subs.map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy","Percentile"]);
       const body=g.rows.map((r,i)=>[medal(i+1),
           `<b>${esc(r.name)}</b>`+(r.offsite?` <span class="tag danger" title="This paper was started away from the centre's own internet connection">🏠</span>`:"")]
           .concat(oneCentre?[]:[centreName(r.centre)]).concat(oneCls?[]:[clsLabel(r.cls)]).concat(oneQs?[]:[r.qs])
-          .concat([r.att,r.correct,r.wrong,r.skipped,`${r.score}/${r.total}`,fmtTaken(r.timeSec,true)])
+          .concat([r.att,r.correct,r.wrong,r.skipped,`${r.score}/${r.total}`,`<span style="white-space:nowrap">${fmtTakenOf(r.timeSec,r.durMin,true)}</span>`])
           .concat(subs.map(x=>subjectCell(r.bySub,x)))
           .concat([r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))
         .concat((g.dq||[]).map(r=>["—",`<b>${esc(r.name)}</b>`]
@@ -5502,7 +5501,7 @@ async function loadToppers(){
           .concat(subs.map(()=>"—")).concat(["—","—"])));
       return `<div class="card" style="margin-bottom:16px">
       <h3 class="serif" style="margin:0 0 2px;font-size:19px">${esc(g.title)}</h3>
-      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(oneCls?clsLabel(oneCls):meta.cls)} · ${esc(oneCentre?centreName(oneCentre):meta.centre)}${oneQs?` · ${oneQs} question${oneQs===1?"":"s"}`:""}${oneDur?` · ${oneDur} minute paper`:""} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
+      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(oneCls?clsLabel(oneCls):meta.cls)} · ${esc(oneCentre?centreName(oneCentre):meta.centre)}${oneQs?` · ${oneQs} question${oneQs===1?"":"s"}`:""} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
       ${tableHTML(head,body,"dense")}
       ${g.dqCount?`<p class="muted" style="font-size:12px;margin:8px 0 0">Disqualified students are listed by name but are not ranked, and their marks count towards nobody's percentile.</p>`:""}
       </div>`;}).join("")
@@ -5547,12 +5546,12 @@ function printToppers(){
       <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th><th>Time taken</th>${subs.map(x=>`<th class="sub">${esc(SUBJ_SHORT[x]||x)}</th>`).join("")}<th>Accuracy %</th><th>Percentile</th></tr></thead>`;
     const body=g.rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
       <td>${esc(clsLabel(r.cls))}</td><td>${r.qs}</td><td>${r.att}</td><td>${r.correct}</td><td>${r.wrong}</td><td>${r.skipped}</td>
-      <td>${r.score}/${r.total}</td><td>${esc(fmtTaken(r.timeSec))}</td>${subs.map(x=>`<td class="sub">${esc(subjectCell(r.bySub,x))}</td>`).join("")}<td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("")
+      <td>${r.score}/${r.total}</td><td>${esc(fmtTakenOf(r.timeSec,r.durMin))}</td>${subs.map(x=>`<td class="sub">${esc(subjectCell(r.bySub,x))}</td>`).join("")}<td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("")
       +(g.dq||[]).map(r=>`<tr class="dq"><td class="rk">&mdash;</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
       <td>${esc(clsLabel(r.cls))}</td><td colspan="${9+subs.length}"><b>DISQUALIFIED</b> &mdash; malpractice during the test; not ranked</td></tr>`).join("");
     return `<div class="block"${gi?' style="page-break-before:always"':""}>
       <div class="tname">${esc(g.title)}</div>
-      <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)}${g.rows.length&&g.rows[0].durMin&&g.rows.every(r=>r.durMin===g.rows[0].durMin)?" &middot; "+g.rows[0].durMin+" minute paper":""} &middot; ${g.entries} ranked${g.dqCount?` &middot; ${g.dqCount} disqualified`:""}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
+      <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; ${g.entries} ranked${g.dqCount?` &middot; ${g.dqCount} disqualified`:""}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
       <table>${head}<tbody>${body}</tbody></table></div>`;
   }).join("");
   const docTitle=tpDocTitle(list);
@@ -5573,7 +5572,7 @@ function printToppers(){
     <div style="font-size:12px;color:#444;margin-top:2px">${esc(meta.centre)} &middot; ${esc(meta.cls)}</div></div>
   ${meta.range?`<div style="text-align:center;color:#444;font-size:12px;margin-bottom:8px">Tests taken ${esc(meta.range)}</div>`:""}
   ${blocks}
-  <p style="font-size:10.5px;color:#555">"Time taken" is how long the student spent on the paper, from opening it to submitting it. The shaded columns are the marks scored in each subject of that paper &mdash; Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.<br>
+  <p style="font-size:10.5px;color:#555">"Time taken" is how long the student spent on the paper, from opening it to submitting it, against the time the paper allowed. The shaded columns are the marks scored in each subject of that paper &mdash; Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.<br>
   Accuracy = correct &divide; attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are not added up.</p>
   <div class="foot">Sonam Tuitions &middot; generated ${new Date().toLocaleDateString()}</div>
   <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
@@ -6319,6 +6318,13 @@ function attemptTimeSec(a){
   return (st&&en&&en>=st)?Math.round(en-st):null;
 }
 /* short=true gives the compact form ("15m") that fits a narrow on-screen column */
+/* "15m / 60m" on screen, "15 min / 60 min" in print — the paper's own length alongside, so the
+   reading can be understood without looking anywhere else. */
+function fmtTakenOf(sec,durMin,short){
+  const t=fmtTaken(sec,short);
+  if(sec==null||!durMin) return t;
+  return t+" / "+durMin+(short?"m":" min");
+}
 function fmtTaken(sec,short){
   if(sec==null) return "—";
   if(sec<60) return short?sec+"s":sec+" sec";
