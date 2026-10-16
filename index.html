@@ -954,7 +954,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: names-only absentee sheet"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: time taken"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -5283,20 +5283,23 @@ function drawReportCardPage(doc,stu,attemptDocs,scoreCache,subMap){
   const real=shown.filter(d=>!d.data().disqualified); // disqualified attempts are shown but don't count toward the overall score
   const rows=shown.map(d=>{const a=d.data();
     return a.disqualified
-      ? [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),"DISQUALIFIED","—","—","—","—","—","—","—"]
-      : [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",accuracyOf(a),percentileOf(a.score,scoreCache[a.testId]),`${a.correct}`,`${a.wrong}`,`${a.unattempted}`,
+      ? [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),"DISQUALIFIED","—","—","—","—","—","—"]
+      : [a.testTitle,a.exam||"—",fmtDate(a.submittedAt,true),`${a.score}/${a.total}`,pct(a.score,a.total)+"%",
+         fmtTaken(attemptTimeSec(a))+(a.durationMin?" / "+a.durationMin+" min":""),
+         accuracyOf(a),percentileOf(a.score,scoreCache[a.testId]),
+         `${a.correct} / ${a.wrong} / ${a.unattempted}`,
          subjectLine(subMap&&subMap.get?subMap.get(d.id):null)];});
   // each test stands on its own — no combined score or averaged accuracy
   if(rows.length){
-    doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Accuracy","Percentile","Correct","Wrong","Skipped","Subject-wise marks"]],body:rows,
-      headStyles:{fillColor:[31,92,82]},styles:{fontSize:6.8,cellPadding:1.6,overflow:"linebreak"},alternateRowStyles:{fillColor:[246,243,236]},
-      columnStyles:{0:{cellWidth:30},10:{cellWidth:36}},
+    doc.autoTable({startY:56,head:[["Test","Exam","Date","Score","%","Time taken","Accuracy","Percentile","Right / Wrong / Skipped","Subject-wise marks"]],body:rows,
+      headStyles:{fillColor:[31,92,82]},styles:{fontSize:6.6,cellPadding:1.6,overflow:"linebreak"},alternateRowStyles:{fillColor:[246,243,236]},
+      columnStyles:{0:{cellWidth:29},1:{cellWidth:15},2:{cellWidth:13},5:{cellWidth:19},8:{cellWidth:18},9:{cellWidth:33}},
       didParseCell:function(d){ if(d.section==="body"&&d.row.raw[3]==="DISQUALIFIED"){ d.cell.styles.textColor=[163,64,47]; d.cell.styles.fontStyle="bold"; } }});
     let y=doc.lastAutoTable.finalY+10; doc.setFont("helvetica","bold"); doc.setFontSize(9.5);
     doc.text(`Tests taken: ${real.length}${shown.length>real.length?`   ·   Disqualified: ${shown.length-real.length}`:""}   ·   Every test is shown on its own — scores are not added up or averaged.`,14,y);
     doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(`Accuracy = correct ÷ attempted questions. Percentile = % of students (${ME.role==="admin"?"in "+centreName(ME.centreId):"all centres"}) who scored the same or lower in that test.`,14,y+6);
-    doc.text(`Subject-wise marks: Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.`,14,y+11);
+    doc.text(`Time taken = from opening the paper to submitting it, against the time the paper allowed. Subject-wise marks: Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.`,14,y+11);
     doc.setTextColor(35,33,28);
   } else {
     doc.setFont("helvetica","italic"); doc.setFontSize(10.5); doc.setTextColor(120);
@@ -5443,7 +5446,7 @@ async function loadToppers(){
       if(a.disqualified){ g.dq.push({name:stu.name,centre:tpCentreOf(a,stu),cls:stu.class,when:w,
         strikes:a.violations||0}); return; }
       const c=a.correct||0,wr=a.wrong||0,sk=a.unattempted||0,att=c+wr;
-      g.rows.push({name:stu.name,offsite:a.atCentre===false,centre:tpCentreOf(a,stu),cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
+      g.rows.push({name:stu.name,offsite:a.atCentre===false,timeSec:attemptTimeSec(a),durMin:a.durationMin||null,centre:tpCentreOf(a,stu),cls:stu.class,qs:c+wr+sk,att,correct:c,wrong:wr,skipped:sk,
         score:a.score||0,total:a.total||0,acc:att?c/att*100:null,when:w,
         bySub:(a.bySubject&&Object.keys(a.bySubject).length)?a.bySubject:null,
         order:a.questionOrder||null,ans:a.answers||null,exam:a.exam||g.exam});
@@ -5482,23 +5485,24 @@ async function loadToppers(){
       const same=(list,pick)=>{ if(!list.length) return null; const v=list.map(pick);
         return v.every(x=>x!=null&&x===v[0])?v[0]:null; };
       const oneCentre=same(everyone,r=>r.centre), oneCls=same(everyone,r=>r.cls), oneQs=same(g.rows,r=>r.qs);
+      const oneDur=same(g.rows,r=>r.durMin);
       const head=["Rank","Name"]
         .concat(oneCentre?[]:["Centre"]).concat(oneCls?[]:["Class"]).concat(oneQs?[]:["Questions"])
-        .concat(["Attempted","Correct","Wrong","Skipped","Score"])
+        .concat(["Attempted","Correct","Wrong","Skipped","Score","Time"])   // "Time taken" in full on the printed sheet
         .concat(subs.map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy %","Percentile"]);
       const body=g.rows.map((r,i)=>[medal(i+1),
           `<b>${esc(r.name)}</b>`+(r.offsite?` <span class="tag danger" title="This paper was started away from the centre's own internet connection">🏠</span>`:"")]
           .concat(oneCentre?[]:[centreName(r.centre)]).concat(oneCls?[]:[clsLabel(r.cls)]).concat(oneQs?[]:[r.qs])
-          .concat([r.att,r.correct,r.wrong,r.skipped,`${r.score}/${r.total}`])
+          .concat([r.att,r.correct,r.wrong,r.skipped,`${r.score}/${r.total}`,fmtTaken(r.timeSec,true)])
           .concat(subs.map(x=>subjectCell(r.bySub,x)))
           .concat([r.acc===null?"—":`<b>${r.acc.toFixed(1)}%</b>`,`<b>${r.pctile}</b>`]))
         .concat((g.dq||[]).map(r=>["—",`<b>${esc(r.name)}</b>`]
           .concat(oneCentre?[]:[centreName(r.centre)]).concat(oneCls?[]:[clsLabel(r.cls)]).concat(oneQs?[]:["—"])
-          .concat(["—","—","—","—",`<b style="color:var(--danger)">DISQUALIFIED</b>`])
+          .concat(["—","—","—","—",`<b style="color:var(--danger)">DISQUALIFIED</b>`,"—"])
           .concat(subs.map(()=>"—")).concat(["—","—"])));
       return `<div class="card" style="margin-bottom:16px">
       <h3 class="serif" style="margin:0 0 2px;font-size:19px">${esc(g.title)}</h3>
-      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(oneCls?clsLabel(oneCls):meta.cls)} · ${esc(oneCentre?centreName(oneCentre):meta.centre)}${oneQs?` · ${oneQs} question${oneQs===1?"":"s"}`:""} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
+      <p class="muted" style="margin:0 0 10px;font-size:12.5px">${examTag(g.exam)} · ${esc(oneCls?clsLabel(oneCls):meta.cls)} · ${esc(oneCentre?centreName(oneCentre):meta.centre)}${oneQs?` · ${oneQs} question${oneQs===1?"":"s"}`:""}${oneDur?` · ${oneDur} minute paper`:""} · ${g.entries} student${g.entries===1?"":"s"} ranked${g.dqCount?` · <b style="color:var(--danger)">${g.dqCount} disqualified</b>`:""}${g.when?" · "+new Date(g.when*1000).toLocaleDateString():""}</p>
       ${tableHTML(head,body,"dense")}
       ${g.dqCount?`<p class="muted" style="font-size:12px;margin:8px 0 0">Disqualified students are listed by name but are not ranked, and their marks count towards nobody's percentile.</p>`:""}
       </div>`;}).join("")
@@ -5540,15 +5544,15 @@ function printToppers(){
   const blocks=list.map((g,gi)=>{
     const subs=g.subjects||[];
     const head=`<thead><tr><th>Rank</th><th>Name</th><th>Centre</th><th>Class</th><th>Questions</th><th>Attempted</th>
-      <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th>${subs.map(x=>`<th class="sub">${esc(SUBJ_SHORT[x]||x)}</th>`).join("")}<th>Accuracy %</th><th>Percentile</th></tr></thead>`;
+      <th>Correct</th><th>Wrong</th><th>Skipped</th><th>Score</th><th>Time taken</th>${subs.map(x=>`<th class="sub">${esc(SUBJ_SHORT[x]||x)}</th>`).join("")}<th>Accuracy %</th><th>Percentile</th></tr></thead>`;
     const body=g.rows.map((r,i)=>`<tr><td class="rk">${i<3?["🥇","🥈","🥉"][i]:i+1}</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
       <td>${esc(clsLabel(r.cls))}</td><td>${r.qs}</td><td>${r.att}</td><td>${r.correct}</td><td>${r.wrong}</td><td>${r.skipped}</td>
-      <td>${r.score}/${r.total}</td>${subs.map(x=>`<td class="sub">${esc(subjectCell(r.bySub,x))}</td>`).join("")}<td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("")
+      <td>${r.score}/${r.total}</td><td>${esc(fmtTaken(r.timeSec))}</td>${subs.map(x=>`<td class="sub">${esc(subjectCell(r.bySub,x))}</td>`).join("")}<td><b>${r.acc===null?"—":r.acc.toFixed(1)+"%"}</b></td><td><b>${r.pctile}</b></td></tr>`).join("")
       +(g.dq||[]).map(r=>`<tr class="dq"><td class="rk">&mdash;</td><td>${esc(r.name)}</td><td>${esc(centreName(r.centre))}</td>
-      <td>${esc(clsLabel(r.cls))}</td><td colspan="${8+subs.length}"><b>DISQUALIFIED</b> &mdash; malpractice during the test; not ranked</td></tr>`).join("");
+      <td>${esc(clsLabel(r.cls))}</td><td colspan="${9+subs.length}"><b>DISQUALIFIED</b> &mdash; malpractice during the test; not ranked</td></tr>`).join("");
     return `<div class="block"${gi?' style="page-break-before:always"':""}>
       <div class="tname">${esc(g.title)}</div>
-      <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)} &middot; ${g.entries} ranked${g.dqCount?` &middot; ${g.dqCount} disqualified`:""}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
+      <div class="tmeta">${esc(g.exam)} &middot; ${esc(meta.cls)} &middot; ${esc(meta.centre)}${g.rows.length&&g.rows[0].durMin&&g.rows.every(r=>r.durMin===g.rows[0].durMin)?" &middot; "+g.rows[0].durMin+" minute paper":""} &middot; ${g.entries} ranked${g.dqCount?` &middot; ${g.dqCount} disqualified`:""}${g.when?" &middot; "+new Date(g.when*1000).toLocaleDateString():""}</div>
       <table>${head}<tbody>${body}</tbody></table></div>`;
   }).join("");
   const docTitle=tpDocTitle(list);
@@ -5569,7 +5573,7 @@ function printToppers(){
     <div style="font-size:12px;color:#444;margin-top:2px">${esc(meta.centre)} &middot; ${esc(meta.cls)}</div></div>
   ${meta.range?`<div style="text-align:center;color:#444;font-size:12px;margin-bottom:8px">Tests taken ${esc(meta.range)}</div>`:""}
   ${blocks}
-  <p style="font-size:10.5px;color:#555">The shaded columns are the marks scored in each subject of that paper &mdash; Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.<br>
+  <p style="font-size:10.5px;color:#555">"Time taken" is how long the student spent on the paper, from opening it to submitting it. The shaded columns are the marks scored in each subject of that paper &mdash; Phy = Physics, Chem = Chemistry, Maths = Mathematics, Bio = Biology, Bot = Botany, Zoo = Zoology.<br>
   Accuracy = correct &divide; attempted. Percentile = % of the students who took that same test scoring the same or lower. Scores from different tests are not added up.</p>
   <div class="foot">Sonam Tuitions &middot; generated ${new Date().toLocaleDateString()}</div>
   <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
@@ -6198,6 +6202,8 @@ async function submitExam(auto,disqualify){
       netEnforced:!!(EXAM.gate&&EXAM.gate.enforce),
       questionOrder:order,answers,disqualified:!!disqualify,violations:EXAM.violations||0,
       startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
+      durationMin:EXAM.test.duration||null,
+      timeTakenSec:Math.max(0,Math.round((Date.now()-(EXAM.endTime-EXAM.test.duration*60000))/1000)),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
   catch(e){ console.error("attempt save failed",e); }
   if(disqualify) showMalpracticeResult(); else showResult({score,total,correct,wrong,unattempted,bySubject});
@@ -6305,6 +6311,21 @@ function setMsg(id,t,k){const m=el(id);if(m){m.className="msg "+k;m.textContent=
 function esc(s){return (s??"").toString().replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function truncate(s,n){s=(s||"");return s.length>n?s.slice(0,n)+"…":s;}
 function pad(n){return n<10?"0"+n:n;}
+/* how long an attempt took, in seconds — recorded on the paper, or worked back out for an older one */
+function attemptTimeSec(a){
+  if(!a) return null;
+  if(typeof a.timeTakenSec==="number"&&a.timeTakenSec>=0) return Math.round(a.timeTakenSec);
+  const st=a.startedAt&&a.startedAt.seconds, en=a.submittedAt&&a.submittedAt.seconds;
+  return (st&&en&&en>=st)?Math.round(en-st):null;
+}
+/* short=true gives the compact form ("15m") that fits a narrow on-screen column */
+function fmtTaken(sec,short){
+  if(sec==null) return "—";
+  if(sec<60) return short?sec+"s":sec+" sec";
+  const m=Math.round(sec/60);
+  if(m<60) return short?m+"m":m+" min";
+  return Math.floor(m/60)+"h"+(short?"":" ")+pad(m%60)+"m";
+}
 function pct(a,b){return b?Math.round(a/b*100):0;}
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
 function fmtDate(ts,short){if(!ts)return"—";const d=ts.toDate?ts.toDate():new Date(ts);return short?d.toLocaleDateString():d.toLocaleString([],{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}
