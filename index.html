@@ -954,7 +954,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: time out of total"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: clean toppers list"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -5490,7 +5490,7 @@ async function loadToppers(){
         .concat(["Att.","Correct","Wrong","Skip","Score","Time"])   // full words on the printed sheet
         .concat(subs.map(x=>SUBJ_SHORT[x]||x)).concat(["Accuracy","Percentile"]);
       const body=g.rows.map((r,i)=>[medal(i+1),
-          `<b>${esc(r.name)}</b>`+(r.offsite?` <span class="tag danger" title="This paper was started away from the centre's own internet connection">🏠</span>`:"")]
+          `<b>${esc(r.name)}</b>`]
           .concat(oneCentre?[]:[centreName(r.centre)]).concat(oneCls?[]:[clsLabel(r.cls)]).concat(oneQs?[]:[r.qs])
           .concat([r.att,r.correct,r.wrong,r.skipped,`${r.score}/${r.total}`,`<span style="white-space:nowrap">${fmtTakenOf(r.timeSec,r.durMin,true)}</span>`])
           .concat(subs.map(x=>subjectCell(r.bySub,x)))
