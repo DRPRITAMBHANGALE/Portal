@@ -954,7 +954,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: clean toppers list"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: numbered solutions"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -2408,15 +2408,22 @@ function parseSolutionsDoc(raw,W){
   let start=raw.search(/hints?\s*(?:&|and|\+)?\s*solutions?/i);
   if(start<0) start=raw.search(/^[^\S\n]*(?:detailed\s+)?(?:solutions?|explanations?)[^\S\n]*$/im);
   const text=start>=0?raw.slice(start):raw;          // a solutions-only file may have no heading at all
-  const startRe=/^\s*(\d{1,3})\s*[.)]?\s*(?:(?:Ans(?:wer)?|Sol(?:ution)?)\s*\.?\s*:?\s*(?:\(([^)]{1,12})\)|([A-Da-d0-9.\-]{1,6})\b)?|\(([^)]{1,12})\))/i;
+  const startRe=/^\s*(\d{1,3})\s*[.)]?\s*(?:(?:Ans(?:wer)?|Sol(?:ution)?)\s*\.?\s*:?\s*(?:\(([^)]{1,12})\)|([A-Da-d0-9.\-]{1,6})\b)?|\(([A-Da-d1-4])\))/i;
+  const plainRe=/^\s*(\d{1,3})\s*[.)](?=\s|$)/;      // just "7." with the working under it
   const items=[]; let cur=null,last=0;
   // a solutions file is numbered in order but may skip numbers (e.g. 1–10 then 41–50), so any
   // higher number that starts a proper "N. Ans/Sol/(x)" line opens the next solution
   text.split(/\n[ \t]*\n/).forEach(para=>{
     const m=para.match(startRe); const n=m?parseInt(m[1]):NaN;
     if(m && n<=400 && (last===0 || n>last)){
-      cur={num:n,ans:(m[2]||m[3]||m[4]||"").trim(),paras:[para.slice(m[0].length)]}; items.push(cur); last=n;
-    } else if(cur) cur.paras.push(para);
+      cur={num:n,ans:(m[2]||m[3]||m[4]||"").trim(),paras:[para.slice(m[0].length)]}; items.push(cur); last=n; return;
+    }
+    // a key with no "Ans"/"Sol" wording — accepted only while it carries the count on
+    const mp=para.match(plainRe); const np=mp?parseInt(mp[1]):NaN;
+    if(mp && (last===0 ? np===1 : np===last+1)){
+      cur={num:np,ans:"",paras:[para.slice(mp[0].length)]}; items.push(cur); last=np; return;
+    }
+    if(cur) cur.paras.push(para);
   });
   return items.map(c=>{
     let body=c.paras.join("\n").split("\n").map(l=>l.replace(/[\t ]+/g," ").trim())
@@ -2638,19 +2645,26 @@ function parseSelfUploadDoc(raw,defaults,W){
   // Split a section into numbered chunks. A paragraph starts a new item when it begins with a number
   // ("12." / "12.<tab>" / "12<tab>") that comes just after the previous one — so stray numbers inside
   // questions (e.g. "10 m/s") can't be mistaken for a new question.
-  function numberedChunks(text,startRe){
+  function numberedChunks(text,startRe,plainRe){
     const paras=text.split(/\n[ \t]*\n/); const chunks=[]; let cur=null,last=0;
     paras.forEach(p=>{
       const mm=p.match(startRe); const n=mm?parseInt(mm[1]):NaN;
-      if(mm && (last===0 ? n<=250 : (n>last && n<=last+5))){ cur={num:n,body:p.slice(mm[0].length),paras:[]}; chunks.push(cur); last=n; }
-      else if(cur) cur.paras.push(p);
+      if(mm && (last===0 ? n<=250 : (n>last && n<=last+5))){ cur={num:n,body:p.slice(mm[0].length),paras:[]}; chunks.push(cur); last=n; return; }
+      // a key that is simply a numbered list, with no "Ans"/"Sol" wording: such a line opens the
+      // next solution only when it carries the count on, so a number inside the working is safe
+      if(plainRe){
+        const mp=p.match(plainRe); const np=mp?parseInt(mp[1]):NaN;
+        if(mp && (last===0 ? np===1 : np===last+1)){ cur={num:np,body:p.slice(mp[0].length),paras:[]}; chunks.push(cur); last=np; return; }
+      }
+      if(cur) cur.paras.push(p);
     });
     return chunks;
   }
   const solutions={};
   // "1.Ans.: (b)" · "1. Ans : b" · "1. (b)" · "1) Sol." — a bare "1." is not enough, so a numbered
   // line inside a solution body can't be mistaken for the start of the next solution.
-  numberedChunks(solText,/^\s*(\d{1,3})\s*[.)]?\s*(?:(?:Ans(?:wer)?|Sol(?:ution)?)\s*\.?\s*:?\s*(?:\(([^)]{1,12})\))?|\(([^)]{1,12})\))/i).forEach(c=>{
+  numberedChunks(solText,/^\s*(\d{1,3})\s*[.)]?\s*(?:(?:Ans(?:wer)?|Sol(?:ution)?)\s*\.?\s*:?\s*(?:\(([^)]{1,12})\))?|\(([A-Da-d1-4])\))/i,
+    /^\s*(\d{1,3})\s*[.)](?=\s|$)/).forEach(c=>{
     let body=[c.body,...c.paras].join("\n").replace(/^\s*solution\s*:?/im,"");
     body=body.split("\n").map(l=>l.replace(/[\t ]+/g," ").trim()).filter(l=>l&&!/^solution\s*:?$/i.test(l)).join("\n")
       .replace(/^\s*solution\s*:?\s*/i,"")
