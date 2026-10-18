@@ -954,7 +954,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: numbered solutions"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: pictures before question numbers"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1991,6 +1991,23 @@ function dtPair(id,value,compact){
     ${timeBoxes(id,m?m[2]:"",compact)}
     <input type="hidden" id="${id}" value="${esc(value||"")}"/></div>`;
 }
+/* Put one date-and-time control's value into another — the boxes as well as the hidden value.
+   Returns false if there is nothing to copy. */
+function dtCopy(fromId,toId){
+  const m=String(val(fromId)||"").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if(!m||!el(toId)) return false;
+  if(el(toId+"_d")) el(toId+"_d").value=m[1];
+  setTimeBoxes(toId,m[2]);
+  dtSync(toId);
+  return true;
+}
+/* Shared by every screen that offers "show solutions only from a date & time": the first time it is
+   switched on, it starts at the time the paper itself closes. */
+function solModeChanged(modeId,rowId,solId,closeId){
+  const show=val(modeId)==="scheduled";
+  if(el(rowId)) el(rowId).style.display=show?"block":"none";
+  if(show&&!val(solId)) dtCopy(closeId,solId);
+}
 function dtSync(id){
   const h=el(id); if(!h) return;
   const d=val(id+"_d");
@@ -2407,7 +2424,8 @@ async function applySectionsToTest(id,ranges){
 function parseSolutionsDoc(raw,W){
   let start=raw.search(/hints?\s*(?:&|and|\+)?\s*solutions?/i);
   if(start<0) start=raw.search(/^[^\S\n]*(?:detailed\s+)?(?:solutions?|explanations?)[^\S\n]*$/im);
-  const text=start>=0?raw.slice(start):raw;          // a solutions-only file may have no heading at all
+  let text=start>=0?raw.slice(start):raw;            // a solutions-only file may have no heading at all
+  text=text.replace(/(^|\n)((?:⟦(?:[FE]\d+|FIG\?|EQ\?)⟧)+)[ \t]*(\d{1,3}[.)][ \t]*\t?)/g,"$1$3 $2 ");
   const startRe=/^\s*(\d{1,3})\s*[.)]?\s*(?:(?:Ans(?:wer)?|Sol(?:ution)?)\s*\.?\s*:?\s*(?:\(([^)]{1,12})\)|([A-Da-d0-9.\-]{1,6})\b)?|\(([A-Da-d1-4])\))/i;
   const plainRe=/^\s*(\d{1,3})\s*[.)](?=\s|$)/;      // just "7." with the working under it
   const items=[]; let cur=null,last=0;
@@ -2532,7 +2550,7 @@ function openSelfUpload(){
     <select id="suSolMode" onchange="suSolModeChanged()">
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
-    <div id="suSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("suSolAt")}</div>
+    <div id="suSolAtRow" style="display:none"><label>Show solutions from <span class="muted" style="font-weight:400">— starts at the time the paper closes; change it if you want</span></label>${dtPair("suSolAt")}</div>
     <div style="margin-top:10px"><div style="font-weight:600">Subjects by question number — only for a mixed paper (PCM / PCB)</div>
       <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave empty for a single-subject paper. The subjects are applied when you click “Save as final paper”.</p>
       <div id="suSections"></div></div>
@@ -2544,11 +2562,7 @@ function openSelfUpload(){
   fillSectionRows("suExam","suSections","suSec");
   el("suExam").onchange=()=>{ fillSectionRows("suExam","suSections","suSec"); };
 }
-function suSolModeChanged(){
-  const show=val("suSolMode")==="scheduled";
-  el("suSolAtRow").style.display=show?"block":"none";
-  if(show&&!val("suSolAt")&&val("suEnd")) el("suSolAt").value=val("suEnd"); // handy default: the paper's Closes time
-}
+function suSolModeChanged(){ solModeChanged("suSolMode","suSolAtRow","suSolAt","suEnd"); }
 let SELF_UPLOAD_LIVE_IDS=[], SELF_UPLOAD_DRAFT_ID=null;
 async function handleSelfUpload(){
   const f=el("suFile").files[0]; if(!f) return;
@@ -2604,6 +2618,8 @@ async function handleSelfUpload(){
       +`✓ ${liveIds.length} added live to your question bank.`
       +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — something in them couldn't be read (see the red notes below); fix it there and approve.`:"")
       +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or no usable answer key entry).`:"")
+      +((SELF_UPLOAD_PARSED.passedOver&&SELF_UPLOAD_PARSED.passedOver.length)
+        ?` ⚠ The file's own numbering passes over ${SELF_UPLOAD_PARSED.passedOver.length} question${SELF_UPLOAD_PARSED.passedOver.length===1?"":"s"} — numbered ${SELF_UPLOAD_PARSED.passedOver.join(", ")} in the file. A number that repeats an earlier one, or goes backwards, can't start a new question. Fix the numbering in Word and upload again.`:"")
       +(SU_SOL_STATS.sectionFound
         ?` 📘 Solutions read for ${SU_SOL_STATS.count} question${SU_SOL_STATS.count===1?"":"s"}.`
         :` 📘 No solutions section found in this file — students will see the right answer but no explanation. (The reader looks for a heading such as "Hints & Solutions" or "Solutions", then items starting "1. Ans. (b)".)`),
@@ -2633,7 +2649,7 @@ function parseSelfUploadDoc(raw,defaults,W){
   const paperEnd=akIdx>=0?akIdx:(hsIdx>=0?hsIdx:raw.length);
   let paperText=raw.slice(0,paperEnd);
   const akText=akIdx>=0?raw.slice(akIdx,(hsIdx>=0&&hsIdx>akIdx)?hsIdx:raw.length):"";
-  const solText=hsIdx>=0?raw.slice(hsIdx):"";
+  let solText=hsIdx>=0?raw.slice(hsIdx):"";
 
   const answers={};
   const akRe=/(\d{1,3})\s*[.)]?\s*\(([^)]{1,12})\)/g; let m;
@@ -2774,8 +2790,16 @@ function parseSelfUploadDoc(raw,defaults,W){
   }
   const sharedFor=n=>{ const x=sharedOpts.find(o=>n>=o.from&&n<=o.to); return x?x.options.slice():null; };
 
-  const out=[];
+  // a diagram anchored at the top of a question sits in front of its number — put the number back
+  // in front, keeping the picture with the question it belongs to
+  paperText=paperText.replace(/(^|\n)((?:⟦(?:[FE]\d+|FIG\?|EQ\?)⟧)+)[ \t]*(\d{1,3}[.)][ \t]*\t?)/g,"$1$3 $2 ");
+
+  // the solutions key has the same trouble — a diagram can sit in front of a solution's number
+  solText=solText.replace(/(^|\n)((?:⟦(?:[FE]\d+|FIG\?|EQ\?)⟧)+)[ \t]*(\d{1,3}[.)][ \t]*\t?)/g,"$1$3 $2 ");
+
+  const out=[], opened=[];
   numberedChunks(paperText,/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/).forEach(c=>{
+    opened.push(c.num);
     const num=c.num;
     let rest=[c.body,...c.paras].join("\n\n");
     let marks=findOptionMarks(rest);
@@ -2821,6 +2845,17 @@ function parseSelfUploadDoc(raw,defaults,W){
     else tier="ready";
     out.push({num,text,options,correct,answerType,numAnswer,solution,problems,tier,...defaults});
   });
+  // Which numbered questions in the file never became a question? Almost always the file's own
+  // numbering: the same number twice, or one that goes backwards.
+  const passedOver=[]; let seenUpTo=0;
+  paperText.split(/\n[ \t]*\n/).forEach(para=>{
+    const m=para.match(/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/);
+    if(!m) return;
+    const n=parseInt(m[1]);
+    if(seenUpTo===0 ? n<=250 : (n>seenUpTo && n<=seenUpTo+5)){ seenUpTo=n; return; }  // this one did start a question
+    if(passedOver.indexOf(n)<0) passedOver.push(n);
+  });
+  out.passedOver=passedOver;
   return out;
 }
 // Creates Firestore docs for both tiers in one pass: "ready" go live immediately, "fixable" go to the
@@ -2948,10 +2983,10 @@ async function openFinalizeDraft(id){
       <p class="muted" style="font-size:12.5px;margin:6px 0 4px">Leave every box empty for a single-subject paper.</p>
       ${sectionRowsHTML("fdSec",t.exam)}</div>
     <label>When should students see the answer key &amp; solutions?</label>
-    <select id="fdSolMode" onchange="el('fdSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
+    <select id="fdSolMode" onchange="solModeChanged('fdSolMode','fdSolAtRow','fdSolAt','fdEnd')">
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
-    <div id="fdSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("fdSolAt")}</div>
+    <div id="fdSolAtRow" style="display:none"><label>Show solutions from <span class="muted" style="font-weight:400">— starts at the time the paper closes; change it if you want</span></label>${dtPair("fdSolAt")}</div>
     <div class="msg" id="fdMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="fdBtn" onclick="saveFinalizeDraft('${id}')">✓ Save as final paper</button></div>`,true);
@@ -3503,10 +3538,10 @@ async function openReschedule(id){
       <p class="muted" style="font-size:12.5px;margin:6px 0 0">Use this for a mixed paper where every question got the same subject. Numbers follow the order of the questions in this paper. Leave all empty to change nothing.</p>
       ${sectionRowsHTML("rsSec",t.exam)}</div>`:""}
     <label>When should students see the answer key &amp; solutions?</label>
-    <select id="rsSolMode" onchange="el('rsSolAtRow').style.display=this.value==='scheduled'?'block':'none'">
+    <select id="rsSolMode" onchange="solModeChanged('rsSolMode','rsSolAtRow','rsSolAt','rsEnd')">
       <option value="immediate" ${!t.solutionsAt?"selected":""}>Immediately after each student submits</option>
       <option value="scheduled" ${t.solutionsAt?"selected":""}>Only from a specific date &amp; time</option></select>
-    <div id="rsSolAtRow" style="display:${t.solutionsAt?"block":"none"}"><label>Show solutions from</label>${dtPair("rsSolAt",toLocal(t.solutionsAt))}</div>
+    <div id="rsSolAtRow" style="display:${t.solutionsAt?"block":"none"}"><label>Show solutions from <span class="muted" style="font-weight:400">— starts at the time the paper closes; change it if you want</span></label>${dtPair("rsSolAt",toLocal(t.solutionsAt))}</div>
     <div class="msg" id="rsMsg"></div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="rsBtn" onclick="saveReschedule('${id}')">Save changes</button></div>`,true);
@@ -3741,18 +3776,14 @@ function openCreateTest(){
     <select id="tSolMode" onchange="tSolModeChanged()">
       <option value="immediate">Immediately after each student submits</option>
       <option value="scheduled">Only from a specific date &amp; time</option></select>
-    <div id="tSolAtRow" style="display:none"><label>Show solutions from</label>${dtPair("tSolAt")}</div>
+    <div id="tSolAtRow" style="display:none"><label>Show solutions from <span class="muted" style="font-weight:400">— starts at the time the paper closes; change it if you want</span></label>${dtPair("tSolAt")}</div>
     <div class="note" id="tMark"></div>
     <div class="msg" id="tMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="tSaveBtn" onclick="createTest()">Create &amp; schedule</button></div>`,true);
   tRebuild();
 }
-function tSolModeChanged(){
-  const show=val("tSolMode")==="scheduled";
-  el("tSolAtRow").style.display=show?"block":"none";
-  if(show && !val("tSolAt") && val("tEnd")) el("tSolAt").value=val("tEnd"); // convenience: default to the test's Closes time
-}
+function tSolModeChanged(){ solModeChanged("tSolMode","tSolAtRow","tSolAt","tEnd"); }
 function clsScopeSelect(id){return `<select id="${id}"><option value="11">Class 11</option><option value="12">Class 12</option><option value="both">Both 11 &amp; 12</option></select>`;}
 function tRebuild(){
   const type=val("tType"),exam=val("tExam");
