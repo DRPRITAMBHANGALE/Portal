@@ -310,9 +310,11 @@ body.rotate-ok #rotateAsk{display:none!important}
     <div class="brand" style="justify-content:center"><img class="logo-img login-logo" alt="Sonam Tuitions"/></div>
     <h2>Sign in</h2>
     <p class="lede">Use the email &amp; password issued by your centre.</p>
-    <label>Email or Login ID</label><input type="text" id="loginEmail" placeholder="your email or username" autocomplete="username"/>
-    <label>Password</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password"/>
-    <button class="btn full" id="loginBtn" onclick="doLogin()">Sign in</button>
+    <form id="loginForm" autocomplete="on" onsubmit="doLogin();return false">
+      <label>Email or Login ID</label><input type="text" id="loginEmail" name="username" placeholder="your email or username" autocomplete="username"/>
+      <label>Password</label><input type="password" id="loginPass" name="password" placeholder="••••••••" autocomplete="current-password"/>
+      <button class="btn full" id="loginBtn" type="submit">Sign in</button>
+    </form>
     <p style="text-align:center;margin-top:12px"><a href="javascript:void(0)" onclick="showForgotPassword()" style="font-size:13px;color:var(--accent);text-decoration:underline">Forgot your password?</a></p>
     <div class="msg" id="authMsg"></div>
     <p class="muted" style="margin-top:18px;text-align:center;font-size:12.5px">
@@ -955,7 +957,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: refusals kept permanently"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: proper sign-in form"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
