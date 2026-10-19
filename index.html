@@ -955,7 +955,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: who was turned away"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: refusals kept permanently"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -4309,7 +4309,7 @@ async function pageStudents(){
         <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <b style="font-size:14px">Who has been turned away</b>
           <button class="btn ghost sm" onclick="loadTurnedAway()">↻ Refresh</button></div>
-        <p class="muted" style="margin:4px 0 8px;font-size:12.5px">Every student refused by this rule, grouped by the connection they were on. If a whole class appears here on one connection, that is the centre's own line and its address has changed — add it and they are back in.</p>
+        <p class="muted" style="margin:4px 0 8px;font-size:12.5px">Every student refused by this rule, grouped by the connection they were on, kept permanently. If a whole class appears here on one connection, that is the centre's own line and its address has changed — add it and they are back in.</p>
         <div id="cnRefused" class="muted" style="font-size:12.5px">Loading…</div>
       </div>
       <p class="muted" style="margin:10px 0 0;font-size:12px">A centre with a router in every classroom usually needs registering only once, because the rooms share the centre's one connection — press “Register this connection” in a second room and it will simply tell you it is already registered. If a room turns out to be on a line of its own, registering there adds it as well; a centre can hold up to 20.<br>
@@ -5137,33 +5137,35 @@ function netRangeOf(key){ return cnIsV4(key)?key.split(".").slice(0,3).join(".")
 function cnRegistered(key){
   return Object.keys(CN_CACHE).filter(id=>((CN_CACHE[id]||{}).nets||[]).some(n=>n===key||(n.endsWith("/24")&&cnIsV4(key)&&netRangeOf(key)===n)));
 }
-/* Every student the rule has refused, grouped by the connection they were on. */
+/* Every student the rule has turned away. These are kept permanently and are never written over,
+   so a morning's trouble can still be looked at in the evening. */
 async function loadTurnedAway(){
   const box=el("cnRefused"); if(!box) return;
   box.innerHTML="Looking…";
   try{
-    const snap=await db.collection("examPasses").orderBy("at","desc").limit(150).get();
+    const snap=await db.collection("centreRefusals").orderBy("at","desc").limit(200).get();
     const g={};
     snap.forEach(d=>{
-      const x=d.data()||{}, key=netKeyOf(x.ip); if(!key) return;
+      const x=d.data()||{}, key=x.key||netKeyOf(x.ip); if(!key) return;
       if(ME.role!=="master" && x.centreId!==ME.centreId) return;
       const k=(x.centreId||"")+"|"+key;
-      const e=g[k]||(g[k]={centreId:x.centreId||"",key,turned:0,letIn:0,who:{},last:null});
-      if(x.allow===false) e.turned++; else e.letIn++;
+      const e=g[k]||(g[k]={centreId:x.centreId||"",key,n:0,who:{},last:null,against:x.registered||[]});
+      e.n++;
       if(x.name) e.who[x.name]=1;
       const t=x.at&&x.at.toDate?x.at.toDate():null;
       if(t&&(!e.last||t>e.last)) e.last=t;
     });
-    const rows=Object.keys(g).map(k=>g[k]).filter(r=>r.turned>0).sort((a,b)=>(b.last||0)-(a.last||0)||b.turned-a.turned);
-    if(!rows.length){ box.innerHTML=`<span class="muted">Nobody has been turned away. ${snap.size?`The last ${snap.size} student${snap.size===1?"":"s"} to start a paper ${snap.size===1?"was":"were"} all let in.`:"No test has been started under this rule yet."}</span>`; return; }
+    const rows=Object.keys(g).map(k=>g[k]).sort((a,b)=>(b.last||0)-(a.last||0)||b.n-a.n);
+    if(!rows.length){ box.innerHTML=`<span class="muted">No student has been turned away. Nothing has been refused since this was switched on.</span>`; return; }
     box.innerHTML=rows.map(r=>{
       const on=cnRegistered(r.key), range=netRangeOf(r.key), names=Object.keys(r.who);
       return `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
           <div><b style="font-family:'Courier New',monospace">${esc(r.key)}</b>
-            ${on.length?`<span class="tag live">already registered</span>`:`<span class="tag danger">not registered</span>`}
-            <br><span class="muted">${r.turned} student${r.turned===1?"":"s"} turned away${r.letIn?`, ${r.letIn} let in`:""} · ${esc(centreName(r.centreId))}${r.last?" · last "+fmtDate(r.last):""}</span>
-            ${names.length?`<br><span class="muted">${esc(names.slice(0,6).join(", "))}${names.length>6?" and "+(names.length-6)+" more":""}</span>`:""}</div>
+            ${on.length?`<span class="tag live">registered since</span>`:`<span class="tag danger">not registered</span>`}
+            <br><span class="muted">${r.n} student${r.n===1?"":"s"} turned away · ${esc(centreName(r.centreId))}${r.last?" · last "+fmtDate(r.last):""}</span>
+            ${names.length?`<br><span class="muted">${esc(names.slice(0,6).join(", "))}${names.length>6?" and "+(names.length-6)+" more":""}</span>`:""}
+            ${(r.against||[]).length?`<br><span class="muted" style="font-size:11.5px">compared against ${esc((r.against||[]).join(", "))}</span>`:`<br><span class="muted" style="font-size:11.5px">nothing was registered for this centre at the time</span>`}</div>
           ${ME.role==="master"&&!on.length?`<div class="row" style="gap:6px">
             <button class="btn sm" onclick="addCentreNet('${r.centreId}','${esc(r.key)}')">+ Add this connection</button>
             ${range?`<button class="btn ghost sm" onclick="addCentreNet('${r.centreId}','${esc(range)}')" title="Covers every address in this block — use it when the centre's address keeps changing">+ Add the whole range</button>`:""}
