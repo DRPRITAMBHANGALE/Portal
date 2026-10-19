@@ -957,7 +957,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: proper sign-in form"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: clear the turned-away list"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -4314,6 +4314,13 @@ async function pageStudents(){
         <p class="muted" style="margin:4px 0 8px;font-size:12.5px">Every student refused by this rule, grouped by the connection they were on, kept permanently. If a whole class appears here on one connection, that is the centre's own line and its address has changed — add it and they are back in.</p>
         <div id="cnRefused" class="muted" style="font-size:12.5px">Loading…</div>
       </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <b style="font-size:14px">The last papers started — and why each one opened</b>
+          <button class="btn ghost sm" onclick="loadRecentStarts()">↻ Refresh</button></div>
+        <p class="muted" style="margin:4px 0 8px;font-size:12.5px">If somebody got in who should not have, the reason is on their line. Check it against the centre you switched on: the rule is judged against <b>the student's own centre</b>, not the centre that set the paper.</p>
+        <div id="cnStarts" class="muted" style="font-size:12.5px">Loading…</div>
+      </div>
       <p class="muted" style="margin:10px 0 0;font-size:12px">A centre with a router in every classroom usually needs registering only once, because the rooms share the centre's one connection — press “Register this connection” in a second room and it will simply tell you it is already registered. If a room turns out to be on a line of its own, registering there adds it as well; a centre can hold up to 20.<br>
       Students must be on the centre's WiFi: mobile data is refused. Two things turn a centre's own students away. <b>The centre's address changed by itself</b> — broadband lines are given a new one every so often, and no one has to touch anything for it to happen; the turned-away list below shows it as one connection with the whole class on it, and “Add the whole range” stops it recurring. <b>Or the phone is not really on the WiFi</b> — Android keeps mobile data running alongside it and quietly switches over when the WiFi has no internet, so the phone still shows WiFi while the test sees mobile data. In that case the student must switch mobile data off and rejoin the WiFi.<br>
       If a class is ever stuck, switch that centre back to “Anywhere”, let them write the paper, and put it right afterwards.</p></div>
@@ -4333,7 +4340,7 @@ async function pageStudents(){
       <button class="btn ghost" onclick="openBulkStudents()">⬆ Upload students (Excel)</button>
       <button class="btn" onclick="openAddStudent()">+ Add student</button></div>
     <div class="card"><div id="stuList" class="muted">Loading…</div></div>`);
-  loadStudents(); loadCentreNets().then(loadTurnedAway); if(ME.role==="master"){ loadPracticeAccess(); loadSendMarksAccess(); }
+  loadStudents(); loadCentreNets().then(()=>{ loadTurnedAway(); loadRecentStarts(); }); if(ME.role==="master"){ loadPracticeAccess(); loadSendMarksAccess(); }
   if(ME.role==="master") loadAdmins();
 }
 
@@ -5139,8 +5146,39 @@ function netRangeOf(key){ return cnIsV4(key)?key.split(".").slice(0,3).join(".")
 function cnRegistered(key){
   return Object.keys(CN_CACHE).filter(id=>((CN_CACHE[id]||{}).nets||[]).some(n=>n===key||(n.endsWith("/24")&&cnIsV4(key)&&netRangeOf(key)===n)));
 }
+/* Every paper started under this rule, with the reason it was allowed or refused written out.
+   This is the screen to look at when somebody got in who should have been stopped. */
+async function loadRecentStarts(){
+  const box=el("cnStarts"); if(!box) return;
+  box.innerHTML="Looking…";
+  try{
+    const snap=await db.collection("examPasses").orderBy("at","desc").limit(40).get();
+    const rows=[];
+    snap.forEach(d=>{
+      const x=d.data()||{};
+      if(ME.role!=="master" && x.centreId!==ME.centreId) return;
+      rows.push(x);
+    });
+    if(!rows.length){ box.innerHTML=`<span class="muted">No paper has been started yet.</span>`; return; }
+    box.innerHTML=rows.map(x=>{
+      const key=x.key||netKeyOf(x.ip), letIn=x.allow!==false;
+      let why,bad=false;
+      if(!x.centreId){ why="this student's profile has no centre on it, so there is no centre connection to judge them against — the rule cannot apply to them"; bad=true; }
+      else if(x.enforce!==true){ why=`“Centre only” was switched OFF for ${centreName(x.centreId)} at that moment`; bad=letIn; }
+      else if(x.matched===true){ why=`this connection is registered for ${centreName(x.centreId)}`; bad=letIn; }
+      else why=`not on ${centreName(x.centreId)}'s connection`;
+      return `<div style="padding:7px 0;border-bottom:1px solid var(--line)">
+        <div><b>${esc(x.name||"a student")}</b> <span class="muted">· ${esc(x.centreId?centreName(x.centreId):"no centre set")}${x.at&&x.at.toDate?" · "+fmtDate(x.at.toDate()):""}</span>
+          ${letIn?`<span class="tag live">let in</span>`:`<span class="tag danger">turned away</span>`}</div>
+        <div class="muted" style="font-family:'Courier New',monospace">${esc(key||"—")}</div>
+        <div style="${bad?"color:var(--danger)":"color:var(--ink-soft)"}">${bad?"⚠ ":""}${esc(why)}</div>
+      </div>`;
+    }).join("");
+  }catch(e){ box.innerHTML=`<span style="color:var(--danger)">Could not read the list: ${esc(errMsg(e))}</span>`; }
+}
 /* Every student the rule has turned away. These are kept permanently and are never written over,
    so a morning's trouble can still be looked at in the evening. */
+let TA_GROUPS=[];
 async function loadTurnedAway(){
   const box=el("cnRefused"); if(!box) return;
   box.innerHTML="Looking…";
@@ -5151,23 +5189,31 @@ async function loadTurnedAway(){
       const x=d.data()||{}, key=x.key||netKeyOf(x.ip); if(!key) return;
       if(ME.role!=="master" && x.centreId!==ME.centreId) return;
       const k=(x.centreId||"")+"|"+key;
-      const e=g[k]||(g[k]={centreId:x.centreId||"",key,n:0,who:{},last:null,against:x.registered||[]});
-      e.n++;
+      const e=g[k]||(g[k]={centreId:x.centreId||"",key,n:0,who:{},last:null,against:x.registered||[],ids:[]});
+      e.n++; e.ids.push(d.id);
       if(x.name) e.who[x.name]=1;
       const t=x.at&&x.at.toDate?x.at.toDate():null;
       if(t&&(!e.last||t>e.last)) e.last=t;
     });
-    const rows=Object.keys(g).map(k=>g[k]).sort((a,b)=>(b.last||0)-(a.last||0)||b.n-a.n);
-    if(!rows.length){ box.innerHTML=`<span class="muted">No student has been turned away. Nothing has been refused since this was switched on.</span>`; return; }
-    box.innerHTML=rows.map(r=>{
+    TA_GROUPS=Object.keys(g).map(k=>g[k]).sort((a,b)=>(b.last||0)-(a.last||0)||b.n-a.n);
+    if(!TA_GROUPS.length){ box.innerHTML=`<span class="muted">No student has been turned away. Nothing has been refused since this was switched on.</span>`; return; }
+    const head=ME.role==="master"?`<div class="row" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:6px">
+        <label style="display:flex;gap:7px;align-items:center;margin:0;font-weight:400;font-size:12.5px">
+          <input type="checkbox" id="taAll" style="width:auto;margin:0" onchange="taToggleAll(this.checked)"/> Select all</label>
+        <button class="btn ghost sm" id="taDelBtn" onclick="taRemoveSelected()">🗑 Remove the ticked ones</button>
+      </div>`:"";
+    box.innerHTML=head+TA_GROUPS.map((r,ix)=>{
       const on=cnRegistered(r.key), range=netRangeOf(r.key), names=Object.keys(r.who);
       return `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
-          <div><b style="font-family:'Courier New',monospace">${esc(r.key)}</b>
+          <div style="display:flex;gap:9px;align-items:flex-start">
+            ${ME.role==="master"?`<input type="checkbox" class="tachk" value="${ix}" style="width:auto;margin-top:4px" onchange="taSyncAll()"/>`:""}
+            <div><b style="font-family:'Courier New',monospace">${esc(r.key)}</b>
             ${on.length?`<span class="tag live">registered since</span>`:`<span class="tag danger">not registered</span>`}
             <br><span class="muted">${r.n} student${r.n===1?"":"s"} turned away · ${esc(centreName(r.centreId))}${r.last?" · last "+fmtDate(r.last):""}</span>
             ${names.length?`<br><span class="muted">${esc(names.slice(0,6).join(", "))}${names.length>6?" and "+(names.length-6)+" more":""}</span>`:""}
             ${(r.against||[]).length?`<br><span class="muted" style="font-size:11.5px">compared against ${esc((r.against||[]).join(", "))}</span>`:`<br><span class="muted" style="font-size:11.5px">nothing was registered for this centre at the time</span>`}</div>
+          </div>
           ${ME.role==="master"&&!on.length?`<div class="row" style="gap:6px">
             <button class="btn sm" onclick="addCentreNet('${r.centreId}','${esc(r.key)}')">+ Add this connection</button>
             ${range?`<button class="btn ghost sm" onclick="addCentreNet('${r.centreId}','${esc(range)}')" title="Covers every address in this block — use it when the centre's address keeps changing">+ Add the whole range</button>`:""}
@@ -5175,6 +5221,33 @@ async function loadTurnedAway(){
         </div></div>`;
     }).join("");
   }catch(e){ box.innerHTML=`<span style="color:var(--danger)">Could not read the list: ${esc(errMsg(e))}</span>`; }
+}
+function taBoxes(){ return [...document.querySelectorAll(".tachk")]; }
+function taToggleAll(on){ taBoxes().forEach(c=>{ c.checked=on; }); }
+/* keeps the box at the top honest: ticked when every line is, cleared when none is, and in the
+   in-between state when only some are */
+function taSyncAll(){
+  const all=taBoxes(), n=all.filter(c=>c.checked).length, head=el("taAll");
+  if(!head) return;
+  head.checked=n>0&&n===all.length;
+  head.indeterminate=n>0&&n<all.length;
+}
+async function taRemoveSelected(){
+  const picked=taBoxes().filter(c=>c.checked).map(c=>TA_GROUPS[parseInt(c.value)]).filter(Boolean);
+  if(!picked.length){ alert("Tick the lines you want removed first."); return; }
+  const ids=picked.reduce((a,r)=>a.concat(r.ids),[]);
+  if(!confirm(`Remove ${ids.length} note${ids.length===1?"":"s"} from this list?\n\n`
+    +`This only clears the record of those students having been turned away. It does not let anybody in, and it does not change which connections are registered for a centre.`)) return;
+  setBtn("taDelBtn",true,"Removing…");
+  try{
+    for(let i=0;i<ids.length;i+=400){
+      const batch=db.batch();
+      ids.slice(i,i+400).forEach(id=>batch.delete(db.collection("centreRefusals").doc(id)));
+      await batch.commit();
+    }
+    await loadTurnedAway();
+  }catch(e){ alert("Could not remove them: "+errMsg(e)); }
+  setBtn("taDelBtn",false,"🗑 Remove the ticked ones");
 }
 /* Add a connection to a centre without having to be standing in the room. */
 async function addCentreNet(centreId,key){
@@ -5191,7 +5264,7 @@ async function addCentreNet(centreId,key){
   try{
     await db.collection("centreNetworks").doc(centreId).set({nets},{merge:true});
     logCentreUpdate("centre_network_registered",centreId,{detail:key});
-    await loadCentreNets(); loadTurnedAway();
+    await loadCentreNets(); loadTurnedAway(); loadRecentStarts();
   }catch(e){ alert("Could not add it: "+errMsg(e)); }
 }
 let CN_CACHE={};
