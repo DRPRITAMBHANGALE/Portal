@@ -920,6 +920,7 @@ const STAFF_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
   {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
+  {id:"proofread",label:"Proofread a paper",ic:"🔎"},
   {id:"answeraudit",label:"Answer Key Audit",ic:"🩺"},{id:"dupfinder",label:"Duplicate Finder",ic:"🧬"},
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
   {id:"students",label:"Students",ic:"☺"},{id:"searchstudent",label:"Search Student",ic:"🔍"},
@@ -954,7 +955,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: pictures before question numbers"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: paper proofreading"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -962,7 +963,7 @@ function go(page){
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
-  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
+  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,proofread:pageProofread,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
     searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,absentees:pageAbsentees,sendmarks:pageSendMarks,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,pasttests:pagePastTests,history:pageHistory})[page]();
 }
 
@@ -2557,6 +2558,7 @@ function openSelfUpload(){
     <div class="msg" id="suActionMsg"></div>
     <div class="row end" style="margin-top:16px;gap:8px">
       <button class="btn ghost" onclick="closeModal()">Close</button>
+      ${ME.role==="master"?`<button class="btn ghost" id="suPfBtn" onclick="proofreadSelfUpload()" disabled>🔎 Proofread this paper</button>`:""}
       <button class="btn" id="suTestBtn" onclick="selfUploadFinalize()" disabled>✓ Save as final paper</button>
     </div>`,true);
   fillSectionRows("suExam","suSections","suSec");
@@ -2625,6 +2627,7 @@ async function handleSelfUpload(){
         :` 📘 No solutions section found in this file — students will see the right answer but no explanation. (The reader looks for a heading such as "Hints & Solutions" or "Solutions", then items starting "1. Ans. (b)".)`),
       "ok");
     el("suTestBtn").disabled=!SELF_UPLOAD_DRAFT_ID;
+    if(el("suPfBtn")) el("suPfBtn").disabled=!SELF_UPLOAD_LIVE_IDS.length;
     { const subs=new Set(SELF_UPLOAD_PARSED.map(q=>q.subject));
       if(subs.size===1&&examSubjects(val("suExam")).length>1&&SELF_UPLOAD_PARSED.length>40)
         setMsg("suActionMsg",(el("suActionMsg").textContent||"")+`  ⚠ All questions were filed under ${[...subs][0]}. If this is a mixed paper, open “Subjects by question number” below and fill in the ranges — they are applied when you click “Save as final paper”.`,"warn"); }
@@ -3287,6 +3290,335 @@ async function aiVerifyAudit(){
   }
   setBtn("aiVerifyBtn",false,`🤖 AI-verify remaining flagged questions`);
   setMsg("aiVerifyMsg",`Done — ${confirmed} confirmed as genuine mismatches, ${cleared} cleared as false alarms${failed?`, ${failed} couldn't be checked (network/AI error — try again for those)`:""}.`,"ok");
+}
+
+/* ===== PROOFREAD A PAPER =====================================================================
+   Pass 1 — the quick check. Free, instant, and needs no understanding of the question: an option
+   that came through blank, an equation or picture the Word file never gave up, a question with no
+   correct answer marked, a question that mentions a figure that isn't there, the same question
+   twice in one paper.
+   Pass 2 — the AI reading. Each question is worked out and the marked answer, the options and the
+   wording are judged against it. This is where a key that is off by one letter, an option pasted
+   from the question above, or a cross product that arrived as a dot product is caught.
+   Neither pass changes anything. Every finding carries its own button.
+   ========================================================================================== */
+const PF_CHECKS=[
+  {k:"answer",  label:"Wrong answer key",          hint:"works each question out and checks the marked answer against it", on:true},
+  {k:"options", label:"Options that don't fit",    hint:"two options the same, more than one correct, none correct, an option from another question", on:true},
+  {k:"text",    label:"Incomplete questions",      hint:"cut off mid-sentence, a needed value missing, a figure referred to but not there", on:true},
+  {k:"maths",   label:"Garbled maths & units",     hint:"a lost power or subscript, a cross product read as a dot product, mL for L", on:true},
+  {k:"subject", label:"Filed under the wrong subject", hint:"a Chemistry question sitting in the Physics block", on:false},
+  {k:"language",label:"Spelling & grammar",        hint:"only where the mistake changes the meaning", on:false}
+];
+const PF_KIND={answer:"Answer key",options:"Options",text:"Question text",maths:"Maths / units",subject:"Subject",
+  language:"Language",structure:"Not complete",unreadable:"Didn't read in",figure:"Missing picture",duplicate:"Duplicate"};
+const PF_SEV={high:0,medium:1,low:2};
+const PF_WHERE={question:"text",optionA:"opt0",optionB:"opt1",optionC:"opt2",optionD:"opt3",solution:"solution"};
+function pfIsNum(q){ return q.answerType==="numeric"||q.numerical; }
+function pfMarked(q){ return pfIsNum(q)?String(q.numAnswer==null?"":q.numAnswer):("ABCD"[q.correct]||""); }
+/* What the AI is shown: a picture becomes the word [diagram] (it is there, just not as text), and
+   anything the Word reader couldn't translate becomes [missing] so it is not mistaken for wording. */
+function pfForAI(t){
+  return String(t||"").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ")
+    .replace(/⟦(?:[FE]\d+|FIG\?|EQ\?)⟧/g," [missing] ").replace(/\s+/g," ").trim();
+}
+function pfSevTag(sev){
+  const c=sev==="high"?"danger":(sev==="medium"?"pending":"");
+  const w=sev==="high"?"Must fix":(sev==="medium"?"Should fix":"Minor");
+  return `<span class="tag ${c}">${w}</span>`;
+}
+function pfWorst(issues){ return (issues||[]).reduce((w,i)=>Math.min(w,PF_SEV[i.severity]==null?1:PF_SEV[i.severity]),2); }
+
+/* ---- Pass 1: the quick check ---------------------------------------------------------------- */
+function pfQuickCheck(qs){
+  const out={};
+  const add=(id,kind,severity,detail,where,suggest)=>{
+    (out[id]=out[id]||[]).push({kind,severity,detail,where:where||"",suggest:suggest||"",quick:true});
+  };
+  qs.forEach(q=>{
+    const text=String(q.text||"");
+    const bare=text.replace(/\[\[img:[^\]]*\]\]/g,"").replace(/⟦[^⟧]*⟧/g,"").trim();
+    if(!text.trim()){ add(q.id,"structure","high","This question has no text at all."); return; }
+    const lost=text.match(/⟦(?:[FE]\d+|FIG\?|EQ\?)⟧/g)||[];
+    if(lost.length) add(q.id,"unreadable","high",`${lost.length} equation or picture couldn't be read out of the Word file, so that part of the question is missing.`);
+    if(bare.length<18 && !/\[\[img:/.test(text))
+      add(q.id,"text","high","The question text is too short to be a whole question — it looks cut off.");
+    if(pfIsNum(q)){
+      if(q.numAnswer==null||q.numAnswer==="") add(q.id,"structure","high","The student types a number for this one, but no correct number is saved.");
+    }else{
+      const opts=(q.options||[]).map(o=>String(o==null?"":o).trim());
+      const blank=[0,1,2,3].filter(i=>!opts[i]).length;
+      if(blank) add(q.id,"structure","high",blank===4?"None of the four options came through.":`${blank} of the four options came through blank.`);
+      const seen={};
+      opts.forEach((o,i)=>{ const k=o.toLowerCase().replace(/\s+/g,""); if(!k) return;
+        if(seen[k]!=null) add(q.id,"options","high",`Option ${"ABCD"[seen[k]]} and option ${"ABCD"[i]} are exactly the same text.`);
+        else seen[k]=i; });
+      if(q.correct==null||q.correct<0||q.correct>3) add(q.id,"structure","high","No correct option is marked for this question.");
+    }
+    if(/\b(figure|fig\.|diagram|graph|circuit|shown below|shown in the|given below|as shown)\b/i.test(bare) && !/\[\[img:/.test(text))
+      add(q.id,"figure","medium","The question mentions a figure or diagram, but no picture is attached to it.");
+  });
+  // the same question twice in one paper
+  const fp=qs.map(q=>({q,f:qFingerprint(String(q.text||"").replace(/\[\[img:[^\]]*\]\]/g," "))}));
+  for(let i=0;i<fp.length;i++) for(let j=i+1;j<fp.length;j++){
+    const ov=qOverlap(fp[i].f,fp[j].f);
+    if(ov>=0.9 || (ov>=0.82 && qSameNumbers(fp[i].f,fp[j].f)))
+      add(fp[j].q.id,"duplicate","medium",`This looks like the same question as Q${fp[i].q.qNum||(i+1)} in this paper.`);
+  }
+  return out;
+}
+
+/* ---- the screen ----------------------------------------------------------------------------- */
+let PF_QS=[], PF_FINDINGS={}, PF_TITLE="", PF_PRESET=null, PF_RAN_AI=false, PF_NOSOL=0;
+function pageProofread(){
+  setView(`<h1 class="page-title">Proofread a paper</h1>
+    <p class="page-sub">Reads a paper back question by question, the way you would before handing it out, and lists what looks wrong — a marked answer that doesn't match the working, an option that belongs to another question, a question cut short, a formula the Word file mangled. <b>Nothing is changed until you press a button on it.</b></p>
+    <div class="card">
+      <label>Which paper?</label>
+      <select id="pfTest"><option value="">Loading your papers…</option></select>
+      <div style="font-weight:600;margin-top:14px">What should the AI look for?</div>
+      <div class="grid cols-2" style="margin-top:6px">${PF_CHECKS.map(c=>
+        `<label style="display:flex;gap:8px;align-items:flex-start;margin:0;font-weight:400">
+           <input type="checkbox" class="pfchk" value="${c.k}" style="width:auto;margin-top:4px" ${c.on?"checked":""}/>
+           <span><b>${c.label}</b><br><span class="muted" style="font-size:12px">${c.hint}</span></span></label>`).join("")}</div>
+      <p class="muted" style="font-size:12.5px;margin-top:12px">The quick check — a blank option, an equation that didn't come through, a missing picture, the same question twice — always runs first and is free. The AI reading costs a small amount of your Anthropic credit and takes roughly a minute for a 180-question paper.</p>
+      <div class="row" style="margin-top:12px;gap:8px">
+        <button class="btn" id="pfBtn" onclick="pfStart(false)">🔎 Proofread this paper</button>
+        <button class="btn ghost" id="pfQuickBtn" onclick="pfStart(true)">⚡ Quick check only (free)</button>
+      </div>
+      <div class="msg" id="pfMsg" style="margin-top:10px"></div>
+    </div>
+    <div id="pfResults" style="margin-top:16px"></div>`);
+  pfFillPapers();
+}
+async function pfFillPapers(){
+  try{
+    const snap=await db.collection("tests").orderBy("createdAt","desc").limit(80).get();
+    const mine=snap.docs.filter(d=>{ const t=d.data();
+      return ME.role==="master"||t.scope===ME.centreId||t.scope==="draft_"+ME.centreId
+        ||t.finalScope===ME.centreId||(t.centres||[]).includes(ME.centreId); });
+    el("pfTest").innerHTML=mine.length
+      ? mine.map(d=>{ const t=d.data(), n=((t.qOrder&&t.qOrder.length?t.qOrder:t.questionIds)||[]).length;
+          return `<option value="${d.id}">${esc(t.title)} — ${n} question${n===1?"":"s"}${t.draft?" · draft":""}</option>`;}).join("")
+      : `<option value="">You haven't made any papers yet</option>`;
+    if(PF_PRESET){
+      const pre=PF_PRESET; PF_PRESET=null;
+      if([...el("pfTest").options].some(o=>o.value===pre.testId)) el("pfTest").value=pre.testId;
+      setMsg("pfMsg",`Proofreading the paper you have just uploaded — ${pre.ids.length} question${pre.ids.length===1?"":"s"}.`,"ok");
+      pfStart(false,pre.ids,pre.title);
+    }
+  }catch(e){ el("pfTest").innerHTML=`<option value="">Couldn't load your papers</option>`; setMsg("pfMsg",errMsg(e),"err"); }
+}
+/* Straight from the upload screen, while the file is still open in Word next to you. */
+function proofreadSelfUpload(){
+  if(!SELF_UPLOAD_LIVE_IDS.length){ alert("There is nothing to proofread yet — choose the Word file first."); return; }
+  PF_PRESET={ids:SELF_UPLOAD_LIVE_IDS.slice(),testId:SELF_UPLOAD_DRAFT_ID||"",
+    title:(val("suTitle")||"").trim()||"this upload"};
+  closeModal(); go("proofread");
+}
+function pfSelectedChecks(){ return [...document.querySelectorAll(".pfchk")].filter(c=>c.checked).map(c=>c.value); }
+
+async function pfStart(quickOnly,presetIds,presetTitle){
+  let ids=presetIds||null, title=presetTitle||"";
+  if(!ids){
+    const tid=val("pfTest");
+    if(!tid){ setMsg("pfMsg","Choose a paper first.","err"); return; }
+    try{
+      const t=(await db.collection("tests").doc(tid).get()).data()||{};
+      ids=((t.qOrder&&t.qOrder.length?t.qOrder:t.questionIds)||[]).filter(Boolean);
+      title=t.title||"";
+    }catch(e){ setMsg("pfMsg",errMsg(e),"err"); return; }
+  }
+  if(!ids.length){ setMsg("pfMsg","This paper has no questions in it yet.","err"); return; }
+  const checks=quickOnly?[]:pfSelectedChecks();
+  if(!quickOnly&&!checks.length){ setMsg("pfMsg","Tick at least one thing for the AI to look for, or use the free quick check.","err"); return; }
+  PF_TITLE=title; PF_RAN_AI=!quickOnly;
+  setBtn("pfBtn",true,"Reading the paper…"); setBtn("pfQuickBtn",true,"⚡ Quick check only (free)");
+  el("pfResults").innerHTML="";
+  try{
+    setMsg("pfMsg",`Fetching ${ids.length} question${ids.length===1?"":"s"}…`,"ok");
+    PF_QS=(await getQuestionDocsInOrder(ids)).filter(Boolean);
+    PF_NOSOL=PF_QS.filter(q=>!String(q.solution||"").trim()).length;
+    // findings the teacher has already waved through on an earlier run
+    let ignored={};
+    try{
+      const snaps=[]; for(let i=0;i<PF_QS.length;i+=25)
+        snaps.push(...await Promise.all(PF_QS.slice(i,i+25).map(q=>db.collection("proofreadIgnored").doc(q.id).get().catch(()=>null))));
+      snaps.forEach(d=>{ if(d&&d.exists) ignored[d.id]=new Set((d.data().kinds)||[]); });
+    }catch(_){}
+    PF_FINDINGS=pfQuickCheck(PF_QS);
+    if(!quickOnly){
+      const batches=[]; for(let i=0;i<PF_QS.length;i+=8) batches.push(PF_QS.slice(i,i+8));
+      let done=0,failed=0;
+      for(const batch of batches){
+        setMsg("pfMsg",`AI reading question ${done+1}–${Math.min(done+batch.length,PF_QS.length)} of ${PF_QS.length}…`,"ok");
+        try{
+          const data=await fnCall({action:"proofreadQuestions",checks,
+            items:batch.map(q=>({id:q.id,num:q.qNum||null,subject:q.subject||"",text:pfForAI(q.text),
+              options:pfIsNum(q)?[]:(q.options||[]).map(pfForAI),markedAnswer:pfMarked(q),solution:pfForAI(q.solution).slice(0,900)}))});
+          (data.findings||[]).forEach(f=>{
+            (f.issues||[]).forEach(i=>{ (PF_FINDINGS[f.id]=PF_FINDINGS[f.id]||[]).push(i); });
+          });
+        }catch(e){ failed+=batch.length; console.warn("proofread batch failed",e); }
+        done+=batch.length;
+      }
+      if(failed) setMsg("pfMsg",`${failed} question${failed===1?"":"s"} couldn't be read by the AI (network or credit problem) — run it again for those.`,"warn");
+    }
+    // drop anything already waved through
+    Object.keys(PF_FINDINGS).forEach(id=>{
+      const ig=ignored[id]; if(!ig) return;
+      PF_FINDINGS[id]=PF_FINDINGS[id].filter(i=>!ig.has(i.kind));
+      if(!PF_FINDINGS[id].length) delete PF_FINDINGS[id];
+    });
+    pfRender(quickOnly);
+  }catch(e){ el("pfResults").innerHTML=errBox(e); setMsg("pfMsg",errMsg(e),"err"); }
+  setBtn("pfBtn",false,"🔎 Proofread this paper"); setBtn("pfQuickBtn",false,"⚡ Quick check only (free)");
+}
+
+function pfRender(quickOnly){
+  const flagged=PF_QS.filter(q=>(PF_FINDINGS[q.id]||[]).length)
+    .sort((a,b)=>pfWorst(PF_FINDINGS[a.id])-pfWorst(PF_FINDINGS[b.id])||((a.qNum||0)-(b.qNum||0)));
+  const total=flagged.reduce((n,q)=>n+PF_FINDINGS[q.id].length,0);
+  const high=flagged.filter(q=>pfWorst(PF_FINDINGS[q.id])===0).length;
+  setMsg("pfMsg",`Read ${PF_QS.length} question${PF_QS.length===1?"":"s"}`
+    +(quickOnly?" (quick check only — the AI reading was not run)":"")
+    +`. ${total?`Found ${total} thing${total===1?"":"s"} to look at across ${flagged.length} question${flagged.length===1?"":"s"}${high?`, ${high} of them must be fixed`:""}.`:"Nothing looks wrong."}`
+    +(PF_NOSOL?` ${PF_NOSOL} question${PF_NOSOL===1?" has":"s have"} no solution text.`:""),
+    high?"err":(total?"warn":"ok"));
+  if(!flagged.length){
+    el("pfResults").innerHTML=`<div class="card">${emptyState("Nothing to fix",
+      quickOnly?"The quick check found nothing. Run the full proofread to have the AI work each question out as well.":"Every question was worked out and the marked answers, options and wording all hold up.")}</div>`;
+    return;
+  }
+  el("pfResults").innerHTML=`<div class="card" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">
+      <p style="margin:0 0 4px"><b>How to use this list</b></p>
+      <p class="muted" style="margin:0 0 10px">Work down it — the ones that must be fixed are first. Each note has its own button: press it to put the correction into the question here in the portal. If you would rather correct the Word file and upload it again, print the list and keep it beside you.</p>
+      <div class="row" style="gap:8px"><button class="btn ghost sm" onclick="pfPrintList()">🖶 Print the list of fixes</button></div>
+    </div>`
+    +flagged.map(q=>pfCard(q,PF_FINDINGS[q.id])).join("");
+}
+function pfCard(q,issues){
+  const num=q.qNum?`Q${q.qNum}`:"Question";
+  return `<div class="card" style="margin-bottom:14px${pfWorst(issues)===0?";border-color:var(--danger)":""}" id="pf-${q.id}">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px">
+      <div><b style="font-size:16px">${num}</b> ${subjTag(q.subject||"—")} ${examTag(q.exam)} ${q.status==="pending"?'<span class="tag pending">In Review queue</span>':''}</div>
+      <div>${pfSevTag(["high","medium","low"][pfWorst(issues)])}</div>
+    </div>
+    <p class="q-text" style="font-size:15.5px;margin:12px 0">${fmtMath(q.text,q.subject)}</p>
+    ${pfIsNum(q)
+      ? `<div class="opt correct" style="cursor:default;padding:9px 13px"><div class="k">#</div><div>Typed answer: <b>${esc(String(q.numAnswer==null?"—":q.numAnswer))}</b></div></div>`
+      : `<div>${[0,1,2,3].map(i=>`<div class="opt ${i===q.correct?'correct':''}" style="cursor:default;padding:9px 13px;margin-bottom:7px"><div class="k">${"ABCD"[i]}</div><div>${fmtMath((q.options||[])[i]||"—",q.subject)}</div></div>`).join("")}</div>`}
+    ${String(q.solution||"").trim()?`<div class="solution"><b>Solution:</b> ${fmtMath(q.solution,q.subject)}</div>`:""}
+    ${issues.map((i,ix)=>pfIssueBox(q,i,ix)).join("")}
+    <div class="row end" style="margin-top:14px;gap:8px">
+      <button class="btn ghost sm" onclick="pfIgnoreAll('${q.id}')">Nothing wrong here</button>
+      <button class="btn ghost sm" onclick="pfToReview('${q.id}')">Send to Review queue</button>
+      <button class="btn ghost sm" onclick="editReviewQ('${q.id}')">Edit question</button>
+    </div></div>`;
+}
+function pfIssueBox(q,i,ix){
+  const kind=PF_KIND[i.kind]||i.kind;
+  const letter=String(i.suggest||"").trim().toUpperCase();
+  let action="";
+  if(i.kind==="answer"&&!pfIsNum(q)&&letter.length===1&&"ABCD".includes(letter)&&"ABCD".indexOf(letter)!==q.correct)
+    action=`<button class="btn sm" onclick="pfSetAnswer('${q.id}','${letter}')">Set the correct answer to (${letter})</button>`;
+  else if(i.kind==="answer"&&pfIsNum(q)&&/^[-−]?\d+(\.\d+)?$/.test(String(i.suggest||"").trim()))
+    action=`<button class="btn sm" onclick="pfSetNumber('${q.id}','${String(i.suggest).trim()}')">Set the answer to ${esc(String(i.suggest).trim())}</button>`;
+  else if(i.suggest&&PF_WHERE[i.where])
+    action=`<button class="btn sm" onclick="pfApply('${q.id}',${ix})">Put this correction in</button>`;
+  return `<div class="note" style="margin-top:10px${i.severity==="high"?";border-color:var(--danger)":""}">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
+      <b>${esc(kind)}</b> ${pfSevTag(i.severity)} ${i.quick?'<span class="tag" style="background:#ece9e0;color:var(--ink-soft)">quick check</span>':'<span class="tag" style="background:#ece9e0;color:var(--ink-soft)">🤖 AI</span>'}
+    </div>
+    <div>${esc(i.detail||"—")}</div>
+    ${i.suggest&&PF_WHERE[i.where]?`<div class="muted" style="margin-top:6px;font-size:12.5px">Suggested ${esc(i.where==="question"?"question text":(i.where==="solution"?"solution":"option "+i.where.slice(-1)))}: <span style="color:var(--ink)">${fmtMath(i.suggest,q.subject)}</span></div>`:""}
+    <div class="row" style="margin-top:8px;gap:8px">${action}
+      <button class="btn ghost sm" onclick="pfIgnoreIssue('${q.id}',${ix})">Not a mistake</button></div></div>`;
+}
+
+/* ---- the buttons ---------------------------------------------------------------------------- */
+function pfDrop(qid,ix){
+  const list=PF_FINDINGS[qid]||[];
+  if(ix!=null) list.splice(ix,1);
+  if(ix==null||!list.length){ delete PF_FINDINGS[qid]; el("pf-"+qid)?.remove(); }
+  else{ const q=PF_QS.find(x=>x.id===qid); if(q&&el("pf-"+qid)) el("pf-"+qid).outerHTML=pfCard(q,list); }
+}
+async function pfSave(qid,patch,msg,ix,stillInPaper){
+  try{
+    await db.collection("questions").doc(qid).update(patch);
+    const q=PF_QS.find(x=>x.id===qid); if(q) Object.assign(q,patch);
+    db.collection("auditDismissed").doc(qid).delete().catch(()=>{});   // the question changed
+    try{ const x=(await db.collection("questions").doc(qid).get()).data()||{};
+         await syncDraftPapers([{id:qid,draftTestId:x.draftTestId}],stillInPaper!==false); }catch(_){}
+    pfDrop(qid,ix);
+    setMsg("pfMsg",msg,"ok");
+  }catch(e){ alert("Couldn't save that change: "+errMsg(e)); }
+}
+function pfSetAnswer(qid,letter){
+  pfSave(qid,{correct:"ABCD".indexOf(letter)},`✓ Correct answer set to (${letter}).`,null);
+}
+function pfSetNumber(qid,num){
+  const v=parseNumAnswer(num);
+  if(v===null){ alert("That suggested answer isn't a plain number."); return; }
+  pfSave(qid,{numAnswer:v},`✓ Typed answer set to ${num}.`,null);
+}
+async function pfApply(qid,ix){
+  const q=PF_QS.find(x=>x.id===qid), i=(PF_FINDINGS[qid]||[])[ix];
+  if(!q||!i) return;
+  const field=PF_WHERE[i.where]; if(!field) return;
+  const before=field==="text"?q.text:(field==="solution"?q.solution:(q.options||[])[parseInt(field.slice(3))]);
+  if(!confirm(`Replace this ${i.where==="question"?"question text":(i.where==="solution"?"solution":"option "+i.where.slice(-1))}?\n\nNOW:\n${String(before||"").slice(0,400)}\n\nAFTER:\n${String(i.suggest).slice(0,400)}`)) return;
+  let patch;
+  if(field==="text") patch={text:i.suggest};
+  else if(field==="solution") patch={solution:i.suggest};
+  else{ const opts=(q.options||["","","",""]).slice(); opts[parseInt(field.slice(3))]=i.suggest; patch={options:opts}; }
+  pfSave(qid,patch,"✓ Correction put in.",ix);
+}
+async function pfToReview(qid){
+  if(!confirm("Put this question in the Review queue until you have fixed it?\n\nIt is taken out of a draft paper straight away and will not be picked for any new test. A paper you have ALREADY scheduled keeps it — remove it from that paper yourself if students must not see it.")) return;
+  pfSave(qid,{status:"pending"},"✓ Moved to the Review queue.",null,false);
+}
+async function pfIgnoreIssue(qid,ix){
+  const i=(PF_FINDINGS[qid]||[])[ix]; if(!i) return;
+  try{ await db.collection("proofreadIgnored").doc(qid).set(
+    {kinds:firebase.firestore.FieldValue.arrayUnion(i.kind),by:ME.uid,
+     at:firebase.firestore.FieldValue.serverTimestamp()},{merge:true}); }catch(_){}
+  pfDrop(qid,ix);
+}
+async function pfIgnoreAll(qid){
+  const kinds=[...new Set((PF_FINDINGS[qid]||[]).map(i=>i.kind))];
+  try{ await db.collection("proofreadIgnored").doc(qid).set(
+    {kinds:firebase.firestore.FieldValue.arrayUnion(...kinds),by:ME.uid,
+     at:firebase.firestore.FieldValue.serverTimestamp()},{merge:true}); }catch(_){}
+  pfDrop(qid,null);
+}
+
+/* ---- a sheet to keep beside the Word file ---------------------------------------------------- */
+function pfPrintList(){
+  const flagged=PF_QS.filter(q=>(PF_FINDINGS[q.id]||[]).length)
+    .sort((a,b)=>pfWorst(PF_FINDINGS[a.id])-pfWorst(PF_FINDINGS[b.id])||((a.qNum||0)-(b.qNum||0)));
+  const rows=flagged.map(q=>(PF_FINDINGS[q.id]||[]).map(i=>`<tr>
+      <td style="text-align:center">${q.qNum||"—"}</td>
+      <td>${esc(q.subject||"—")}</td>
+      <td>${esc(["Must fix","Should fix","Minor"][PF_SEV[i.severity]==null?1:PF_SEV[i.severity]])}</td>
+      <td>${esc(PF_KIND[i.kind]||i.kind)}</td>
+      <td>${esc(i.detail||"")}${i.suggest?`<div style="color:#555;margin-top:3px">Suggested: ${esc(i.suggest).slice(0,220)}</div>`:""}</td>
+      <td style="width:46px"></td></tr>`).join("")).join("");
+  openPaperWindow(`<!doctype html><html><head><meta charset="utf-8"/><title>Proofread — ${esc(PF_TITLE||"paper")}</title>
+    <style>body{font-family:Georgia,serif;padding:22px;color:#111}
+    h1{font-size:19px;margin:0 0 2px}.sub{color:#666;font-size:12px;margin-bottom:14px}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th,td{border:1px solid #ccc;padding:6px 7px;vertical-align:top}
+    th{background:#f2efe8;text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px}
+    .foot{text-align:center;color:#999;font-size:10.5px;margin-top:18px;border-top:1px solid #ddd;padding-top:6px}
+    @media print{body{padding:0}@page{margin:12mm}}</style></head><body>
+    <h1>Proofread — ${esc(PF_TITLE||"paper")}</h1>
+    <div class="sub">${PF_QS.length} questions read · ${flagged.length} to look at${PF_RAN_AI?" · AI reading included":" · quick check only"} · ${new Date().toLocaleString()}</div>
+    <table><thead><tr><th style="width:42px">Q</th><th style="width:78px">Subject</th><th style="width:70px">Priority</th><th style="width:96px">What</th><th>Note</th><th style="width:46px">Done</th></tr></thead>
+    <tbody>${rows||`<tr><td colspan="6">Nothing to fix.</td></tr>`}</tbody></table>
+    <div class="foot">Sonam Tuitions · proofread from the test portal</div>
+    <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
+    </body></html>`);
 }
 
 /* ===== Duplicate Question Finder — the same question saved as separate entries is why
