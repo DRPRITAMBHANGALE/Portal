@@ -56,6 +56,8 @@ label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margi
 input,select,textarea{width:100%;padding:11px 13px;border:1px solid var(--line-2);border-radius:10px;background:#fff;font-size:15px;color:var(--ink);font-family:inherit}
 select.tbox{padding:11px 4px;flex:none;text-align:center;text-align-last:center;font-variant-numeric:tabular-nums}
 table td.nowrap,table th.nowrap{white-space:nowrap}
+table td:last-child{white-space:nowrap}
+table td:last-child .btn{vertical-align:middle}
 .dtpair{display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-width:0}
 .dtpair>input[type=date]{flex:1 1 130px;min-width:0;padding-left:8px;padding-right:4px;font-variant-numeric:tabular-nums}
 .dtpair.tight>input[type=date]{flex:1 1 92px}
@@ -86,7 +88,7 @@ header .brand .sub{display:none}
 .pill.admin{background:var(--accent-soft);color:var(--accent-ink)}
 .pill.student{background:#e7ecf5;color:#2c4470}
 
-.layout{display:flex;max-width:1180px;margin:0 auto;width:100%}
+.layout{display:flex;max-width:1400px;margin:0 auto;width:100%}
 nav.side{width:218px;flex:none;padding:22px 14px;border-right:1px solid var(--line);min-height:calc(100vh - 62px)}
 nav.side a{display:flex;align-items:center;gap:10px;padding:10px 13px;border-radius:10px;color:var(--ink-soft);text-decoration:none;font-weight:600;font-size:14px;margin-bottom:3px;cursor:pointer}
 nav.side a:hover{background:#efeadd;color:var(--ink)}
@@ -957,7 +959,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: clear the turned-away list"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: room for the buttons"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -3903,14 +3905,14 @@ async function loadTests(){
         return [`<b>${esc(t.title)}</b><br><span class="muted">${esc(t.uploadName||"")}</span>`,examTag(examOf(t)),(t.questionIds||[]).length,
           w?`<a href="#" onclick="go('review');return false">${w} to approve →</a>`:'<span class="muted">none — ready</span>',
           (canEditTest(t)
-            ? `<button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button>`+(ME.role==="master"?` <button class="btn ghost sm" onclick="proofreadTest('${d.id}')">🔎 Proofread</button>`:"")+` <button class="btn ghost sm danger" onclick="deleteDraft('${d.id}')">Delete</button>`
+            ? `<button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="testRowMenu(this,'${d.id}',true)">⋯ More</button>`
             : `<button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <span class="muted" style="font-size:12px">· made by the head office</span>`)];})):""; }
     el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
       :tableHTML(["Title","Exam","Subjects","Q","Scope","Window","Status",""],
         docs.map(d=>{const t=d.data();const canEdit=canEditTest(t);return [`<b>${esc(t.title)}</b><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}${t.solutionsAt?` · 🔒 Solutions from ${fmtDate(t.solutionsAt)}`:""}</span>`,
           examTag(examOf(t)),subjChips(t.subjects),(t.questionIds||[]).length,scopeLabel(t),windowLabel(t),testStatusTag(t),
           `<button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button>`
-          +(canEdit?` <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button>`+(ME.role==="master"?` <button class="btn ghost sm" onclick="proofreadTest('${d.id}')">🔎 Proofread</button>`:"")+` <button class="btn ghost sm" onclick="openReschedule('${d.id}')">Reschedule</button> <button class="btn ghost sm danger" onclick="deleteTest('${d.id}')">Delete</button>`
+          +(canEdit?` <button class="btn ghost sm" onclick="testRowMenu(this,'${d.id}',false)">⋯ More</button>`
             :(lockedByMaster(t)?` <span class="muted" style="font-size:12px">🔒 made by the head office</span>`:""))];}));
   }catch(e){ el("testList").innerHTML=errBox(e); }
 }
@@ -6992,6 +6994,63 @@ async function subjectMarksForDocs(docs){
     byTest[tid].forEach(d=>{ const bs=subjectMarksFrom(d.data(),qmap); if(bs) out.set(d.id,bs); });
   }
   return out;
+}
+/* A row has more to offer than fits on one line. The everyday two stay on the row; the rest open
+   from here, as a plain list, right where the button is. Pressing anywhere else closes it. */
+let ROW_MENU=null;
+function closeRowMenu(){
+  if(ROW_MENU){ ROW_MENU.remove(); ROW_MENU=null; }
+  document.removeEventListener("mousedown",rmOutside,true);
+  document.removeEventListener("keydown",rmEsc,true);
+  window.removeEventListener("scroll",closeRowMenu,true);
+  window.removeEventListener("resize",closeRowMenu);
+}
+/* A press on the button that opened the menu is not "outside" it — that press is what toggles it
+   shut, just below. Anything else closes it. */
+function rmOutside(e){
+  if(!ROW_MENU) return;
+  if(ROW_MENU.contains(e.target)) return;
+  if(ROW_MENU.__btn&&ROW_MENU.__btn.contains(e.target)) return;
+  closeRowMenu();
+}
+function rmEsc(e){ if(e.key==="Escape") closeRowMenu(); }
+function rowMenu(btn,items){
+  const again=ROW_MENU&&ROW_MENU.__btn===btn;
+  closeRowMenu();
+  if(again) return;                    // pressing the same button again just shuts it
+  const m=document.createElement("div");
+  m.className="card"; m.id="rowMenu";
+  m.style.cssText="position:fixed;z-index:180;padding:6px;min-width:214px;box-shadow:0 16px 44px rgba(0,0,0,.22)";
+  m.innerHTML=items.map((it,i)=> it==="-"
+    ? `<div style="height:1px;background:var(--line);margin:5px 3px"></div>`
+    : `<button type="button" data-i="${i}" style="display:block;width:100%;text-align:left;border:none;background:none;cursor:pointer;padding:9px 11px;border-radius:8px;font:inherit;font-weight:600;font-size:13.5px;color:${it.danger?"var(--danger)":"var(--ink)"}" onmouseover="this.style.background='#efeadd'" onmouseout="this.style.background='none'">${it.label}</button>`
+  ).join("");
+  document.body.appendChild(m);
+  const r=btn.getBoundingClientRect(), w=m.offsetWidth, h=m.offsetHeight;
+  m.style.left=Math.round(Math.max(8,Math.min(r.right-w,window.innerWidth-w-8)))+"px";
+  m.style.top=Math.round(r.bottom+6+h>window.innerHeight ? Math.max(8,r.top-h-6) : r.bottom+6)+"px";
+  m.addEventListener("click",e=>{
+    const b=e.target.closest("button[data-i]"); if(!b) return;
+    const it=items[parseInt(b.getAttribute("data-i"))];
+    closeRowMenu(); if(it&&it.go) it.go();
+  });
+  m.__btn=btn;
+  ROW_MENU=m;
+  // registered straight away, not a moment later, so there is never an instant in which pressing
+  // elsewhere fails to close it
+  document.addEventListener("mousedown",rmOutside,true);
+  document.addEventListener("keydown",rmEsc,true);
+  window.addEventListener("scroll",closeRowMenu,true);
+  window.addEventListener("resize",closeRowMenu);
+}
+/* The less-used things a paper can have done to it. */
+function testRowMenu(btn,id,isDraft){
+  const items=[{label:"✎ Questions",go:()=>openTestQuestions(id)},
+               {label:"📘 Solutions",go:()=>openAddSolutions(id)}];
+  if(ME.role==="master") items.push({label:"🔎 Proofread",go:()=>proofreadTest(id)});
+  if(!isDraft) items.push({label:"🕘 Reschedule",go:()=>openReschedule(id)});
+  items.push("-",{label:"🗑 Delete",danger:true,go:()=>isDraft?deleteDraft(id):deleteTest(id)});
+  rowMenu(btn,items);
 }
 function tableHTML(head,rows,cls){return `<div class="tablewrap${cls?" "+cls:""}"><table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;}
 // Every delete in the portal goes through this: a clear Yes / No box, so nothing is removed by a stray click.
