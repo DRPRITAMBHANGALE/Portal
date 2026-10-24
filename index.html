@@ -963,7 +963,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: all buttons on the row"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: integral limits"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1514,6 +1514,14 @@ async function doImport(){
    honestly flagged per-question rather than silently imported broken.
    ============================================================ */
 /* MTEF v3 (Microsoft Equation 3.0 / MathType) -> LaTeX converter */
+/* How many equations came through only roughly — a piece of them was a kind of layout the reader
+   does not know, so that piece was flattened. Worth saying; it used to happen in silence. */
+function roughNote(W){
+  const n=W&&W.stats&&W.stats.eqRough;
+  if(!n) return "";
+  const kinds=Object.keys((W.stats.eqPartial)||{}).length;
+  return `, ⚠ ${n} only roughly — ${kinds===1?"one kind of":kinds+" kinds of"} layout in them is not understood, so check those`;
+}
 function mtefToLatex(bytes){
   // bytes: Uint8Array of the "Equation Native" stream
   const hdrLen = bytes[0] | (bytes[1]<<8);
@@ -1701,10 +1709,24 @@ function mtefToLatex(bytes){
     const sy=symbolFont(c.ch>=0xF000?c.ch-0xF000:c.ch).trim();
     return sy||".";
   }
+  /* ∫ ∑ ∏ and the rest. A MathType paper writes these either as a plain character (no limits) or
+     as a template with the operator inside it (limits above and below) — this is the second case.
+     The private-use codes are the same glyphs in MathType's own fonts. */
+  const BIGOP={0x222B:"\\int",0x222C:"\\iint",0x222D:"\\iiint",0x222E:"\\oint",0x222F:"\\oiint",
+    0x2211:"\\sum",0x220F:"\\prod",0x2210:"\\coprod",0x22C3:"\\bigcup",0x22C2:"\\bigcap",
+    0x228E:"\\biguplus",0x2A01:"\\bigoplus",0x2A02:"\\bigotimes",0x2A04:"\\biguplus",
+    0xF0F2:"\\int",0xF0E5:"\\sum",0xF0D5:"\\prod",0xF0C8:"\\bigcap",0xF0C9:"\\bigcup"};
+  function bigOpOf(chars){
+    for(const c of chars){
+      const k=BIGOP[c.ch]||BIGOP[c.ch-0xF000]||BIGOP[c.ch+0xF000];
+      if(k) return k;
+    }
+    return null;
+  }
   function renderTmpl(t,out){
     const slots=t.items.filter(x=>x.t==="line"||x.t==="pile"||x.t==="matrix");
     const chars=t.items.filter(x=>x.t==="char");
-    const S=k=>lineStr(slots[k]);
+    const S=k=>k<slots.length?lineStr(slots[k]):"";
     const sel=t.sel;
     const fences={0:["\\langle","\\rangle"],1:["(",")"],2:["\\{","\\}"],3:["[","]"],4:["|","|"],5:["\\|","\\|"],6:["\\lfloor","\\rfloor"],7:["\\lceil","\\rceil"],8:["[","["],9:["]","]"],10:["]","["],11:["[",")"],12:["(","]"]};
     if(sel<=12){
@@ -1712,6 +1734,14 @@ function mtefToLatex(bytes){
       const v=t.vari; // bit0 left fence present, bit1 right fence present (v3: 1=left,2=right)
       if(v===1) R="."; else if(v===2) L=".";
       return "\\left"+L+" "+S(0)+"\\right"+R+" ";
+    }
+    // ---- an operator carrying its limits: ∫ from 0 to 1, Σ from n=1 to ∞, and the like ----
+    // slot 0 = what it acts on · slot 1 = the limit below · slot 2 = the limit above
+    const bop=sel>19?bigOpOf(chars):null;
+    if(bop){
+      SCRIPT++; const lo=S(1),hi=S(2); SCRIPT--;
+      const body=S(0);
+      return bop+(lo?"_{"+lo+"}":"")+(hi?"^{"+hi+"}":"")+" "+body+" ";
     }
     switch(sel){
       case 13: return !S(1)?"\\sqrt{"+S(0)+"}":"\\sqrt["+S(1)+"]{"+S(0)+"}";
@@ -1723,6 +1753,10 @@ function mtefToLatex(bytes){
         if(/[_^]\{[^{}]*\}$/.test(base)||/'$/.test(base)) base="{"+base+"}";
         return base+(sub?"_{"+sub+"}":"")+(sup?"^{"+sup+"}":"");
       }
+      // a fraction written on the slant — a half-life's t(1/2), say. It is kept on the slant,
+      // because that is how it was typed and how it reads inside a subscript.
+      case 41: return "{"+S(0)+"}/{"+S(1)+"}";
+      case 69: return "";                    // carries nothing at all — nothing to show
       case 16: return "\\underline{"+S(0)+"}";
       case 17: return "\\overline{"+S(0)+"}";
       case 19: { // arrow with text above/below
@@ -1759,14 +1793,19 @@ async function readWordWithEquations(arrayBuffer){
     Array.from(rd.getElementsByTagName("Relationship")).forEach(r=>rels[r.getAttribute("Id")]=r.getAttribute("Target")); }
   const partFor=rid=>{ const t=rels[rid]; if(!t) return null; return get("word/"+t.replace(/^\.?\//,"").replace(/^\/?word\//,"")); };
   const doc=new DOMParser().parseFromString(dec(docXml),"application/xml");
-  const eqs=[], figs=[], stats={equations:0,eqFailed:0,figures:0,figFailed:0};
+  const eqs=[], figs=[], stats={equations:0,eqFailed:0,eqRough:0,eqPartial:{},figures:0,figFailed:0};
   const local=n=>n.localName||(n.nodeName||"").replace(/^.*:/,"");
   const figCache={};
   function equationFor(rid){
     const bin=partFor(rid); if(!bin) return null;
     try{ const ole=CFBlib.read(bin,{type:"array"}); const e=CFBlib.find(ole,"Equation Native");
       if(!e||!e.content||!e.content.length) return null;
-      return mtefToLatex(new Uint8Array(e.content)).tex||null; }catch(_){ return null; }
+      const r=mtefToLatex(new Uint8Array(e.content));
+      // a piece of an equation the reader did not understand is worth saying out loud: it used to
+      // be dropped on the quiet while the count still read "all converted"
+      (r.unknown||[]).forEach(u=>{ if(/^tmpl/.test(u)) stats.eqPartial[u]=(stats.eqPartial[u]||0)+1; });
+      if((r.unknown||[]).some(u=>/^tmpl/.test(u))) stats.eqRough++;
+      return r.tex||null; }catch(_){ return null; }
   }
   function figureFor(rid){
     if(rid in figCache) return figCache[rid];
@@ -2266,7 +2305,7 @@ async function tqWordRead(){
       topic:val("twTopic").trim()||val("twSubject"),difficulty:"Moderate"},W).filter(q=>q.tier!=="skip");
     TQ_WORD=parsed;
     if(!parsed.length){ setMsg("twMsg","No questions found in that file. Check it has numbered questions and an \"Answer Keys\" section.","err"); el("twList").innerHTML=""; return; }
-    setMsg("twMsg",`Found ${parsed.length} question${parsed.length===1?"":"s"}`+(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted)`:"")+". Untick any you don't want.","ok");
+    setMsg("twMsg",`Found ${parsed.length} question${parsed.length===1?"":"s"}`+(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)})`:"")+". Untick any you don't want.","ok");
     el("twList").innerHTML=parsed.map((q,i)=>`<div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px">
       <label style="display:flex;gap:8px;align-items:flex-start;margin:0"><input type="checkbox" class="twPick" data-i="${i}" style="width:auto;margin-top:3px" checked/>
         <span><span class="muted" style="font-size:12px">Q${q.num} · answer ${q.correct!=null?"ABCD"[q.correct]:"—"}${q.problems.length?` · <span style="color:var(--danger)">${esc(q.problems.join("; "))}</span>`:""}</span>
@@ -2515,7 +2554,7 @@ async function solRead(testId){
           <div class="muted" style="font-size:12px">Q${r.num}${r.q.solution&&r.q.solution.trim()?" · already has a solution":""}</div>
           <div style="font-size:13.5px">${fmtMath(truncate(r.solution.replace(/\[\[img:[^\]]*\]\]/g," [diagram] "),160),r.q.subject)}</div></div>`).join("")
       +(matched.length>8?`<p class="muted" style="font-size:12.5px">…and ${matched.length-8} more.</p>`:"");
-    setMsg("solMsg",`Ready — ${matched.length} solution${matched.length===1?"":"s"} will be attached`+(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted)`:"")+".", matched.length?"ok":"err");
+    setMsg("solMsg",`Ready — ${matched.length} solution${matched.length===1?"":"s"} will be attached`+(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)})`:"")+".", matched.length?"ok":"err");
     el("solBtn").disabled=!matched.length;
   }catch(e){ setMsg("solMsg",errMsg(e),"err"); el("solPreview").innerHTML=""; el("solBtn").disabled=true; }
 }
@@ -2624,7 +2663,7 @@ async function handleSelfUpload(){
         +(pendingCount?` — ${pendingCount} more will join automatically when you approve them in the Review queue.`:"."),"ok");
     }catch(err){ setMsg("suActionMsg","Questions were added, but the draft paper couldn't be created: "+errMsg(err),"err"); }
     setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}`
-      +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
+      +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)}${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
       +`✓ ${liveIds.length} added live to your question bank.`
       +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — something in them couldn't be read (see the red notes below); fix it there and approve.`:"")
       +(skipped.length?` ✕ ${skipped.length} couldn't be imported at all (no question text, or no usable answer key entry).`:"")
@@ -3915,7 +3954,7 @@ async function loadTests(){
       :tableHTML(["Title","Q","Scope","Window","Status",""],
         docs.map(d=>{const t=d.data();const canEdit=canEditTest(t);return [`<b>${esc(t.title)}</b><br><span style="display:inline-block;margin:4px 0 2px">${examTag(examOf(t))} ${subjChips(t.subjects)}</span><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}${t.solutionsAt?` · 🔒 Solutions from ${fmtDate(t.solutionsAt)}`:""}</span>`,
           (t.questionIds||[]).length,scopeLabel(t),windowLabel(t),testStatusTag(t),
-          `<div class="rowacts"><button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button>`
+          `<div class="rowacts"><button class="btn ghost sm" onclick="viewTestResults('${d.id}')">Results</button> <button class="btn ghost sm" onclick="openExamCode('${d.id}')">🔑 Code</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button>`
           +(canEdit?` <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button>`
               +(ME.role==="master"?` <button class="btn ghost sm" onclick="proofreadTest('${d.id}')">🔎 Proofread</button>`:"")
               +` <button class="btn ghost sm" onclick="openReschedule('${d.id}')">🕘 Reschedule</button> <button class="btn ghost sm danger" onclick="deleteTest('${d.id}')">🗑 Delete</button>`
@@ -6457,7 +6496,7 @@ function saveExamState(){
       answers:EXAM.answers,review:[...EXAM.review],locked:[...(EXAM.locked||[])],
       lockLog:(EXAM.lockLog||[]).slice(0,60),cur:EXAM.cur,endTime:EXAM.endTime,
       violations:EXAM.violations||0,overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,
-      gate:EXAM.gate||null,savedAt:Date.now()
+      gate:EXAM.gate||null,codeSeq:EXAM.codeSeq||0,savedAt:Date.now()
     }));
   }catch(_){}                       // a full store, or private browsing, must never break the test
 }
@@ -6514,8 +6553,11 @@ async function resumeSavedExam(saved){
     answers:d.answers||{},review:new Set(d.review||[]),locked:new Set(d.locked||[]),
     lockLog:d.lockLog||[],cur:Math.min(Math.max(0,d.cur||0),questions.length-1),
     isPractice:!!d.isPractice,endTime:d.endTime,violations:d.violations||0,
-    overlayCount:d.overlayCount||0,reloads:(d.reloads||0)+1,disqualified:false,live:true,resumed:true,gate:d.gate||null};
+    overlayCount:d.overlayCount||0,reloads:(d.reloads||0)+1,disqualified:false,live:true,resumed:true,gate:d.gate||null,
+    needCode:!!(test&&test.needCode),codeSeq:d.codeSeq||0};
+  EXCODE_TEST=d.testId;
   questions.forEach((q,i)=>{ if(q.gone) EXAM.locked.add(i); });
+  watchCheckpoints();                 // a new code read out while the page was away is asked for now
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
   document.body.classList.remove("rotate-ok"); askLandscape();
@@ -6530,6 +6572,141 @@ async function resumeSavedExam(saved){
     `The closing time hasn't moved: reloading doesn't give extra time.`),200);
   return true;
 }
+/* ===== THE CODE THE TEACHER READS OUT ========================================================
+   One code belongs to one paper at one centre. The page never learns what a code is unless it is
+   the teacher's page asking for it; a student's page can only offer one and be told yes or no.
+   ============================================================================================ */
+let EXCODE={testId:null,centreId:null,seq:0};
+async function openExamCode(testId){
+  const centreId=ME.role==="master"?null:ME.centreId;
+  EXCODE={testId,centreId:centreId||"",seq:0};
+  modal(`<h2>🔑 Code for this paper</h2>
+    <p class="muted" style="margin:2px 0 14px">Read the code out in the room. Students type it once to open the paper — anyone not in the room does not have it.</p>
+    ${ME.role==="master"?`<label>Which centre are you reading it out at?</label>
+      <select id="ecCentre" onchange="ecLoad()">${CENTRES.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>`:""}
+    <label style="display:flex;gap:9px;align-items:flex-start;margin:14px 0 0;font-weight:400">
+      <input type="checkbox" id="ecNeed" style="width:auto;margin-top:4px" onchange="ecToggleNeed(this.checked)"/>
+      <span><b>Ask students for a code to open this paper</b><br>
+        <span class="muted" style="font-size:12.5px">Off, and anybody who can see the paper can start it. On, and only somebody in the room who has heard the code can.</span></span></label>
+    <div id="ecBox" style="margin-top:14px">Loading…</div>
+    <div class="msg" id="ecMsg" style="margin-top:10px"></div>
+    <div class="row end" style="margin-top:16px;gap:8px">
+      <button class="btn ghost" onclick="closeModal()">Close</button>
+      <button class="btn" id="ecNewBtn" onclick="ecIssue()">Read out a new code</button></div>`);
+  ecLoad();
+}
+function ecCentreId(){ return ME.role==="master"?(val("ecCentre")||(CENTRES[0]||{}).id||""):ME.centreId; }
+async function ecLoad(){
+  const box=el("ecBox"); if(!box) return;
+  box.innerHTML="Loading…";
+  try{
+    try{ const t=(await db.collection("tests").doc(EXCODE.testId).get()).data()||{};
+         if(el("ecNeed")) el("ecNeed").checked=!!t.needCode; }catch(_){}
+    const r=await fnCall({action:"examCodeCurrent",testId:EXCODE.testId,centreId:ecCentreId()});
+    EXCODE.seq=r.seq||0;
+    box.innerHTML=r.code
+      ? `<div style="text-align:center;padding:14px;border:2px dashed var(--accent);border-radius:12px;background:var(--accent-soft)">
+           <div class="muted" style="font-size:12.5px">Code ${r.seq} — read this out</div>
+           <div style="font-size:46px;font-weight:800;letter-spacing:10px;font-family:'Courier New',monospace;color:var(--accent-ink)">${esc(r.code)}</div>
+           ${r.issuedAt?`<div class="muted" style="font-size:12px">given out at ${fmtDate(new Date(r.issuedAt))}${r.issuedBy?" by "+esc(r.issuedBy):""}</div>`:""}
+         </div>
+         <p class="muted" style="font-size:12.5px;margin:10px 0 0">Part way through the paper, press <b>Read out a new code</b> and read the new one out. Every paper in progress here stops and asks for it — so a code passed to a friend at home stops working.</p>`
+      : `<div class="note">No code has been read out for this centre yet. Press <b>Read out a new code</b> to make the first one. Until you do, students here cannot open this paper.</div>`;
+  }catch(e){ box.innerHTML=errBox(e); }
+}
+/* Whether this paper asks for a code at all. Left alone, a paper behaves exactly as it always has. */
+async function ecToggleNeed(on){
+  if(on&&!confirm("Ask for a code to open this paper?\n\nNobody will be able to start it until you have read out the first code — make one below before the test begins.")) {
+    el("ecNeed").checked=false; return; }
+  try{
+    await db.collection("tests").doc(EXCODE.testId).update({needCode:!!on});
+    setMsg("ecMsg",on?"This paper now asks for a code. Read the first one out before the test begins.":"This paper no longer asks for a code.","ok");
+    logCentreUpdate("exam_code_required",ME.centreId,{testId:EXCODE.testId,enabled:!!on});
+  }catch(e){ setMsg("ecMsg",errMsg(e),"err"); el("ecNeed").checked=!on; }
+}
+async function ecIssue(){
+  const first=!EXCODE.seq;
+  if(!confirm(first
+      ? `Make the first code for ${centreName(ecCentreId())}?\n\nStudents will need it to open this paper.`
+      : `Read out a NEW code for ${centreName(ecCentreId())}?\n\nEvery student here who is part way through this paper will be stopped and asked for it. Have them ready — their clock keeps running.`)) return;
+  setBtn("ecNewBtn",true,"Making it…");
+  try{
+    const r=await fnCall({action:"examCodeIssue",testId:EXCODE.testId,centreId:ecCentreId()});
+    setMsg("ecMsg",`Code ${r.seq} is now ${r.code}. Read it out.`,"ok");
+    await ecLoad();
+  }catch(e){ setMsg("ecMsg",errMsg(e),"err"); }
+  setBtn("ecNewBtn",false,"Read out a new code");
+}
+
+/* ---- the student's side: asked once at the door, and again whenever a new code is read out ---- */
+/* A plain box in the middle of the screen. It cannot be dismissed — the only ways out are the right
+   code or giving up on the paper — so there is no way to carry on without having been in the room. */
+function askCode(seq,onOk,allowLeave){
+  return new Promise(resolve=>{
+    const bg=document.createElement("div");
+    bg.id="codeAsk";
+    bg.style.cssText="position:fixed;inset:0;background:rgba(20,18,14,.88);z-index:400;display:flex;align-items:center;justify-content:center;padding:18px";
+    bg.innerHTML=`<div class="card" style="max-width:420px;width:100%;text-align:center">
+      <h2 style="margin:0 0 4px">${seq>1?"A new code has been read out":"Code to open this paper"}</h2>
+      <p class="muted" style="margin:0 0 16px">${seq>1
+        ? "Your teacher is reading out a new code now. Type it in to carry on — <b>your time is still running</b>, and every answer you have given is safe."
+        : "Your teacher will read out a code in the room. Type it in to open the paper."}</p>
+      <input id="codeIn" inputmode="numeric" autocomplete="off" maxlength="4" placeholder="••••"
+        style="font-size:34px;text-align:center;letter-spacing:12px;font-family:'Courier New',monospace;padding:10px"/>
+      <div class="msg" id="codeMsg" style="margin-top:10px"></div>
+      <button class="btn full" id="codeGo" style="margin-top:12px">Open the paper</button>
+      ${allowLeave?`<p style="margin:12px 0 0"><a href="javascript:void(0)" id="codeBack" style="font-size:13px;color:var(--ink-soft)">Go back</a></p>`:""}
+    </div>`;
+    document.body.appendChild(bg);
+    const inp=bg.querySelector("#codeIn"); setTimeout(()=>inp.focus(),60);
+    const done=v=>{ bg.remove(); resolve(v); };
+    const go=async()=>{
+      const code=(inp.value||"").replace(/\D/g,"");
+      if(code.length<4){ setMsg("codeMsg","Type the four figures your teacher has read out.","err"); return; }
+      setBtn("codeGo",true,"Checking…");
+      try{
+        const r=await fnCall({action:"examCodeCheck",testId:EXCODE_TEST,code});
+        if(r.ok){ done(r.seq||seq); return; }
+        if(r.blocked) setMsg("codeMsg",`Too many wrong tries. Wait ${r.waitMin} minute${r.waitMin===1?"":"s"} and ask your teacher.`,"err");
+        else if(r.none) setMsg("codeMsg","Your centre has not read out a code yet. Ask your teacher.","err");
+        else setMsg("codeMsg",`That is not the code. ${r.left} tr${r.left===1?"y":"ies"} left before you have to wait.`,"err");
+      }catch(e){ setMsg("codeMsg",errMsg(e),"err"); }
+      setBtn("codeGo",false,"Open the paper");
+      inp.value=""; inp.focus();
+    };
+    bg.querySelector("#codeGo").onclick=go;
+    inp.addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
+    const back=bg.querySelector("#codeBack"); if(back) back.onclick=()=>done(null);
+  });
+}
+let EXCODE_TEST=null;
+
+/* ---- a new code read out while papers are being written ---- */
+/* The page watches one small record that says only HOW MANY codes have been read out — never what
+   they are. When that number moves past the one this paper has answered, the paper stops. */
+let CKWATCH=null;
+function watchCheckpoints(){
+  stopCheckpoints();
+  if(!EXAM||!EXAM.test||!EXAM.test.id||EXAM.isPractice||!EXAM.needCode) return;
+  try{
+    CKWATCH=db.collection("examCheckpoints").doc(EXAM.test.id+"_"+ME.centreId)
+      .onSnapshot(d=>{
+        const seq=(d.exists?d.data().seq:0)||0;
+        if(EXAM&&EXAM.live&&seq>(EXAM.codeSeq||0)) demandCode(seq);
+      },()=>{});
+  }catch(_){}
+}
+function stopCheckpoints(){ if(CKWATCH){ try{ CKWATCH(); }catch(_){} CKWATCH=null; } }
+let DEMANDING=false;
+async function demandCode(seq){
+  if(DEMANDING||!EXAM||!EXAM.live) return;
+  DEMANDING=true;
+  shieldExam(true);                              // the paper is covered while it waits
+  const got=await askCode(seq,null,false);
+  shieldExam(false);
+  DEMANDING=false;
+  if(got!=null&&EXAM){ EXAM.codeSeq=got; saveExamState(); }
+}
 async function startTest(testId){
   try{
     const doc=await db.collection("tests").doc(testId).get();
@@ -6537,6 +6714,19 @@ async function startTest(testId){
     const t=effWindow({id:testId,...doc.data()},ME.centreId);
     if(testStatus(t)!=="open"){ alert(testStatus(t)==="scheduled"?"This test hasn't opened yet for your centre.":"This test has closed for your centre."); return; }
     if(!(t.questionIds||[]).length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
+    // Already sitting this paper on this device? Then this is not a start, it is a return to it —
+    // after a reload, a dropped signal, a phone that put the browser to sleep. Let them straight
+    // back in: the connection check is for opening a paper, never for taking one away.
+    { const prev=savedExamFor(testId,false);
+      if(prev&&await resumeSavedExam(prev)) return; }
+    // the code the teacher has read out in the room — asked for before anything else
+    let codeSeq=0;
+    if(t.needCode){
+      EXCODE_TEST=testId;
+      const got=await askCode(1,null,true);
+      if(got==null) return;                       // changed their mind — nothing has started
+      codeSeq=got;
+    }
     // where is this student sitting? the server decides, so the answer can't be faked here
     let gate=null;
     try{ gate=await centreGate(testId); }
@@ -6547,12 +6737,12 @@ async function startTest(testId){
     if(gate&&gate.allow===false){
       alert("This test can only be taken at the centre.\n\nYou are not on "+centreName(ME.centreId)+"'s internet connection, so the paper cannot be opened from here.\n\nConnect to the centre's WiFi and try again.");
       return; }
-    await launchExam(t,false,gate);
+    await launchExam(t,false,gate,codeSeq);
   }catch(e){ console.error("startTest failed",e); alert("Could not start the test.\n\n"+errMsg(e)+"\n\nCheck your internet connection and try again — if it keeps happening, show this message to your centre."); }
 }
 window.addEventListener("unhandledrejection",e=>{ console.error("Unhandled error:",e&&e.reason); });
 let VIS_HANDLER=null;
-async function launchExam(test,isPractice,gate){
+async function launchExam(test,isPractice,gate,codeSeq){
   const ids=(test&&test.questionIds)||[];
   if(!ids.length){ alert("This paper has no questions in it yet. Please tell your centre."); return; }
   { const prev=test&&test.id?savedExamFor(test.id,isPractice):null;   // already begun on this device
@@ -6571,12 +6761,12 @@ async function launchExam(test,isPractice,gate){
     subjectBlocks.push({subject:s,start:grouped.length,count:shuffled.length});
     grouped=grouped.concat(shuffled);
   });
-  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),locked:new Set(),lockLog:[],cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,reloads:0,disqualified:false,live:true,gate:gate||null};
+  EXAM={test,questions:grouped,subjectBlocks,answers:{},review:new Set(),locked:new Set(),lockLog:[],cur:0,isPractice,endTime:Date.now()+test.duration*60*1000,violations:0,reloads:0,disqualified:false,live:true,gate:gate||null,needCode:!!test.needCode,codeSeq:codeSeq||0};
   el("examTitle").textContent=test.title;
   el("examScreen").style.display="block"; document.body.style.overflow="hidden";
   document.body.classList.remove("rotate-ok"); askLandscape();
   renderSubjectTabs(); renderPalette(); renderQ(); startTimer();
-  attachCheatGuard(); saveExamState();
+  attachCheatGuard(); saveExamState(); watchCheckpoints();
   if(!isPractice) setTimeout(()=>warnModal("Before you begin",
     "Stay in this window until you submit.\n\nIf you leave the test — switch apps, minimise it, or open anything on top of it — the question you are on is locked, and its answer can no longer be changed. Notifications that pass in a moment don't lock anything.\n\nThis includes search and assistant panels drawn over the screen: the test can tell when it has been covered, and that is recorded on your paper as malpractice."),150);
 }
@@ -6784,7 +6974,7 @@ function confirmSubmit(){
 }
 async function submitExam(auto,disqualify){
   if(EXAM.live===false) return; // already submitted (guards against a double-fire)
-  EXAM.live=false; clearExamState(EXAM.test.id,EXAM.isPractice); detachCheatGuard();
+  EXAM.live=false; clearExamState(EXAM.test.id,EXAM.isPractice); detachCheatGuard(); stopCheckpoints();
   clearInterval(EXAM.timerInt);
   const exam=EXAM.test.exam,neg=examNeg(exam);
   let score=0,correct=0,wrong=0,unattempted=0;
