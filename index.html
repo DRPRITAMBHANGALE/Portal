@@ -780,7 +780,7 @@ function fmtMathPlain(s,subject){
   if(s==null) return "";
   s=String(s);
   if(s.includes("[[img:")) return s.split(QFIG_RE).map(p=>{ const m=p.match(/^\[\[img:(data:image\/(?:png|jpeg|gif);base64,[A-Za-z0-9+\/=]+)\]\]$/);
-    return m?`<img class="qfig" src="${m[1]}" alt="diagram" onclick="openFig(this)" title="Tap to see it full screen"/>`:fmtMathCore(p,subject); }).join("");
+    return m?`<img class="qfig" src="${m[1]}" alt="diagram" loading="lazy" decoding="async" onclick="openFig(this)" title="Tap to see it full screen"/>`:fmtMathCore(p,subject); }).join("");
   return fmtMathCore(s,subject);
 }
 // "Match List-I with List-II" and any other table from the Word file
@@ -803,6 +803,14 @@ function renderQTable(payload,subject){
   return `<table class="qtbl">${headerLooksLikeHeading?`<thead><tr>${cellsHTML(head,"th")}</tr></thead>`:""}
     <tbody>${(headerLooksLikeHeading?rest:rows).map(r=>`<tr>${cellsHTML(r,"td")}</tr>`).join("")}</tbody></table>`;
 }
+/* A prime, a superscript or a subscript must sit on something. If the maths from Word puts one
+   straight after a spacing command — "\lambda \;'" — there is nothing for it to sit on and the
+   whole line fails to draw. The space was only there to hold the prime off the letter, which a
+   prime does on its own, so it comes out. Spaces anywhere else are left exactly as they are. */
+const TEX_SPACE_BEFORE_SCRIPT=/(?:(?:\\[,;:!]|\\quad|\\qquad|\\thinspace)[ \t]*)+(?=['^_])/g;
+function texRepair(s){
+  return String(s==null?"":s).replace(TEX_SPACE_BEFORE_SCRIPT,"");
+}
 function fmtMathCore(s,subject){
   const parts=s.split(/(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g);
   return parts.map(p=>{
@@ -813,7 +821,7 @@ function fmtMathCore(s,subject){
     else if(p.startsWith("$$")&&p.endsWith("$$")&&p.length>=4){tex=p.slice(2,-2);display=true;}
     else if(p.startsWith("$")&&p.endsWith("$")&&p.length>=2){tex=p.slice(1,-1);}
     if(tex!=null){
-      if(window.katex){ try{ return katex.renderToString(tex,{throwOnError:false,displayMode:display}); }catch(e){ return prettyPlain(p,subject); } }
+      if(window.katex){ try{ return katex.renderToString(texRepair(tex),{throwOnError:false,displayMode:display}); }catch(e){ return prettyPlain(p,subject); } }
       return prettyPlain(tex,subject);
     }
     return prettyPlain(p,subject);
@@ -963,7 +971,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: integral limits"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: lighter on a phone"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1050,6 +1058,32 @@ async function loadBankCounts(){
       <p class="muted" style="margin:0 0 12px">${total} total approved question${total===1?"":"s"} available for tests &amp; practice.</p>
       <div class="skpis" style="margin-bottom:0">${parts.join("")}</div>`;
   }catch(e){ el("bankCounts").innerHTML=errBox(e); }
+}
+/* Reading a whole collection in one go is what kills a phone. A question carries its diagram
+   inside it, written out as text, so a few hundred questions can be hundreds of megabytes held at
+   once — and a phone hands a tab far less than that before closing it.
+   This walks a query a page at a time and keeps only what was asked for, with the pictures taken
+   out of the wording. What is held is a few lines per question instead of the diagrams as well. */
+const PIC_IN_TEXT=/\[\[img:data:[^\]]*\]\]/g;
+function withoutPictures(v){
+  return typeof v==="string" ? v.replace(PIC_IN_TEXT," [diagram] ") : v;
+}
+async function readSlim(query,fields,cap){
+  const PAGE=150, out=[]; let last=null; cap=cap||6000;
+  while(out.length<cap){
+    let q=query.limit(Math.min(PAGE,cap-out.length));
+    if(last) q=q.startAfter(last);
+    const snap=await q.get();
+    if(snap.empty) break;
+    snap.forEach(d=>{
+      const x=d.data(), o={id:d.id};
+      (fields||Object.keys(x)).forEach(f=>{ if(x[f]!==undefined) o[f]=withoutPictures(x[f]); });
+      out.push(o);
+    });
+    last=snap.docs[snap.docs.length-1];
+    if(snap.size<PAGE) break;
+  }
+  return out;
 }
 async function loadQuestions(){
   const exam=val("qfExam"),subj=val("qfSubject"),cls=val("qfClass");
@@ -1139,9 +1173,9 @@ async function existingFingerprints(meta){
   try{
     let q=db.collection("questions").where("exam","==",meta.exam).where("subject","==",meta.subject);
     if(meta.cls) q=q.where("class","==",meta.cls);
-    const snap=await q.limit(600).get();
+    const rows=await readSlim(q,["text","topic"],600);
     const out=[];
-    snap.forEach(d=>{ const x=d.data();
+    rows.forEach(x=>{
       if(meta.topic&&x.topic&&x.topic!==meta.topic) return;
       if(x.text){ const fp=qFingerprint(x.text); fp.t=x.text; out.push(fp); } });
     return out;
@@ -1769,7 +1803,7 @@ function mtefToLatex(bytes){
       default: unknown.push("tmpl"+sel); return slots.map(lineStr).join(" ");
     }
   }
-  let tex=renderItems(root).replace(/\\cos\s*ec(?![a-zA-Z])/g,"\\operatorname{cosec}").replace(/\s+/g," ").trim();
+  let tex=texRepair(renderItems(root).replace(/\\cos\s*ec(?![a-zA-Z])/g,"\\operatorname{cosec}").replace(/\s+/g," ")).trim();
   return {tex,unknown};
 }
 
@@ -2933,14 +2967,15 @@ async function openSelfUploadHistory(){
   modal(`<h2>🗂 Previous Self Uploads</h2><p class="muted">Each upload is listed with how many of its questions are live and how many are waiting in the Review queue. "Delete" removes every question from that upload.</p><div id="suhList" class="muted">Loading…</div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,true);
   try{
-    const snap=ME.role==="admin"
-      ? await db.collection("questions").where("source","==","selfUpload").where("centreId","==",ME.centreId).get()
-      : await db.collection("questions").where("source","==","selfUpload").get();
+    let q0=db.collection("questions").where("source","==","selfUpload");
+    if(ME.role==="admin") q0=q0.where("centreId","==",ME.centreId);
+    // only the few lines each upload is summarised by — never the diagrams
+    const rows=await readSlim(q0,["uploadId","uploadName","createdAt","createdBy","status","subject","topic"]);
     const groups={};
-    snap.docs.forEach(d=>{ const x=d.data(); const t=x.createdAt&&x.createdAt.toDate?x.createdAt.toDate():null;
+    rows.forEach(d=>{ const x=d; const t=x.createdAt&&x.createdAt.toDate?x.createdAt.toDate():null;
       const key=x.uploadId||("old_"+(x.createdBy||"")+"_"+(t?Math.floor(t.getTime()/120000):"0"));
       const g=groups[key]||(groups[key]={key,name:x.uploadName||"",when:t,ids:[],live:0,pending:0,sample:""});
-      g.ids.push(d.id); if(x.status==="live") g.live++; else g.pending++;
+      g.ids.push(x.id); if(x.status==="live") g.live++; else g.pending++;
       if(!g.sample) g.sample=(x.subject||"")+(x.topic&&x.topic!==x.subject?" · "+x.topic:"");
       if(t&&(!g.when||t<g.when)) g.when=t; });
     const list=Object.values(groups).sort((a,b)=>(b.when||0)-(a.when||0));
@@ -3076,7 +3111,7 @@ async function pageReview(){
 async function loadReview(){
   try{
     const snap=ME.role==="admin"
-      ? await db.collection("questions").where("status","==","pending").where("centreId","==",ME.centreId).get()
+      ? await db.collection("questions").where("status","==","pending").where("centreId","==",ME.centreId).limit(50).get()
       : await db.collection("questions").where("status","==","pending").orderBy("createdAt","desc").limit(50).get();
     if(snap.empty){ el("revList").innerHTML=`<div class="card">${emptyState("Queue is clear","No drafts waiting for approval. 🎉")}</div>`; return; }
     el("revList").innerHTML=`<div class="bar"><div class="muted grow">${snap.size} draft${snap.size===1?"":"s"} waiting${snap.size>=50?"+ (showing first 50)":""}.</div>
@@ -3087,21 +3122,22 @@ async function loadReview(){
 async function approveAll(){
   if(!confirm("Approve ALL pending questions and make them live for students?")) return;
   try{
-    const snap=ME.role==="admin"
-      ? await db.collection("questions").where("status","==","pending").where("centreId","==",ME.centreId).get()
-      : await db.collection("questions").where("status","==","pending").get();
-    let docs=snap.docs; if(!docs.length){ loadReview(); return; }
+    let q0=db.collection("questions").where("status","==","pending");
+    if(ME.role==="admin") q0=q0.where("centreId","==",ME.centreId);
+    // approving needs nothing but the name of each question — not its wording, and not its picture
+    let docs=await readSlim(q0,["answerType","numAnswer","draftTestId"]);
+    if(!docs.length){ loadReview(); return; }
     // a numerical question with no value yet can't go live — leave it in the queue
-    const noVal=docs.filter(d=>{const x=d.data();return x.answerType==="numeric"&&(x.numAnswer===null||x.numAnswer===undefined);});
+    const noVal=docs.filter(x=>x.answerType==="numeric"&&(x.numAnswer===null||x.numAnswer===undefined));
     docs=docs.filter(d=>!noVal.includes(d));
     if(noVal.length) alert(noVal.length+" numerical question"+(noVal.length===1?" was":"s were")+" left in the queue because no correct value has been typed in yet.");
     if(!docs.length){ loadReview(); return; }
     for(let i=0;i<docs.length;i+=400){
       const batch=db.batch();
-      docs.slice(i,i+400).forEach(d=>batch.update(d.ref,{status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()}));
+      docs.slice(i,i+400).forEach(d=>batch.update(db.collection("questions").doc(d.id),{status:"live",approvedBy:ME.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp()}));
       await batch.commit();
     }
-    await syncDraftPapers(docs.map(d=>({id:d.id,draftTestId:d.data().draftTestId})),true);
+    await syncDraftPapers(docs.map(d=>({id:d.id,draftTestId:d.draftTestId})),true);
     loadReview();
   }catch(e){ alert("Could not approve all: "+errMsg(e)); }
 }
@@ -3246,18 +3282,21 @@ let AUDIT_FLAGGED=[];
 async function runAnswerAudit(){
   setBtn("auditBtn",true,"Scanning…"); el("auditResults").innerHTML=""; setMsg("auditMsg","","");
   try{
-    const [snap,dismissedSnap]=await Promise.all([db.collection("questions").get(),db.collection("auditDismissed").get()]);
+    const [rows,dismissedSnap]=await Promise.all([
+      readSlim(db.collection("questions"),
+        ["text","options","correct","solution","subject","topic","class","exam","answerType","numAnswer","status"]),
+      db.collection("auditDismissed").get()]);
     const dismissedIds=new Set(dismissedSnap.docs.map(d=>d.id));
     let flagged=[],skippedDismissed=0;
-    snap.forEach(d=>{
-      const x=d.data();
+    rows.forEach(x=>{
       const stated=detectStatedAnswer(x.solution,x.text);
       const storedLetter="ABCD"[x.correct];
       if(stated && stated!==storedLetter){
-        if(dismissedIds.has(d.id)){ skippedDismissed++; return; }
-        flagged.push({id:d.id,...x,statedLetter:stated,storedLetter});
+        if(dismissedIds.has(x.id)){ skippedDismissed++; return; }
+        flagged.push({...x,statedLetter:stated,storedLetter});
       }
     });
+    const snap={size:rows.length};
     AUDIT_FLAGGED=flagged;
     setBtn("auditBtn",false,"🔍 Scan question bank");
     setMsg("auditMsg",`Scanned ${snap.size} question${snap.size===1?"":"s"} — found ${flagged.length} possible mismatch${flagged.length===1?"":"es"}${skippedDismissed?` (${skippedDismissed} previously marked "not a mismatch" skipped)`:""}.`,flagged.length?"err":"ok");
@@ -3812,12 +3851,13 @@ async function runDupFinder(){
   setBtn("dupBtn",true,"Scanning…"); el("dupResults").innerHTML=""; setMsg("dupMsg","","");
   try{
     DUP_USED=await loadUsedQuestionIds();
-    const snap=await db.collection("questions").where("source","==","ai").get();   // AI drafts only
+    // AI drafts only, a page at a time and without the diagrams — nothing here looks at one
+    const rows=await readSlim(db.collection("questions").where("source","==","ai"),
+      ["text","options","correct","solution","subject","topic","class","exam","status","createdAt"]);
     const groups={};
-    snap.forEach(d=>{
-      const x=d.data();
+    rows.forEach(x=>{
       const key=x.subject+"|"+x.class+"|"+normalizeQText(x.text);
-      (groups[key]=groups[key]||[]).push({id:d.id,...x});
+      (groups[key]=groups[key]||[]).push(x);
     });
     const dupGroups=Object.values(groups).filter(g=>g.length>1);
     DUP_GROUPS=dupGroups;
