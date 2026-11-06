@@ -971,7 +971,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: lighter on a phone"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: submit never loses a paper"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -7009,13 +7009,24 @@ function renderPalette(){
     return `<button class="${cls}" onclick="EXAM.cur=${i};renderQ()" ${isLocked(i)?'title="Locked — you left the test while this question was open"':""}>${i-block.start+1}${isLocked(i)?"🔒":""}</button>`;}).join("");
 }
 function confirmSubmit(){
-  const ans=Object.keys(EXAM.answers).length,tot=EXAM.questions.length;
-  confirmModal(`Do you want to submit the test? (${ans} of ${tot} answered)`, ()=>submitExam(false), "Yes, submit");
+  // A press that quietly does nothing is the worst thing this button can do, so every way it can
+  // go wrong says something out loud.
+  try{
+    if(!EXAM||!EXAM.questions){ warnModal("Nothing to hand in","This paper is no longer open on this phone. Go back to My tests and open it again."); return; }
+    if(EXAM.live===false){ warnModal("Already handed in","This paper has already been submitted. Go back to My tests."); return; }
+    if(EXAM.sending){ warnModal("Just a moment","Your paper is being sent now. Please wait."); return; }
+    const ans=Object.keys(EXAM.answers||{}).filter(k=>EXAM.answers[k]!==undefined&&EXAM.answers[k]!=="").length;
+    const tot=EXAM.questions.length;
+    confirmModal(`Do you want to submit the test? (${ans} of ${tot} answered)`, ()=>submitExam(false), "Yes, submit");
+  }catch(e){
+    console.error("submit button failed",e);
+    alert("Something went wrong opening the submit box.\n\n"+errMsg(e)+"\n\nYour answers are still saved. Show this to your teacher.");
+  }
 }
 async function submitExam(auto,disqualify){
-  if(EXAM.live===false) return; // already submitted (guards against a double-fire)
-  EXAM.live=false; clearExamState(EXAM.test.id,EXAM.isPractice); detachCheatGuard(); stopCheckpoints();
-  clearInterval(EXAM.timerInt);
+  if(!EXAM||EXAM.live===false) return;   // nothing open, or already handed in
+  if(EXAM.sending) return;               // one press is already on its way — don't send it twice
+  EXAM.sending=true;
   const exam=EXAM.test.exam,neg=examNeg(exam);
   let score=0,correct=0,wrong=0,unattempted=0;
   const order=EXAM.questions.map(q=>q.id);
@@ -7028,21 +7039,60 @@ async function submitExam(auto,disqualify){
     else if(isNumericQ(q)?numAnswerCorrect(q,sel):(sel===q.correct)){score+=m;correct++;b.score+=m;b.correct++;}
     else{score-=neg;wrong++;b.score-=neg;b.wrong++;}});
   const total=EXAM.questions.reduce((s,q)=>s+examMarks(exam,q.subject),0);
+  // A number that isn't a number, or a field with nothing in it, is refused outright by the
+  // database — and that refusal used to be what lost the paper. Nothing leaves here unchecked.
+  const num=(v,f)=>(typeof v==="number"&&isFinite(v))?v:f;
+  const durMin=num(EXAM.test.duration,null);
+  const startedMs=num(EXAM.endTime-(durMin||0)*60000,Date.now());
   // every attempt is saved (practice too) so answers can be reviewed later
-  try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title,exam,isPractice:!!EXAM.isPractice,
-      studentUid:ME.uid,studentName:ME.name,centreId:ME.centreId,score,total,correct,wrong,unattempted,
+  try{ await db.collection("attempts").add({testId:EXAM.test.id,testTitle:EXAM.test.title||"",exam:exam||"",isPractice:!!EXAM.isPractice,
+      studentUid:ME.uid,studentName:ME.name||"",centreId:ME.centreId||"",score,total,correct,wrong,unattempted,
       lockedCount:(EXAM.locked?EXAM.locked.size:0),lockLog:(EXAM.lockLog||[]).slice(0,60),
       overlayCount:EXAM.overlayCount||0,reloads:EXAM.reloads||0,bySubject,
       startIp:(EXAM.gate&&EXAM.gate.ip)||null,
       atCentre:EXAM.gate?!!EXAM.gate.matched:null,
       netEnforced:!!(EXAM.gate&&EXAM.gate.enforce),
       questionOrder:order,answers,disqualified:!!disqualify,violations:EXAM.violations||0,
-      startedAt:firebase.firestore.Timestamp.fromMillis(EXAM.endTime-EXAM.test.duration*60000),
-      durationMin:EXAM.test.duration||null,
-      timeTakenSec:Math.max(0,Math.round((Date.now()-(EXAM.endTime-EXAM.test.duration*60000))/1000)),
+      startedAt:firebase.firestore.Timestamp.fromMillis(startedMs),
+      durationMin:durMin,
+      timeTakenSec:Math.max(0,Math.round((Date.now()-startedMs)/1000)),
       submittedAt:firebase.firestore.FieldValue.serverTimestamp(),auto:!!auto}); }
-  catch(e){ console.error("attempt save failed",e); }
-  if(disqualify) showMalpracticeResult(); else showResult({score,total,correct,wrong,unattempted,bySubject});
+  catch(e){
+    // The answers did not get through. NOTHING is given up: the paper stays open, the copy on the
+    // phone stays where it is, and the student can press Submit again.
+    console.error("attempt save failed",e);
+    EXAM.sending=false;
+    if(auto){
+      // the clock ran out and the send failed — keep trying quietly rather than ending the paper
+      setTimeout(()=>submitExam(true,disqualify),8000);
+      warnModal("Couldn't hand the paper in yet",
+        "Your answers are safe on this phone and the paper is still open.\n\n"+
+        "The internet dropped just as the paper was being sent. It will keep trying on its own — "+
+        "stay on this screen, and tell your teacher if nothing changes in a minute.");
+    }else{
+      warnModal("Couldn't hand the paper in",
+        "Your answers are safe — nothing has been lost, and the paper is still open.\n\n"+
+        "The paper could not be sent just now ("+errMsg(e)+").\n\n"+
+        "Check that you are connected, then press Submit test again.");
+    }
+    return;
+  }
+  // Only now, with the answers safely sent, is the paper let go of.
+  EXAM.live=false; EXAM.sending=false;
+  clearExamState(EXAM.test.id,EXAM.isPractice); detachCheatGuard(); stopCheckpoints();
+  clearInterval(EXAM.timerInt);
+  try{
+    if(disqualify) showMalpracticeResult(); else showResult({score,total,correct,wrong,unattempted,bySubject});
+  }catch(e){
+    // the paper IS in — never leave the student staring at a test they have already handed in
+    console.error("result screen failed",e);
+    el("examScreen").style.display="none"; document.body.style.overflow="";
+    try{ releaseLandscape(); }catch(_){}
+    setView(`<div class="card" style="max-width:520px;margin:40px auto;text-align:center">
+      <h2 class="serif" style="font-size:22px">Paper handed in ✓</h2>
+      <p class="muted">Your answers have been saved. Your marks will be with your centre.</p>
+      <div class="row center" style="margin-top:16px"><button class="btn" onclick="go('myhome')">Back to my tests</button></div></div>`);
+  }
 }
 function showMalpracticeResult(){
   el("examScreen").style.display="none"; document.body.style.overflow=""; releaseLandscape();
