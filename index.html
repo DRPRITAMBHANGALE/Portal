@@ -989,7 +989,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: five options"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: correct a name"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -5565,7 +5565,9 @@ async function loadStudents(){
 // Master can correct a student's class or course (e.g. a PCM student who is really PCMB)
 async function openEditStudent(uid){
   const x=(await db.collection("users").doc(uid).get()).data()||{};
-  modal(`<h2>Student details</h2><p class="muted">${esc(x.name||"")} · ${centreName(x.centreId)}</p>
+  modal(`<h2>Student details</h2><p class="muted">${centreName(x.centreId)}${x.loginId?" · "+esc(x.loginId):""}</p>
+    <label>Full name</label>
+    <input id="esName" value="${esc(x.name||"")}" placeholder="e.g. PRAMAY DUBEY"/>
     ${ME.role==="master"?`<label>Class</label><select id="esClass"><option value="11" ${x.class==="11"?"selected":""}>Class 11</option><option value="12" ${x.class==="12"?"selected":""}>Class 12</option></select>`:`<p class="muted" style="font-size:12.5px;margin:0">Class ${esc(x.class||"?")} · ${esc(x.stream||"—")} — only the head office can change these.</p><div style="display:none">`}
     <label>Course</label><select id="esStream">
       <option value="PCM" ${x.stream==="PCM"?"selected":""}>PCM — JEE Main &amp; MHT-CET (PCM)</option>
@@ -5580,14 +5582,45 @@ async function openEditStudent(uid){
 async function saveEditStudent(uid){
   setBtn("esBtn",true,"Saving…");
   try{
-    const upd={parentPhone:val("esPhone").trim()};
+    const was=(await db.collection("users").doc(uid).get()).data()||{};
+    const oldName=String(was.name||""), oldCentre=was.centreId||ME.centreId, oldLogin=was.loginId||"";
+    const name=val("esName").trim();
+    if(!name){ setMsg("esMsg","A student needs a name.","err"); setBtn("esBtn",false,"Save"); return; }
+    const upd={parentPhone:val("esPhone").trim(),name};
     if(ME.role==="master"){ upd.class=val("esClass"); upd.stream=val("esStream"); }
-    await db.collection("users").doc(uid).update(upd); closeModal();
+    await db.collection("users").doc(uid).update(upd);
+    let note="";
+    if(name!==oldName){
+      // the name is also written on every paper this student has sat, so that a result sheet reads
+      // the same years later — those copies are put right too
+      const fixed=await renameOnPastPapers(uid,name);
+      note=fixed===null
+        ? " Their past result sheets will still show the old spelling — ask the head office to open this student and press Save once."
+        : (fixed?` ${fixed} past result${fixed===1?"":"s"} updated too.`:"");
+      logCentreUpdate("student_renamed",oldCentre,{from:oldName,to:name,loginId:oldLogin});
+    }
+    if(note){ setMsg("esMsg","✓ Saved."+note,"ok"); setBtn("esBtn",false,"Save"); }
+    else closeModal();
     if(el("stuList")) loadStudents();
     if(el("ssResult")){ const c=(SS_STUDENTS||[]).find(x=>x.id===uid);
-      if(c){ c.class=val("esClass"); c.stream=val("esStream"); ssSelectStudent(uid); } }
+      if(c){ c.name=name; if(ME.role==="master"){ c.class=val("esClass"); c.stream=val("esStream"); } ssSelectStudent(uid); } }
   }
   catch(e){ setMsg("esMsg",permMsg(e,"change a student's details"),"err"); setBtn("esBtn",false,"Save"); }
+}
+/* Put the new spelling on the papers this student has already sat. Only their own, so it is a
+   handful of records, never the whole collection. Returns how many were changed, or null if the
+   portal was not allowed to change them. */
+async function renameOnPastPapers(uid,name){
+  try{
+    const snap=await db.collection("attempts").where("studentUid","==",uid).get();
+    if(snap.empty) return 0;
+    for(let i=0;i<snap.docs.length;i+=400){
+      const batch=db.batch();
+      snap.docs.slice(i,i+400).forEach(d=>batch.update(d.ref,{studentName:name}));
+      await batch.commit();
+    }
+    return snap.size;
+  }catch(e){ console.warn("could not rename on past papers",e); return null; }
 }
 function openAddStudent(){
   modal(`<h2>Add student</h2>
@@ -5721,7 +5754,7 @@ async function ssSelectStudent(uid){
       ])}
       <div class="row" style="gap:8px;margin-top:14px">
         <button class="btn ghost sm" onclick='printStudentSlip("${uid}")'>🖨 Print slip</button>
-        ${ME.role==="master"?`<button class="btn ghost sm" onclick='openEditStudent("${uid}")'>Class / course</button>`:""}
+        <button class="btn ghost sm" onclick='openEditStudent("${uid}")'>✎ ${ME.role==="master"?"Name / class / course":"Edit name"}</button>
         <button class="btn ghost sm" onclick='openResetPassword("${uid}","${esc(stu.name)}")'>Reset password</button>
         <button class="btn gold sm" onclick='downloadReportCard("${uid}")'>⤓ Report card</button>
         <button class="btn ghost sm danger" onclick="delStudent('${uid}')">Delete student</button>
