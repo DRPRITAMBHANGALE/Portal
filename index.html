@@ -989,7 +989,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: correct a name"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: a paper to type into"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1042,7 +1042,7 @@ async function scopedCount(coll,studentsOnly=false,extra=null){
    ============================================================ */
 async function pageQuestions(){
   setView(`<h1 class="page-title">Question bank</h1>
-    <p class="page-sub">Approved questions available for tests &amp; practice. AI drafts land in the Review queue first.</p>
+    <p class="page-sub">Your stored questions — each one kept with its own answer key and solution, ready to be used in any future test. AI drafts land in the Review queue first.</p>
     <div class="bar">
       <div><label>Exam</label>${examSelect("qfExam")}</div>
       <div><label>Subject</label><select id="qfSubject"><option value="all">All subjects</option></select></div>
@@ -1051,6 +1051,7 @@ async function pageQuestions(){
       <button class="btn gold" onclick="openAIGen()">✦ Generate with AI</button>
       <button class="btn gold" onclick="openAIGenAll()">✦ Generate all chapters</button>
       ${ME.role==="master"?`<button class="btn gold" onclick="openInstantTest()">⚡ Instant test creation</button>`:""}
+      <button class="btn" onclick="openBankUpload()">📥 Upload a paper into the database</button>
       <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
       <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
     </div>
@@ -2637,7 +2638,7 @@ function openSelfUpload(){
     <p class="muted">Upload a <b>.docx</b> file laid out like your periodic tests: a numbered question paper with (a)(b)(c)(d) options, an <b>"Answer Keys"</b> section, and optionally a <b>"HINTS &amp; SOLUTION"</b> section. Legacy <b>.doc</b> files must be saved as .docx first — open the file in Word, then File → Save As → Word Document (.docx). Ready questions are added to your bank automatically as soon as the file is read — no extra click needed.</p>
     <label>① Exam <span class="muted" style="font-weight:400">— sets the marking scheme and which students can see the paper</span></label>${examSelect("suExam")}
     <label>② Choose file (.docx only)</label><input type="file" id="suFile" accept=".docx" onchange="handleSelfUpload()"/>
-    <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a></p>
+    <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded something wrong? <a href="#" onclick="openSelfUploadHistory();return false">🗂 See &amp; undo previous uploads</a> &nbsp;·&nbsp; Need a blank paper to type into? <a href="#" onclick="downloadPaperTemplate();return false">⬇ Download the template</a></p>
     <div id="suPreview"></div>
     <div class="msg" id="suMsg"></div>
     <hr class="sep"/>
@@ -2738,6 +2739,25 @@ async function handleSelfUpload(){
           <div class="muted" style="font-size:11.5px">${esc(q.subject)} · answer ${q.answerType==="numeric"?esc(String(q.numAnswer))+" (typed)":(q.correct!=null?optLetter(q.correct):"—")}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
   }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
 }
+/* The blank template staff type into carries grey prompts where their words should go.
+   One left behind is not a question, a choice or a solution — it is an empty box, and is read as
+   one. So a half-filled paper is skipped or sent to the Review queue instead of reaching a
+   student with "type this choice here" printed as option (d). */
+const TEMPLATE_PROMPT=/^(?:type the question here\.?|type this choice here|type the working here(?:,?\s*or leave this line empty)?)$/i;
+function dropTemplatePrompt(s){ return TEMPLATE_PROMPT.test(String(s==null?"":s).trim())?"":String(s==null?"":s); }
+
+/* The blank paper itself, so staff can be handed one without waiting for an email. */
+const PAPER_TEMPLATE_B64="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";
+function downloadPaperTemplate(){
+  try{
+    const bin=atob(PAPER_TEMPLATE_B64), bytes=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+    const blob=new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+    const url=URL.createObjectURL(blob), a=document.createElement("a");
+    a.href=url; a.download="Sonam_Question_Paper_Template.docx";
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }catch(e){ alert("Could not download the template: "+(e&&e.message?e.message:e)); }
+}
 let SU_SOL_STATS={sectionFound:false,count:0};
 // Split the raw mammoth text into paper / answer-key / solutions, then parse each per question number.
 // Every question is classified into a tier: "ready" (imports live), "fixable" (has text + a valid
@@ -2790,6 +2810,7 @@ function parseSelfUploadDoc(raw,defaults,W){
       .replace(/^[ \t]*\(?[A-Ea-e]\)?[ \t]*\n/,"")            // a stray answer letter on its own line
       .replace(/^[ \t]*\(?-?\d+(?:\.\d+)?\)?[ \t]*\n(?=\S)/,"")  // …or a stray answer value
       .trim();
+    body=dropTemplatePrompt(body);
     if(body) solutions[c.num]=body;
   });
 
@@ -2879,7 +2900,7 @@ function parseSelfUploadDoc(raw,defaults,W){
       return out;
     });
   }
-  const clean=s=>(s||"").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim();
+  const clean=s=>dropTemplatePrompt((s||"").replace(/[\t\n]+/g," ").replace(/\s+/g," ").trim());
   // The four standard choices for an assertion–reason question, used when the paper doesn't spell
   // them out in a Direction block of its own.
   const AR_OPTIONS=["Both A and R are true and R is the correct explanation of A",
@@ -3013,12 +3034,447 @@ async function selfUploadImport(ready,fixable,fileName,draftTestId){
   return {liveIds:order.filter(id=>liveSet.has(id)),pendingIds,order,uploadId};
 }
 
+/* ============================================================
+   8b. THE QUESTION DATABASE
+   ------------------------------------------------------------
+   Two halves that belong together.
+
+   PUTTING QUESTIONS IN. The file is laid out exactly like one of the
+   periodic test papers: the numbered questions first, then "Answer Keys"
+   for all of them, then "Hints & Solutions" for all of them. The very
+   same reader the Self Upload screen uses pulls it apart, so an answer or
+   a solution can only ever reach the question whose number it was written
+   against. Nothing is scheduled here — the questions simply go into the
+   database and wait.
+
+   TAKING QUESTIONS OUT. A paper built here is a list of question ids, and
+   every id points at the one document that holds that question's own
+   options, its own right answer and its own solution. There is no second
+   copy of an answer key to drift out of step: pick the question and its
+   answer and solution come with it.
+   ============================================================ */
+
+/* ---------- the subject / chapter blocks on the upload screen ---------- */
+let BK_ROW_SEQ=0;
+function bkRangeRowHTML(from,to,subject,exam){
+  const i=++BK_ROW_SEQ, subs=examSubjects(exam);
+  return `<div class="bkrange" id="bkR${i}" style="display:flex;gap:6px;align-items:flex-end;margin-bottom:6px;flex-wrap:wrap">
+    <div style="width:78px"><label style="font-size:11.5px;margin-top:0">From Q</label><input class="bkFrom" type="number" min="1" value="${from}"/></div>
+    <div style="width:78px"><label style="font-size:11.5px;margin-top:0">To Q</label><input class="bkTo" type="number" min="1" value="${to}"/></div>
+    <div style="flex:1;min-width:120px"><label style="font-size:11.5px;margin-top:0">Subject</label>
+      <select class="bkSubj" onchange="bkChapHints(this)">${subs.map(s=>`<option${s===subject?" selected":""}>${esc(s)}</option>`).join("")}</select></div>
+    <div style="flex:1.5;min-width:150px"><label style="font-size:11.5px;margin-top:0">Chapter</label>
+      <input class="bkChap" list="bkChapList${i}" placeholder="e.g. Chemical kinetics" autocomplete="off"/><datalist id="bkChapList${i}"></datalist></div>
+    <button class="btn ghost sm bkX" style="width:auto;flex:none" onclick="bkDropRange('bkR${i}')" title="Remove this block">✕</button>
+  </div>`;
+}
+function bkResetRanges(){
+  const box=el("bkRanges"); if(!box) return;
+  box.innerHTML=bkRangeRowHTML(1,999,examSubjects(val("bkExam"))[0]||"",val("bkExam"));
+  document.querySelectorAll(".bkSubj").forEach(bkChapHints);
+  bkSyncX();
+}
+/* With a single block there is nothing to remove, so its ✕ is greyed rather than silently doing nothing. */
+function bkSyncX(){
+  const box=el("bkRanges"); if(!box) return;
+  const rows=[...box.querySelectorAll(".bkrange")], only=rows.length<=1;
+  rows.forEach(r=>{ const b=r.querySelector(".bkX"); if(b){ b.disabled=only; b.style.opacity=only?".3":"1"; } });
+}
+function bkAddRange(){
+  const box=el("bkRanges"); if(!box) return;
+  const rows=[...box.querySelectorAll(".bkrange")];
+  const lastTo=rows.length?parseInt(rows[rows.length-1].querySelector(".bkTo").value)||0:0;
+  const from=(lastTo&&lastTo<999)?lastTo+1:1;
+  box.insertAdjacentHTML("beforeend",bkRangeRowHTML(from,999,examSubjects(val("bkExam"))[0]||"",val("bkExam")));
+  bkChapHints(box.querySelector(".bkrange:last-child .bkSubj"));
+  bkSyncX();
+}
+function bkDropRange(rowId){
+  const box=el("bkRanges"); if(!box) return;
+  if(box.querySelectorAll(".bkrange").length<=1) return;   // one block always stays
+  const r=el(rowId); if(r) r.remove();
+  bkSyncX();
+}
+/* fill one row's chapter suggestions from the syllabus for that exam / class / subject */
+function bkChapHints(sel){
+  if(!sel) return;
+  const row=sel.closest(".bkrange"); if(!row) return;
+  const list=row.querySelector("datalist"); if(!list) return;
+  let chaps=[]; try{ chaps=topicsFor(val("bkExam"),val("bkClass"),sel.value)||[]; }catch(_){ chaps=[]; }
+  list.innerHTML=chaps.map(c=>`<option value="${esc(c)}"></option>`).join("");
+}
+function bkReadRanges(){
+  return [...document.querySelectorAll("#bkRanges .bkrange")].map(r=>({
+    from:parseInt(r.querySelector(".bkFrom").value)||1,
+    to:parseInt(r.querySelector(".bkTo").value)||999,
+    subject:r.querySelector(".bkSubj").value,
+    chapter:(r.querySelector(".bkChap").value||"").trim()
+  })).filter(x=>x.to>=x.from);
+}
+/* The first block whose numbers cover this question wins. */
+function bkRangeFor(num,ranges){ return (ranges||[]).find(r=>num>=r.from&&num<=r.to)||null; }
+
+/* ---------- Upload a paper straight into the database ---------- */
+let BANK_UP_PARSED=[], BANK_UP_FILE="", BANK_UP_DONE=false;
+function openBankUpload(){
+  modal(`<h2>📥 Upload questions into the database</h2>
+    <p class="muted">Upload a <b>.docx</b> laid out exactly like one of your question papers — the numbered questions first, then an <b>“Answer Keys”</b> section for all of them, then a <b>“Hints &amp; Solutions”</b> section for all of them. Each question is filed in your database together with its own answer and solution, ready to be used again.
+    <b>No test is created here.</b> Build one whenever you like from <b>Tests → 🗂 New test from the database</b>.</p>
+    <div class="grid cols-2">
+      <div><label>Exam <span class="muted" style="font-weight:400">— sets the marking scheme</span></label>${examSelect("bkExam")}</div>
+      <div><label>Class</label>${classSelect("bkClass",false)}</div>
+    </div>
+    <label>File them under which difficulty</label>${difficultySelect("bkDiff")}
+    <div style="margin-top:16px">
+      <div style="font-weight:600">Which questions belong to which subject &amp; chapter</div>
+      <p class="muted" style="font-size:12.5px;margin:4px 0 8px">One block is enough for a single-chapter file — leave <b>From 1</b> and <b>To 999</b> and just type the chapter. For a mixed paper add a block for each part, for example 1–50 Physics · Rotational motion, then 51–100 Chemistry · Chemical kinetics. Leave a chapter empty and those questions are filed under the subject's own name.</p>
+      <div id="bkRanges"></div>
+      <button class="btn ghost sm" style="width:auto" onclick="bkAddRange()">+ Add another block</button>
+    </div>
+    <div class="row" style="margin-top:16px;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn ghost sm" style="width:auto" onclick="downloadPaperTemplate()">⬇ Download the blank paper</button>
+      <span class="muted" style="font-size:12.5px">Hand this to your staff to type into — it already has the three sections and fifty numbered slots.</span>
+    </div>
+    <label style="margin-top:14px">Choose file (.docx only)</label><input type="file" id="bkFile" accept=".docx" onchange="bankUploadRead()"/>
+    <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded the wrong file? <a href="#" onclick="openSelfUploadHistory('bankUpload');return false">🗂 See &amp; undo previous database uploads</a></p>
+    <div id="bkPreview"></div>
+    <div class="msg" id="bkMsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Close</button>
+      <button class="btn" id="bkAddBtn" onclick="bankUploadSave()" disabled>Add to the database</button></div>`,true);
+  BANK_UP_PARSED=[]; BANK_UP_FILE=""; BANK_UP_DONE=false;
+  if(el("bkDiff")) el("bkDiff").value="Moderate";
+  bkResetRanges();
+  el("bkExam").onchange=bkResetRanges;
+  el("bkClass").onchange=()=>document.querySelectorAll(".bkSubj").forEach(bkChapHints);
+}
+async function bankUploadRead(){
+  const f=el("bkFile").files[0]; if(!f) return;
+  if(!await ready(needWord)) return;
+  BANK_UP_DONE=false; el("bkPreview").innerHTML=""; setBtn("bkAddBtn",true,"Add to the database");
+  setMsg("bkMsg","Reading the file and converting equations…","ok");
+  try{
+    if(!f.name.toLowerCase().endsWith(".docx"))
+      throw new Error("Please upload a .docx file — a legacy .doc must be saved as .docx first in Word (File → Save As → Word Document).");
+    const buf=await f.arrayBuffer();
+    let W=null,raw;
+    try{ W=await readWordWithEquations(buf); raw=W.raw; }
+    catch(err){ console.warn("Equation reader failed, falling back to text only:",err); W=null; }
+    if(!W){
+      if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
+      raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
+    }
+    const ranges=bkReadRanges();
+    const fallbackSubject=(ranges[0]&&ranges[0].subject)||examSubjects(val("bkExam"))[0]||"Physics";
+    const defaults={exam:val("bkExam"),subject:fallbackSubject,cls:val("bkClass"),
+      topic:(ranges[0]&&ranges[0].chapter)||fallbackSubject,difficulty:val("bkDiff")};
+    BANK_UP_PARSED=parseSelfUploadDoc(raw,defaults,W);
+    BANK_UP_FILE=f.name;
+    BANK_UP_PARSED.forEach(q=>{
+      const r=bkRangeFor(q.num,ranges);
+      q.exam=val("bkExam");
+      q.cls=val("bkClass");
+      q.difficulty=val("bkDiff");
+      q.subject=(r&&r.subject)||fallbackSubject;
+      q.topic=((r&&r.chapter)||"").trim()||q.subject;
+    });
+    if(!BANK_UP_PARSED.length){
+      setMsg("bkMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err");
+      return;
+    }
+    const good=BANK_UP_PARSED.filter(q=>q.tier==="ready");
+    const fixable=BANK_UP_PARSED.filter(q=>q.tier==="fixable");
+    const skipped=BANK_UP_PARSED.filter(q=>q.tier==="skip");
+    const withSol=BANK_UP_PARSED.filter(q=>q.solution&&q.solution.trim()).length;
+    setMsg("bkMsg",`Found ${BANK_UP_PARSED.length} question${BANK_UP_PARSED.length===1?"":"s"}`
+      +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)}${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
+      +`✓ ${good.length} ready to file.`
+      +(fixable.length?` ⚠ ${fixable.length} need a quick fix — those go to the Review queue.`:"")
+      +(skipped.length?` ✕ ${skipped.length} can't be imported at all (no question text, or no usable answer key entry).`:"")
+      +` 📘 Solutions found for ${withSol} of them.`
+      +((BANK_UP_PARSED.passedOver&&BANK_UP_PARSED.passedOver.length)
+        ?` ⚠ The file's own numbering passes over ${BANK_UP_PARSED.passedOver.length} question${BANK_UP_PARSED.passedOver.length===1?"":"s"} — numbered ${BANK_UP_PARSED.passedOver.join(", ")} in the file. Fix the numbering in Word and upload again.`:""),
+      (fixable.length||skipped.length)?"warn":"ok");
+    setBtn("bkAddBtn",!(good.length||fixable.length),`Add ${good.length+fixable.length} question${(good.length+fixable.length)===1?"":"s"} to the database`);
+    el("bkPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
+      +BANK_UP_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
+        return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
+          <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
+          <div class="muted" style="font-size:11.5px">${esc(q.subject)} · ${esc(q.topic)} · class ${esc(q.cls)} · answer ${q.answerType==="numeric"?esc(String(q.numAnswer))+" (typed)":(q.correct!=null?optLetter(q.correct):"—")}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${esc(q.problems.join("; "))}</span>`:""}</div></div>`;}).join("")+`</div>`;
+  }catch(e){ setMsg("bkMsg","Could not read file: "+errMsg(e),"err"); }
+}
+async function bankUploadSave(){
+  if(BANK_UP_DONE) return;
+  const good=BANK_UP_PARSED.filter(q=>q.tier==="ready");
+  const fixable=BANK_UP_PARSED.filter(q=>q.tier==="fixable");
+  if(!good.length&&!fixable.length) return;
+  setBtn("bkAddBtn",true,"Adding…");
+  try{
+    const r=await bankUploadImport(good,fixable,BANK_UP_FILE);
+    BANK_UP_DONE=true;
+    const chaps=[...new Set([...good,...fixable].map(q=>q.subject+" · "+q.topic))];
+    setMsg("bkMsg",`✓ ${r.liveIds.length} question${r.liveIds.length===1?"":"s"} ${r.liveIds.length===1?"is":"are"} now in your database`
+      +(r.pendingIds.length?`, and ${r.pendingIds.length} went to the Review queue for a quick fix.`:".")
+      +` Filed under: ${chaps.join(", ")}.`
+      +` Build a paper from them any time — Tests → 🗂 New test from the database.`,"ok");
+    setBtn("bkAddBtn",true,"✓ Added to the database");
+    if(CURRENT_PAGE==="questions"){ loadQuestions(); loadBankCounts(); }
+  }catch(e){ setMsg("bkMsg",errMsg(e),"err"); setBtn("bkAddBtn",false,"Add to the database"); }
+}
+/* Ready questions go in live. Ones with something unreadable go to the Review queue instead of
+   being thrown away, carrying the same upload stamp so the whole upload can be undone in one go. */
+async function bankUploadImport(good,fixable,fileName){
+  const liveIds=[],pendingIds=[];
+  const uploadId="bk_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
+  const all=[...good.map(q=>({q,status:"live"})),...fixable.map(q=>({q,status:"pending"}))];
+  for(let i=0;i<all.length;i+=400){
+    const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
+    chunk.forEach(({q,status})=>{
+      const ref=db.collection("questions").doc(); refs.push({ref,status});
+      batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
+        text:q.text,options:q.options,correct:q.correct,answerType:q.answerType||"mcq",
+        numAnswer:(q.numAnswer===undefined?null:q.numAnswer),solution:q.solution,year:null,
+        numerical:q.answerType==="numeric",status,source:"bankUpload",uploadId,uploadName:fileName||"",qNum:q.num,
+        createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",
+        createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    });
+    await batch.commit();
+    refs.forEach(x=>{ (x.status==="live"?liveIds:pendingIds).push(x.ref.id); });
+  }
+  return {liveIds,pendingIds,uploadId};
+}
+
+/* ---------- Build a test out of what is stored ---------- */
+let BT={sel:[],pool:[],shown:60,loaded:false};
+function openBankTest(){
+  modal(`<h2>🗂 New test from the question database</h2>
+    <p class="muted">Pick questions out of your database — one at a time, or a batch at random — and the paper is built from exactly those. Each question carries its own answer key and solution, so the marking can't slip out of line.</p>
+    <div class="card" style="padding:12px;margin-bottom:12px">
+      <div style="font-weight:600;margin-bottom:6px">① Find the questions</div>
+      <div class="grid cols-3">
+        <div><label>Exam</label>${examSelect("btExam")}</div>
+        <div><label>Class</label><select id="btClass"><option value="11">Class 11</option><option value="12">Class 12</option><option value="both">Both 11 &amp; 12</option></select></div>
+        <div><label>Subject</label><select id="btSubject"></select></div>
+      </div>
+      <div class="grid cols-3">
+        <div><label>Chapter</label><select id="btChap" onchange="btRenderPool()"><option value="all">All chapters</option></select></div>
+        <div><label>Difficulty</label><select id="btDiff" onchange="btRenderPool()"><option value="all">Any difficulty</option>${DIFFICULTIES.map(d=>`<option>${esc(d)}</option>`).join("")}</select></div>
+        <div><label>Search words</label><input id="btFind" placeholder="Keywords…" oninput="btRenderPool()"/></div>
+      </div>
+      <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn" id="btLoadBtn" style="width:auto" onclick="btLoadPool()">🔎 Show matching questions</button>
+        <span class="muted" style="font-size:12.5px">— then add them one by one below, or take</span>
+        <input id="btRand" type="number" min="1" value="25" style="width:84px"/>
+        <button class="btn ghost" style="width:auto" onclick="btAddRandom()">🎲 at random</button>
+      </div>
+      <div id="btPoolMsg" class="muted" style="font-size:12.5px;margin-top:8px"></div>
+      <div id="btPool" style="max-height:34vh;overflow:auto;margin-top:8px"></div>
+    </div>
+    <div class="card" style="padding:12px;margin-bottom:12px">
+      <div class="row" style="justify-content:space-between;align-items:center;gap:8px">
+        <div style="font-weight:600">② In this paper — <span id="btSelCount">nothing yet</span></div>
+        <div class="row" style="gap:6px;width:auto;flex:none">
+          <button class="btn ghost sm" style="width:auto" onclick="btShuffleSel()">🔀 Shuffle the order</button>
+          <button class="btn ghost sm danger" style="width:auto" onclick="btClearSel()">Clear all</button>
+        </div>
+      </div>
+      <div id="btSel" style="max-height:30vh;overflow:auto;margin-top:8px"></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div style="font-weight:600;margin-bottom:6px">③ The paper</div>
+      ${titleFieldHTML("bt","","e.g. Chemical kinetics — revision test")}
+      <label>Duration (min)</label><input id="btDur" type="number" min="5" value="60"/>
+      <div class="grid cols-2"><div><label>Opens (common)</label>${dtPair("btStart")}</div><div><label>Closes (common)</label>${dtPair("btEnd")}</div></div>
+      ${centreAssignHTML("btA")}
+      <label>When should students see the answer key &amp; solutions?</label>
+      <select id="btSolMode" onchange="btSolModeChanged()">
+        <option value="immediate">Immediately after each student submits</option>
+        <option value="scheduled">Only from a specific date &amp; time</option></select>
+      <div id="btSolAtRow" style="display:none"><label>Show solutions from <span class="muted" style="font-weight:400">— starts at the time the paper closes; change it if you want</span></label>${dtPair("btSolAt")}</div>
+      <p class="muted" style="font-size:12.5px;margin:10px 0 0">Not ready to fix the dates? <b>Save as draft</b> keeps the paper hidden from students; schedule it later from <b>Tests → Draft papers</b>.</p>
+    </div>
+    <div class="msg" id="btMsg"></div>
+    <div class="row end" style="margin-top:16px;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn ghost" id="btDraftBtn" onclick="btCreate(true)">Save as draft</button>
+      <button class="btn" id="btSaveBtn" onclick="btCreate(false)">Create &amp; schedule</button></div>`,true);
+  BT={sel:[],pool:[],shown:60,loaded:false};
+  btExamChanged();
+  el("btExam").onchange=btExamChanged;
+  el("btClass").onchange=()=>{ BT.loaded=false; BT.pool=[]; btFillChaps(); btRenderPool(); };
+  el("btSubject").onchange=()=>{ BT.loaded=false; BT.pool=[]; btFillChaps(); btRenderPool(); };
+  btRenderSel(); updTitlePrev("bt");
+}
+function btSolModeChanged(){ solModeChanged("btSolMode","btSolAtRow","btSolAt","btEnd"); }
+function btExamChanged(){
+  fillSubjects("btExam","btSubject",true);
+  BT.loaded=false; BT.pool=[];
+  btFillChaps(); btRenderPool(); updTitlePrev("bt");
+}
+/* Chapters offered: what the syllabus lists, and — once questions are loaded — whatever the
+   stored questions are actually filed under, so a chapter typed on upload is never hidden. */
+function btFillChaps(){
+  const box=el("btChap"); if(!box) return;
+  const keep=box.value||"all";
+  const subj=val("btSubject"), set=new Set();
+  if(subj!=="all") scopeClasses(val("btClass")).forEach(c=>{ (topicsFor(val("btExam"),c,subj)||[]).forEach(t=>set.add(t)); });
+  (BT.pool||[]).forEach(x=>{ if(x.topic&&(subj==="all"||x.subject===subj)) set.add(x.topic); });
+  const list=[...set].sort((a,b)=>a.localeCompare(b));
+  box.innerHTML=`<option value="all">All chapters</option>`+list.map(t=>`<option${t===keep?" selected":""}>${esc(t)}</option>`).join("");
+  if(keep!=="all"&&!list.includes(keep)) box.value="all";
+}
+async function btLoadPool(){
+  const exam=val("btExam"), subj=val("btSubject"), classes=scopeClasses(val("btClass"));
+  setBtn("btLoadBtn",true,"Looking…");
+  el("btPoolMsg").textContent="";
+  try{
+    let q=db.collection("questions").where("status","==","live").where("exam","==",exam);
+    if(subj!=="all") q=q.where("subject","==",subj);
+    if(classes.length===1) q=q.where("class","==",classes[0]);
+    /* only the few lines each question is listed by — never the diagrams, never the solutions.
+       That is what keeps this screen open on a phone. */
+    const rows=await readSlim(q,["text","correct","answerType","numAnswer","subject","topic","class","difficulty","numerical","year","exam"],4000);
+    BT.pool=rows.filter(x=>classes.includes(x.class)&&x.difficulty!==RETIRED_DIFF);
+    BT.loaded=true; BT.shown=60;
+    btFillChaps(); btRenderPool();
+  }catch(e){ el("btPool").innerHTML=errBox(e); }
+  setBtn("btLoadBtn",false,"🔎 Show matching questions");
+}
+function btAnsLabel(x){
+  if(x.answerType==="numeric"||x.numerical) return x.numAnswer==null?"—":esc(String(x.numAnswer))+" (typed)";
+  return x.correct==null?"—":optLetter(x.correct);
+}
+function btMatch(x){
+  const chap=val("btChap"), diff=val("btDiff"), f=(val("btFind")||"").trim().toLowerCase();
+  if(chap&&chap!=="all"&&(x.topic||"")!==chap) return false;
+  if(diff&&diff!=="all"&&(x.difficulty||"")!==diff) return false;
+  if(f&&!((x.text||"")+" "+(x.topic||"")+" "+(x.subject||"")).toLowerCase().includes(f)) return false;
+  return true;
+}
+function btMore(){ BT.shown+=60; btRenderPool(); }
+function btRenderPool(){
+  const box=el("btPool"); if(!box) return;
+  if(!BT.loaded){
+    box.innerHTML=`<p class="muted">Choose the exam, class and subject above, then press <b>“Show matching questions”</b> to look inside your database.</p>`;
+    if(el("btPoolMsg")) el("btPoolMsg").textContent="";
+    return;
+  }
+  const all=BT.pool.filter(btMatch);
+  const chosen=new Set(BT.sel.map(q=>q.id));
+  const left=all.filter(x=>!chosen.has(x.id));
+  const rows=all.slice(0,BT.shown);
+  const shownLeft=rows.filter(x=>!chosen.has(x.id)).length;
+  el("btPoolMsg").innerHTML=`<b>${all.length}</b> question${all.length===1?"":"s"} in your database match${all.length===1?"es":""} these filters — ${left.length} not yet in the paper.`
+    +(shownLeft?` &nbsp;<a href="#" onclick="btAddAllShown();return false">Add the ${shownLeft} shown below</a>`:"");
+  box.innerHTML=(rows.length?rows.map(x=>{
+    const inP=chosen.has(x.id);
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px${inP?";opacity:.5":""}">
+      <div class="muted" style="font-size:11.5px">${esc(x.subject||"")} · ${esc(x.topic||"—")} · class ${esc(x.class||"")} · ${esc(x.difficulty||"")} · answer ${btAnsLabel(x)}${x.year?" · "+esc(String(x.year)):""}</div>
+      <div style="font-size:13.5px;margin:3px 0">${fmtMath(truncate(x.text||"",200),x.subject)}</div>
+      <div class="row end">${inP?`<span class="muted" style="font-size:12px">✓ already in the paper</span>`
+        :`<button class="btn sm" style="width:auto" onclick="btPick('${x.id}')">+ Add to the paper</button>`}</div></div>`;}).join("")
+    :`<p class="muted">Nothing in the database matches those filters. Try a wider chapter or difficulty, or upload more questions first.</p>`)
+    +(all.length>BT.shown?`<div class="row center" style="margin-top:4px"><button class="btn ghost sm" style="width:auto" onclick="btMore()">Show 60 more (${all.length-BT.shown} still to see)</button></div>`:"");
+}
+function btPick(id){
+  const x=(BT.pool||[]).find(q=>q.id===id); if(!x) return;
+  if(BT.sel.some(q=>q.id===id)) return;
+  BT.sel.push(x); btRenderSel(); btRenderPool();
+}
+function btAddAllShown(){
+  const chosen=new Set(BT.sel.map(q=>q.id));
+  const rows=BT.pool.filter(btMatch).slice(0,BT.shown).filter(x=>!chosen.has(x.id));
+  if(!rows.length) return;
+  rows.forEach(x=>BT.sel.push(x));
+  setMsg("btMsg",`Added ${rows.length} question${rows.length===1?"":"s"} to the paper.`,"ok");
+  btRenderSel(); btRenderPool();
+}
+function btAddRandom(){
+  if(!BT.loaded) return setMsg("btMsg","Press “Show matching questions” first, then take a batch at random.","err");
+  const want=Math.max(1,parseInt(val("btRand"))||0);
+  const chosen=new Set(BT.sel.map(q=>q.id));
+  const avail=BT.pool.filter(x=>btMatch(x)&&!chosen.has(x.id));
+  if(!avail.length) return setMsg("btMsg","Every question that matches these filters is already in the paper.","err");
+  const take=shuffle(avail.slice()).slice(0,want);
+  take.forEach(x=>BT.sel.push(x));
+  setMsg("btMsg",`Added ${take.length} question${take.length===1?"":"s"} at random`
+    +(take.length<want?` — only ${take.length} were left to choose from under these filters.`:".")
+    ,take.length<want?"warn":"ok");
+  btRenderSel(); btRenderPool();
+}
+function btDrop(i){ BT.sel.splice(i,1); btRenderSel(); btRenderPool(); }
+function btMoveSel(i,dir){
+  const j=i+dir; if(j<0||j>=BT.sel.length) return;
+  const t=BT.sel[i]; BT.sel[i]=BT.sel[j]; BT.sel[j]=t; btRenderSel();
+}
+function btShuffleSel(){ if(BT.sel.length<2) return; shuffle(BT.sel); btRenderSel(); }
+function btClearSel(){ if(!BT.sel.length) return; BT.sel=[]; setMsg("btMsg","","ok"); btRenderSel(); btRenderPool(); }
+function btRenderSel(){
+  const n=BT.sel.length;
+  if(el("btSelCount")){
+    const bySubj={}; BT.sel.forEach(x=>{ const s=x.subject||"—"; bySubj[s]=(bySubj[s]||0)+1; });
+    el("btSelCount").innerHTML=n?`${n} question${n===1?"":"s"} <span class="muted" style="font-weight:400">(${Object.keys(bySubj).map(s=>esc(s)+" "+bySubj[s]).join(" · ")})</span>`:"nothing yet";
+  }
+  const box=el("btSel"); if(!box) return;
+  box.innerHTML=n?BT.sel.map((x,i)=>`<div class="row" style="gap:8px;align-items:center;border-bottom:1px solid var(--line);padding:6px 2px">
+      <b style="width:32px;flex:none">${i+1}.</b>
+      <div class="grow" style="font-size:13px;min-width:0">${fmtMath(truncate(x.text||"",130),x.subject)}
+        <div class="muted" style="font-size:11.5px">${esc(x.subject||"")} · ${esc(x.topic||"—")} · class ${esc(x.class||"")} · ${esc(x.difficulty||"")} · answer ${btAnsLabel(x)}</div></div>
+      <button class="btn ghost sm" style="width:auto;flex:none" onclick="btMoveSel(${i},-1)" title="Move up">↑</button>
+      <button class="btn ghost sm" style="width:auto;flex:none" onclick="btMoveSel(${i},1)" title="Move down">↓</button>
+      <button class="btn ghost sm danger" style="width:auto;flex:none" onclick="btDrop(${i})" title="Take out of the paper">✕</button></div>`).join("")
+    :`<p class="muted">Nothing picked yet. Find questions above, then add them one at a time, add all the ones shown, or take a batch at random.</p>`;
+}
+async function btCreate(asDraft){
+  if(!BT.sel.length) return setMsg("btMsg","Pick at least one question for the paper.","err");
+  const exams=[...new Set(BT.sel.map(x=>x.exam).filter(Boolean))];
+  if(exams.length>1) return setMsg("btMsg",`The picked questions come from more than one exam (${exams.join(", ")}). One paper can only follow one exam's marking — press “Clear all” and pick again.`,"err");
+  const exam=exams[0]||val("btExam");
+  const title=composeTestTitle("bt");
+  if(!val("btTitle").trim()) return setMsg("btMsg","Give the paper a name.","err");
+  const ids=[...new Set(BT.sel.map(x=>x.id))];
+  const subjects=[...new Set(BT.sel.map(x=>x.subject).filter(Boolean))];
+  const cls=val("btClass");
+  const btnId=asDraft?"btDraftBtn":"btSaveBtn";
+  let ASG=null, solutionsAt=null;
+  if(!asDraft){
+    try{ ASG=readCentreAssign("btA",val("btStart"),val("btEnd")); }catch(e){ return setMsg("btMsg",errMsg(e),"err"); }
+    if(val("btSolMode")==="scheduled"){
+      if(!val("btSolAt")) return setMsg("btMsg",'Pick a date & time for when solutions should be shown, or switch back to "Immediately".',"err");
+      solutionsAt=firebase.firestore.Timestamp.fromDate(new Date(val("btSolAt")));
+    }
+  }
+  setBtn(btnId,true,asDraft?"Saving…":"Building…");
+  try{
+    const base={title,exam,type:"bank",subjects,class:cls,
+      questionIds:ids,qOrder:ids.slice(),duration:parseInt(val("btDur"))||60,isPractice:false,
+      createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+    if(asDraft){
+      await db.collection("tests").add({...base,pendingIds:[],
+        scope:ME.role==="admin"?"draft_"+ME.centreId:"draft",
+        finalScope:ME.role==="master"?"all":ME.centreId,draft:true,
+        startAt:null,endAt:null,solutionsAt:null,uploadName:"picked from the database"});
+      logCentreUpdate("draft_created",ME.role==="admin"?ME.centreId:"all",
+        {testTitle:title,exam,questions:ids.length,forCentres:"—",windowText:"Draft — not scheduled yet"});
+    }else{
+      await db.collection("tests").add({...base,...ASG,solutionsAt});
+      logCentreUpdate("test_created",logCentreForTest(ASG),testLogDetail({title,exam,questionIds:ids},ASG));
+    }
+    closeModal();
+    if(CURRENT_PAGE==="tests") loadTests(); else go("tests");
+  }catch(e){
+    setMsg("btMsg",errMsg(e),"err");
+    setBtn(btnId,false,asDraft?"Save as draft":"Create &amp; schedule");
+  }
+}
+
 // ---- Previous Self Uploads: list them and delete a whole upload in one go ----
-async function openSelfUploadHistory(){
-  modal(`<h2>🗂 Previous Self Uploads</h2><p class="muted">Each upload is listed with how many of its questions are live and how many are waiting in the Review queue. "Delete" removes every question from that upload.</p><div id="suhList" class="muted">Loading…</div>
+let SUH_SRC="selfUpload";
+async function openSelfUploadHistory(src){
+  SUH_SRC=src||"selfUpload";
+  const isBank=SUH_SRC==="bankUpload";
+  modal(`<h2>🗂 Previous ${isBank?"database uploads":"Self Uploads"}</h2><p class="muted">Each upload is listed with how many of its questions are live and how many are waiting in the Review queue. "Delete" removes every question from that upload.</p><div id="suhList" class="muted">Loading…</div>
     <div class="row end" style="margin-top:14px"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,true);
   try{
-    let q0=db.collection("questions").where("source","==","selfUpload");
+    let q0=db.collection("questions").where("source","==",SUH_SRC);
     if(ME.role==="admin") q0=q0.where("centreId","==",ME.centreId);
     // only the few lines each upload is summarised by — never the diagrams
     const rows=await readSlim(q0,["uploadId","uploadName","createdAt","createdBy","status","subject","topic"]);
@@ -3031,7 +3487,7 @@ async function openSelfUploadHistory(){
       if(t&&(!g.when||t<g.when)) g.when=t; });
     const list=Object.values(groups).sort((a,b)=>(b.when||0)-(a.when||0));
     window.SU_HISTORY=list;
-    if(!list.length){ el("suhList").innerHTML=emptyState("No uploads yet","Questions you add with Self Upload will be listed here."); return; }
+    if(!list.length){ el("suhList").innerHTML=emptyState("No uploads yet",isBank?"Papers you upload into the database will be listed here.":"Questions you add with Self Upload will be listed here."); return; }
     el("suhList").innerHTML=list.map((g,i)=>`<div class="row" style="padding:10px 4px;border-bottom:1px solid var(--line);gap:10px;align-items:center">
       <div class="grow" style="font-size:13.5px"><b>${g.when?g.when.toLocaleString("en-IN",{day:"numeric",month:"short",year:"numeric",hour:"numeric",minute:"2-digit"}):"Unknown date"}</b>${g.name?` · ${esc(g.name)}`:""}
         <div class="muted" style="font-size:12px">${esc(g.sample)} · ${g.ids.length} question${g.ids.length===1?"":"s"} (${g.live} live, ${g.pending} in Review queue)</div></div>
@@ -3049,7 +3505,7 @@ async function deleteSelfUpload(i){
   try{
     for(let k=0;k<g.ids.length;k+=400){ const batch=db.batch(); g.ids.slice(k,k+400).forEach(id=>batch.delete(db.collection("questions").doc(id))); await batch.commit(); }
     if(g.key.startsWith("su_")){ try{ const ds=await db.collection("tests").where("uploadId","==",g.key).get(); for(const d of ds.docs) if(d.data().draft) await d.ref.delete(); }catch(_){} }
-    openSelfUploadHistory();
+    openSelfUploadHistory(SUH_SRC);
   }catch(e){ alert("Could not delete: "+errMsg(e)); setBtn("suhDel"+i,false,"Delete"); }
 }
 // ---- Draft papers: made automatically by Self Upload, finalised with one click ----
@@ -4016,6 +4472,8 @@ async function pageTests(){
     <p class="page-sub">Schedule tests for your students. Pick the exam — subjects &amp; marking are set automatically.</p>
     <div class="bar"><div class="spacer" style="flex:1"></div>
       <button class="btn ghost" onclick="openSelfUpload()">📄 Self Upload (Word file)</button>
+      <button class="btn ghost" onclick="openBankUpload()">📥 Upload into the database</button>
+      <button class="btn ghost" onclick="openBankTest()">🗂 New test from the database</button>
       <button class="btn" onclick="openCreateTest()">+ New test</button></div>
     <div class="card" id="draftCard" style="display:none;margin-bottom:16px"><h3 style="margin-top:0">📝 Draft papers</h3><p class="muted" style="margin-top:-4px">Made by Self Upload. Students can't see these until you save them as final papers.</p><div id="draftList"></div></div>
     <div class="card"><div id="testList" class="muted">Loading…</div></div>`);
