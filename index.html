@@ -1065,7 +1065,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: each tool on its own tab"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: one way in"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1246,7 +1246,6 @@ function pageQuestionDatabase(pool){
       <div class="spacer" style="flex:1"></div>
       ${P.key==="file"
         ? `<button class="btn ghost" onclick="openSelfUploadHistory('bankUpload')">🕘 Previous uploads</button>
-           <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
            <button class="btn" onclick="openBankUpload()">📥 Upload into the database</button>`
         : `<button class="btn ghost" onclick="go('review')">⚑ Review queue</button>
            <button class="btn gold" onclick="go('questions')">✦ Generate with AI</button>`}
