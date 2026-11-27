@@ -1028,6 +1028,7 @@ const STAFF_NAV=[
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
   {id:"questions",label:"Question bank",ic:"❓"},
   {id:"qdb",label:"Check the database",ic:"🗄"},
+  {id:"aiqdb",label:"AI question database",ic:"🤖"},
   {id:"review",label:"Review queue",ic:"⚑"},
   {id:"proofread",label:"Proofread a paper",ic:"🔎"},
   {id:"answeraudit",label:"Answer Key Audit",ic:"🩺"},{id:"dupfinder",label:"Duplicate Finder",ic:"🧬"},
@@ -1064,7 +1065,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: type delete to delete"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: two databases, kept apart"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1072,7 +1073,7 @@ function go(page){
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
-  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,qdb:pageQuestionDatabase,review:pageReview,proofread:pageProofread,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
+  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,qdb:()=>pageQuestionDatabase("file"),aiqdb:()=>pageQuestionDatabase("ai"),review:pageReview,proofread:pageProofread,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
     searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,absentees:pageAbsentees,sendmarks:pageSendMarks,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,pasttests:pagePastTests,history:pageHistory})[page]();
 }
 
@@ -1235,10 +1236,14 @@ function openAIGen(){
    Everything is read slim — a few lines per question, with the diagrams left behind — so a bank
    of several thousand can be looked through on a phone.
    ============================================================ */
-let QDB={rows:[],shown:80,loaded:false,sel:new Set()};
-function pageQuestionDatabase(){
-  setView(`<h1 class="page-title">Question database</h1>
-    <p class="page-sub">Everything stored, by subject, chapter, class and level. Nothing here changes anything — it is a place to look.</p>
+let QDB={rows:[],shown:80,loaded:false,sel:new Set(),pool:"file"};
+function pageQuestionDatabase(pool){
+  const P=poolInfo(pool||"file");
+  setView(`<h1 class="page-title">${esc(P.title)}</h1>
+    <p class="page-sub">${esc(P.sub)}</p>
+    <div class="note" style="margin-bottom:14px">${P.key==="file"
+      ? `These are <b>your own questions</b>, read out of the Word files you uploaded. Anything the AI wrote is not here — it lives on its own tab, <b>AI question database</b>. The two are never mixed.`
+      : `These are <b>AI-written</b> questions (and any you typed in by hand). Your uploaded Word-file questions are not here — they live on <b>Check the database</b>. The two are never mixed.`}</div>
     <div class="card" style="margin-bottom:16px">
       <div class="grid cols-3">
         <div><label>Papers it is for</label><select id="qdExam" onchange="qdbLoad()"><option value="all">All</option>${EXAM_TAGS.map(t=>`<option>${esc(t)}</option>`).join("")}</select></div>
@@ -1252,14 +1257,14 @@ function pageQuestionDatabase(){
       <label>Search the wording</label><input id="qdFind" placeholder="Keywords…" oninput="qdbRender()"/>
     </div>
     <div id="qdSummary"></div>
-    <div class="card" style="margin-bottom:16px"><h3 style="margin-top:0">Your uploaded files</h3>
+    ${P.key==="file"?`<div class="card" style="margin-bottom:16px"><h3 style="margin-top:0">Your uploaded files</h3>
       <p class="muted" style="margin-top:-4px">Each file exactly as it went in, in its own order. Open one to print it or save it as a PDF — useful for checking what the portal read against the Word file you started from.</p>
-      <div id="qdFiles" class="muted">Loading…</div></div>
+      <div id="qdFiles" class="muted">Loading…</div></div>`:""}
     <div class="card" style="margin-bottom:16px"><h3 style="margin-top:0">What is stored, chapter by chapter</h3><div id="qdChapters" class="muted">Loading…</div></div>
     <div class="card"><h3 style="margin-top:0">The questions</h3>
       <div id="qdTools"></div><div class="msg" id="qdMsg"></div>
       <div id="qdList" class="muted">Loading…</div></div>`);
-  QDB={rows:[],shown:80,loaded:false,sel:new Set()};
+  QDB={rows:[],shown:80,loaded:false,sel:new Set(),pool:P.key};
   qdbLoad();
 }
 async function qdbLoad(){
@@ -1279,7 +1284,9 @@ async function qdbLoad(){
         "answerType","numAnswer","numerical","year","uploadName","source","uploadId","seq","qNum","block"],9000);
       got.forEach(r=>{ if(!seen.has(r.id)){ seen.add(r.id); rows.push(r); } });
     }
-    QDB.rows=rows; QDB.loaded=true; QDB.shown=80;
+    /* the one place the two are separated — everything downstream sees one pool only */
+    QDB.rows=rows.filter(r=>poolOf(r)===(QDB.pool||"file"));
+    QDB.loaded=true; QDB.shown=80;
     qdbFillPickers();
     qdbRender();
   }catch(e){
@@ -1335,7 +1342,8 @@ function qdbUploads(){
 function qdbRenderFiles(){
   const box=el("qdFiles"); if(!box) return;
   const list=qdbUploads();
-  if(!list.length){ box.innerHTML=emptyState("No uploaded files here yet","Upload a chapter from Tests → 📥 Upload into the database."); return; }
+  if(QDB.pool==="ai") return;                  // the AI pool has no files behind it
+  if(!list.length){ box.innerHTML=emptyState("No uploaded files here yet",poolInfo("file").hint); return; }
   const unplaced=list.filter(u=>!u.placed).length;
   box.innerHTML=(unplaced?`<div class="note" style="margin-bottom:10px">⚠ ${unplaced} file${unplaced===1?" was":"s were"} uploaded before the portal recorded each question's place in its file, so ${unplaced===1?"it":"they"} cannot be printed back in the exact original order — questions numbered 1 in different exercises end up together. Upload ${unplaced===1?"that file":"those files"} again (<a href="#" onclick="openSelfUploadHistory('bankUpload');return false">undo the old upload first</a>) and the order will be exact.</div>`:"")
     +tableHTML(["File","Subject","Chapter","Class","Questions",""],
@@ -1405,7 +1413,7 @@ function qdbRender(){
         groups.map(x=>[subjTag(x.subject),esc(x.topic),esc(String(x.cls)),
           ...DIFFICULTIES.filter(d=>lv[d]).map(d=>x.lv[d]||"<span class='muted'>—</span>"),
           `<b>${x.total}</b>`]))
-    : emptyState("Nothing stored for these choices","Upload a chapter from Tests → 📥 Upload into the database.");
+    : emptyState("Nothing stored for these choices",poolInfo(QDB.pool).hint);
 
   // ---- the questions themselves
   const show=rows.slice(0,QDB.shown);
@@ -1414,7 +1422,7 @@ function qdbRender(){
     ? show.map(r=>`<div style="border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px;display:flex;gap:10px;align-items:flex-start">
         <input type="checkbox" class="qdck" style="width:auto;margin-top:3px;flex:none" ${QDB.sel.has(r.id)?"checked":""} onchange="qdbTick('${r.id}',this.checked)" title="Pick this question"/>
         <div style="flex:1;min-width:0">
-        <div class="muted" style="font-size:11.5px">${esc(r.subject||"—")} · ${esc(r.topic||"—")} · class ${esc(String(r.class||"—"))} · ${esc(r.difficulty||"—")} · answer ${qdbAnsLabel(r)}${r.year?" · "+esc(String(r.year)):""}${r.uploadName?` · <span title="${esc(r.uploadName)}">from ${esc(truncate(r.uploadName,28))}</span>`:""}</div>
+        <div class="muted" style="font-size:11.5px">${esc(r.subject||"—")} · ${esc(r.topic||"—")} · class ${esc(String(r.class||"—"))} · ${esc(r.difficulty||"—")} · answer ${qdbAnsLabel(r)}${r.year?" · "+esc(String(r.year)):""}${r.uploadName?` · <span title="${esc(r.uploadName)}">from ${esc(truncate(r.uploadName,28))}</span>`:""}${QDB.pool==="ai"?" "+sourceTag(r):""}</div>
         <div style="font-size:13.5px;margin:3px 0">${fmtMath(truncate(oneLine(r.text),260),r.subject)}</div>
         <div class="row end"><button class="btn ghost sm" style="width:auto" onclick="qdbView('${r.id}')">Read it in full</button></div>
         </div></div>`).join("")
@@ -3889,12 +3897,46 @@ async function bankUploadImport(good,fixable,fileName){
    elsewhere; it is simply not offered here, and the count of what was left out is shown. */
 const FILE_SOURCES={bankUpload:1,selfUpload:1,upload:1};
 function cameFromAFile(q){ return !!FILE_SOURCES[String((q&&q.source)||"")]; }
-let BT={sel:[],pool:[],shown:60,loaded:false,hidden:0};
-function openBankTest(){
-  modal(`<h2>🗂 New test from the question database</h2>
-    <p class="muted">Pick questions out of your database — one at a time, or a batch at random — and the paper is built from exactly those. Each question carries its own answer key and solution, so the marking can't slip out of line.
-    <b>For a mixed paper</b>, add from one subject, then change the subject above and add more — what you have already picked stays where it is.
-    <br><b>Only questions from your own uploaded files are offered here</b> — anything the AI wrote stays in the Review queue and the AI screens.</p>
+/* Two pools, kept apart from end to end. A question is either out of a Word file that was
+   uploaded, or it is one the AI wrote (or one typed in by hand on the Question bank screen).
+   Each pool has its own screen to look through and its own screen to build a paper from, and
+   nothing ever draws from both at once — so a paper is either all your own material or all
+   AI material, and you always know which. */
+const Q_POOLS={
+  file:{key:"file",
+    nav:"Check the database", title:"Uploaded question database",
+    sub:"Everything that came out of the Word files you uploaded — by subject, chapter, class and level.",
+    what:"your uploaded files", what1:"from one of your uploaded files",
+    other:"AI-written", otherWhere:"the AI question database",
+    hint:"Upload a chapter from Tests → 📥 Upload into the database.",
+    build:"🗂 Generate from uploaded questions",
+    buildTitle:"New test from your uploaded questions"},
+  ai:{key:"ai",
+    nav:"AI question database", title:"AI question database",
+    sub:"Only the questions the AI wrote, and any you typed in by hand — kept quite separate from your uploaded files.",
+    what:"the AI database", what1:"written by the AI",
+    other:"uploaded", otherWhere:"Check the database",
+    hint:"Generate some from Question bank, then approve them in the Review queue.",
+    build:"🤖 Generate from AI database",
+    buildTitle:"New test from the AI question database"}
+};
+function poolOf(q){ return cameFromAFile(q)?"file":"ai"; }
+function poolInfo(k){ return Q_POOLS[k]||Q_POOLS.file; }
+function sourceTag(q){
+  const s=String((q&&q.source)||"");
+  if(s==="ai") return '<span class="tag">AI</span>';
+  if(s==="manual") return '<span class="tag">typed in</span>';
+  return '<span class="tag">origin not recorded</span>';
+}
+let BT={sel:[],pool:[],shown:60,loaded:false,hidden:0,src:"file"};
+function openBankTest(src){
+  const P=poolInfo(src||"file");
+  modal(`<h2>${P.key==="file"?"🗂":"🤖"} ${esc(P.buildTitle)}</h2>
+    <p class="muted">Pick questions out of ${esc(P.what)} — one at a time, or a batch at random — and the paper is built from exactly those. Each question carries its own answer key and solution, so the marking can't slip out of line.
+    <b>For a mixed paper</b>, add from one subject, then change the subject above and add more — what you have already picked stays where it is.</p>
+    <div class="note" style="margin-bottom:12px">${P.key==="file"
+      ? `This paper is built <b>only from your uploaded Word files</b>. Nothing the AI wrote can get into it. For an AI paper, close this and choose <b>🤖 Generate from AI database</b> instead.`
+      : `This paper is built <b>only from AI-written questions</b> that have been approved (Review queue → approve, or generated straight to the database). Nothing from your uploaded files can get into it. For a paper from your own chapters, close this and choose <b>🗂 Generate from uploaded questions</b> instead.`}</div>
     <div class="card" style="padding:12px;margin-bottom:12px">
       <div style="font-weight:600;margin-bottom:6px">① Find the questions</div>
       <div class="grid cols-3">
@@ -3945,7 +3987,7 @@ function openBankTest(){
     <div class="row end" style="margin-top:16px;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn ghost" id="btDraftBtn" onclick="btCreate(true)">📝 Keep as a draft</button>
       <button class="btn" id="btSaveBtn" onclick="btCreate(false)">Create &amp; schedule</button></div>`,true);
-  BT={sel:[],pool:[],shown:60,loaded:false,hidden:0};
+  BT={sel:[],pool:[],shown:60,loaded:false,hidden:0,src:P.key};
   btExamChanged();
   el("btExam").onchange=btExamChanged;
   el("btClass").onchange=btLoadPool;
@@ -3986,7 +4028,8 @@ async function btLoadPool(){
       return q;
     },["text","correct","answerType","numAnswer","subject","topic","class","difficulty","numerical","year","exam","source"],4000);
     const usable=rows.filter(x=>classes.includes(x.class)&&x.difficulty!==RETIRED_DIFF);
-    BT.pool=usable.filter(cameFromAFile);
+    /* the same single line of separation as on the database screens */
+    BT.pool=usable.filter(x=>poolOf(x)===(BT.src||"file"));
     BT.hidden=usable.length-BT.pool.length;
     BT.loaded=true; BT.shown=60;
     btFillChaps(); btRenderPool();
@@ -4008,7 +4051,7 @@ function btMore(){ BT.shown+=60; btRenderPool(); }
 function btRenderPool(){
   const box=el("btPool"); if(!box) return;
   if(!BT.loaded){
-    box.innerHTML=`<p class="muted">Choose the exam, class and subject above, then press <b>“Show matching questions”</b> to look inside your database. Only the questions from your uploaded files are offered.</p>`;
+    box.innerHTML=`<p class="muted">Choose the exam, class and subject above, then press <b>“Show matching questions”</b> to look inside ${esc(poolInfo(BT.src).what)}. Only questions ${esc(poolInfo(BT.src).what1)} are offered.</p>`;
     if(el("btPoolMsg")) el("btPoolMsg").textContent="";
     return;
   }
@@ -4019,9 +4062,10 @@ function btRenderPool(){
   const shownLeft=rows.filter(x=>!chosen.has(x.id)).length;
   const lv={}; all.forEach(x=>{ const d=x.difficulty||"\u2014"; lv[d]=(lv[d]||0)+1; });
   const spread=DIFFICULTIES.filter(k=>lv[k]).map(k=>esc(k)+" "+lv[k]).join(" \u00b7 ");
-  el("btPoolMsg").innerHTML=`<b>${all.length}</b> question${all.length===1?"":"s"} in your database match${all.length===1?"es":""} these filters — ${left.length} not yet in the paper.`
+  const PB_=poolInfo(BT.src);
+  el("btPoolMsg").innerHTML=`<b>${all.length}</b> question${all.length===1?"":"s"} in ${esc(PB_.what)} match${all.length===1?"es":""} these filters — ${left.length} not yet in the paper.`
     +(spread&&val("btDiff")==="all"?`<br><span style="font-size:12px">By level: ${spread}</span>`:"")
-    +(BT.hidden?`<br><span style="font-size:12px" class="muted">${BT.hidden} AI-written question${BT.hidden===1?"":"s"} ${BT.hidden===1?"is":"are"} not offered here — a paper from this screen is built only from your uploaded files.</span>`:"")
+    +(BT.hidden?`<br><span style="font-size:12px" class="muted">${BT.hidden} ${esc(PB_.other)} question${BT.hidden===1?"":"s"} ${BT.hidden===1?"is":"are"} kept out of this paper — ${BT.hidden===1?"it belongs":"they belong"} to ${esc(PB_.otherWhere)}.</span>`:"")
     +(shownLeft?` &nbsp;<a href="#" onclick="btAddAllShown();return false">Add the ${shownLeft} shown below</a>`:"")
     +(left.length>shownLeft?` &nbsp;\u00b7&nbsp; <a href="#" onclick="btAddAllMatching();return false">Add all ${left.length}</a>`:"");
   box.innerHTML=(rows.length?rows.map(x=>{
@@ -4031,7 +4075,7 @@ function btRenderPool(){
       <div style="font-size:13.5px;margin:3px 0">${fmtMath(truncate(oneLine(x.text),200),x.subject)}</div>
       <div class="row end">${inP?`<span class="muted" style="font-size:12px">✓ already in the paper</span>`
         :`<button class="btn sm" style="width:auto" onclick="btPick('${x.id}')">+ Add to the paper</button>`}</div></div>`;}).join("")
-    :`<p class="muted">Nothing from your uploaded files matches those filters.${BT.hidden?` ${BT.hidden} AI-written question${BT.hidden===1?"":"s"} matched but ${BT.hidden===1?"is":"are"} not offered here.`:""} Try a wider chapter, or upload the chapter first.</p>`)
+    :`<p class="muted">Nothing in ${esc(PB_.what)} matches those filters.${BT.hidden?` ${BT.hidden} ${esc(PB_.other)} question${BT.hidden===1?"":"s"} matched, but ${BT.hidden===1?"it is":"they are"} kept out of this paper.`:""} ${esc(PB_.hint)}</p>`)
     +(all.length>BT.shown?`<div class="row center" style="margin-top:4px"><button class="btn ghost sm" style="width:auto" onclick="btMore()">Show 60 more (${all.length-BT.shown} still to see)</button></div>`:"");
 }
 function btPick(id){
@@ -4110,6 +4154,10 @@ function btRenderSel(){
 }
 async function btCreate(asDraft){
   if(!BT.sel.length) return setMsg("btMsg","Pick at least one question for the paper.","err");
+  /* belt and braces: the pool is filtered when it is loaded, so this can only fire if something
+     went wrong — and if it ever did, a half-AI paper must not reach a student. */
+  const wrongPool=BT.sel.filter(x=>poolOf(x)!==(BT.src||"file"));
+  if(wrongPool.length) return setMsg("btMsg",`${wrongPool.length} of the picked questions do not belong to ${poolInfo(BT.src).what}. The two are never mixed in one paper — clear the paper and start again.`,"err");
   const exam=val("btExam");                 // the paper's exam sets the marking, not the questions'
 
   const title=composeTestTitle("bt");
@@ -4128,14 +4176,15 @@ async function btCreate(asDraft){
   }
   setBtn(btnId,true,asDraft?"Saving…":"Building…");
   try{
-    const base={title,exam,type:"bank",subjects,class:cls,
+    const base={title,exam,type:"bank",subjects,class:cls,builtFrom:BT.src||"file",
       questionIds:ids,qOrder:ids.slice(),duration:parseInt(val("btDur"))||60,isPractice:false,
       createdBy:ME.uid,createdByRole:ME.role,createdAt:firebase.firestore.FieldValue.serverTimestamp()};
     if(asDraft){
       await db.collection("tests").add({...base,pendingIds:[],
         scope:ME.role==="admin"?"draft_"+ME.centreId:"draft",
         finalScope:ME.role==="master"?"all":ME.centreId,draft:true,
-        startAt:null,endAt:null,solutionsAt:null,uploadName:"picked from the database"});
+        startAt:null,endAt:null,solutionsAt:null,
+        uploadName:(BT.src==="ai"?"picked from the AI database":"picked from your uploaded questions")});
       logCentreUpdate("draft_created",ME.role==="admin"?ME.centreId:"all",
         {testTitle:title,exam,questions:ids.length,forCentres:"—",windowText:"Draft — not scheduled yet"});
     }else{
@@ -5157,9 +5206,10 @@ async function pageTests(){
     <div class="bar"><div class="spacer" style="flex:1"></div>
       <button class="btn ghost" onclick="openSelfUpload()">📄 Self Upload (Word file)</button>
       <button class="btn ghost" onclick="openBankUpload()">📥 Upload into the database</button>
-      <button class="btn ghost" onclick="openBankTest()">🗂 New test from the database</button>
+      <button class="btn ghost" onclick="openBankTest('file')">🗂 Generate from uploaded questions</button>
+      <button class="btn ghost" onclick="openBankTest('ai')">🤖 Generate from AI database</button>
       <button class="btn" onclick="openCreateTest()">+ New test</button></div>
-    <div class="card" id="draftCard" style="display:none;margin-bottom:16px"><h3 style="margin-top:0">📝 Draft papers</h3><p class="muted" style="margin-top:-4px">Papers waiting to be checked — from Self Upload, or built from the question database. <b>Students cannot see a draft.</b> Print it for a teacher to go through, then press “Save as final paper” to set the dates and let students in.</p><div id="draftList"></div></div>
+    <div class="card" id="draftCard" style="display:none;margin-bottom:16px"><h3 style="margin-top:0">📝 Draft papers</h3><p class="muted" style="margin-top:-4px">Papers waiting to be checked — from Self Upload, or built from either question database. <b>Students cannot see a draft.</b> Print it for a teacher to go through, then press “Save as final paper” to set the dates and let students in.</p><div id="draftList"></div></div>
     <div class="card"><div id="testList" class="muted">Loading…</div></div>`);
   loadTests();
 }
