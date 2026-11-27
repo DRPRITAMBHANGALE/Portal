@@ -1026,7 +1026,9 @@ async function slimForExam(exam,build,fields,cap){
 const STAFF_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
-  {id:"questions",label:"Question bank",ic:"❓"},{id:"review",label:"Review queue",ic:"⚑"},
+  {id:"questions",label:"Question bank",ic:"❓"},
+  {id:"qdb",label:"Check the database",ic:"🗄"},
+  {id:"review",label:"Review queue",ic:"⚑"},
   {id:"proofread",label:"Proofread a paper",ic:"🔎"},
   {id:"answeraudit",label:"Answer Key Audit",ic:"🩺"},{id:"dupfinder",label:"Duplicate Finder",ic:"🧬"},
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
@@ -1062,7 +1064,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: cross or dot"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: a look at the database"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1070,7 +1072,7 @@ function go(page){
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
-  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,review:pageReview,proofread:pageProofread,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
+  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,qdb:pageQuestionDatabase,review:pageReview,proofread:pageProofread,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
     searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,absentees:pageAbsentees,sendmarks:pageSendMarks,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,pasttests:pagePastTests,history:pageHistory})[page]();
 }
 
@@ -1221,6 +1223,165 @@ function openAIGen(){
   el("gSubject").onchange=()=>fillTopics("gExam",val("gClass"),"gSubject","gTopic");
 }
 /* a plain call to the Cloud Function that hands back whatever it answered */
+/* ============================================================
+   THE QUESTION DATABASE — a place to look, and only to look
+   ------------------------------------------------------------
+   Nothing on this screen changes anything. It answers one question: what is actually in the
+   database? How many questions, under which subject, which chapter, which class, at which
+   level — and how many are still waiting in the Review queue. A question can be opened to read
+   it in full, with its answer and its solution, but not edited; that is done where it belongs,
+   in the Review queue or on the paper's own ✎ Questions screen.
+
+   Everything is read slim — a few lines per question, with the diagrams left behind — so a bank
+   of several thousand can be looked through on a phone.
+   ============================================================ */
+let QDB={rows:[],shown:80,loaded:false};
+function pageQuestionDatabase(){
+  setView(`<h1 class="page-title">Question database</h1>
+    <p class="page-sub">Everything stored, by subject, chapter, class and level. Nothing here changes anything — it is a place to look.</p>
+    <div class="card" style="margin-bottom:16px">
+      <div class="grid cols-3">
+        <div><label>Papers it is for</label><select id="qdExam" onchange="qdbLoad()"><option value="all">All</option>${EXAM_TAGS.map(t=>`<option>${esc(t)}</option>`).join("")}</select></div>
+        <div><label>Class</label><select id="qdClass" onchange="qdbLoad()"><option value="all">Both classes</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
+        <div><label>Status</label><select id="qdStatus" onchange="qdbLoad()"><option value="live">Ready to use</option><option value="pending">Waiting in the Review queue</option></select></div>
+      </div>
+      <div class="grid cols-3">
+        <div><label>Subject</label><select id="qdSubject" onchange="qdbRender()"><option value="all">All subjects</option></select></div>
+        <div><label>Chapter</label><select id="qdChap" onchange="qdbRender()"><option value="all">All chapters</option></select></div>
+        <div><label>Level</label><select id="qdDiff" onchange="qdbRender()"><option value="all">Any level</option>${DIFFICULTIES.map(d=>`<option>${esc(d)}</option>`).join("")}</select></div>
+      </div>
+      <label>Search the wording</label><input id="qdFind" placeholder="Keywords…" oninput="qdbRender()"/>
+    </div>
+    <div id="qdSummary"></div>
+    <div class="card" style="margin-bottom:16px"><h3 style="margin-top:0">What is stored, chapter by chapter</h3><div id="qdChapters" class="muted">Loading…</div></div>
+    <div class="card"><h3 style="margin-top:0">The questions</h3><div id="qdList" class="muted">Loading…</div></div>`);
+  QDB={rows:[],shown:80,loaded:false};
+  qdbLoad();
+}
+async function qdbLoad(){
+  const exam=val("qdExam"), cls=val("qdClass"), status=val("qdStatus")||"live";
+  el("qdSummary").innerHTML=`<div class="card" style="margin-bottom:16px"><div class="muted">Counting…</div></div>`;
+  el("qdChapters").innerHTML=`<div class="muted">Loading…</div>`;
+  el("qdList").innerHTML=`<div class="muted">Loading…</div>`;
+  /* everything carrying one of the tags, and anything saved before the tags existed, so nothing
+     in the database can be invisible on the one screen meant to show all of it */
+  const tags=exam==="all"?[...new Set([...EXAM_TAGS,...EXAM_KEYS])]:[exam];
+  try{
+    const seen=new Set(), rows=[];
+    for(const tag of tags){
+      let q=db.collection("questions").where("status","==",status).where("exam","==",tag);
+      if(cls!=="all") q=q.where("class","==",cls);
+      const got=await readSlim(q,["text","subject","topic","class","difficulty","exam","correct",
+        "answerType","numAnswer","numerical","year","uploadName","source"],9000);
+      got.forEach(r=>{ if(!seen.has(r.id)){ seen.add(r.id); rows.push(r); } });
+    }
+    QDB.rows=rows; QDB.loaded=true; QDB.shown=80;
+    qdbFillPickers();
+    qdbRender();
+  }catch(e){
+    el("qdSummary").innerHTML=errBox(e); el("qdChapters").innerHTML=""; el("qdList").innerHTML="";
+  }
+}
+/* the subject and chapter boxes offer only what is really stored */
+function qdbFillPickers(){
+  const keepS=val("qdSubject")||"all";
+  const subs=[...new Set(QDB.rows.map(r=>r.subject).filter(Boolean))].sort();
+  el("qdSubject").innerHTML=`<option value="all">All subjects</option>`
+    +subs.map(s=>`<option${s===keepS?" selected":""}>${esc(s)}</option>`).join("");
+  if(keepS!=="all"&&!subs.includes(keepS)) el("qdSubject").value="all";
+  qdbFillChapters();
+}
+function qdbFillChapters(){
+  const keep=val("qdChap")||"all", subj=val("qdSubject");
+  const n={};
+  QDB.rows.forEach(r=>{ if((subj==="all"||r.subject===subj)&&r.topic) n[r.topic]=(n[r.topic]||0)+1; });
+  const list=Object.keys(n).sort((a,b)=>a.localeCompare(b));
+  el("qdChap").innerHTML=`<option value="all">All chapters</option>`
+    +list.map(t=>`<option value="${esc(t)}"${t===keep?" selected":""}>${esc(t)} (${n[t]})</option>`).join("");
+  if(keep!=="all"&&!list.includes(keep)) el("qdChap").value="all";
+}
+function qdbMatch(r){
+  const subj=val("qdSubject"), chap=val("qdChap"), dif=val("qdDiff");
+  const f=(val("qdFind")||"").trim().toLowerCase();
+  if(subj!=="all"&&r.subject!==subj) return false;
+  if(chap!=="all"&&(r.topic||"")!==chap) return false;
+  if(dif!=="all"&&(r.difficulty||"")!==dif) return false;
+  if(f&&!((r.text||"")+" "+(r.topic||"")+" "+(r.subject||"")).toLowerCase().includes(f)) return false;
+  return true;
+}
+function qdbMore(){ QDB.shown+=80; qdbRender(); }
+function qdbAnsLabel(r){
+  if(r.answerType==="numeric"||r.numerical) return r.numAnswer==null?"—":esc(String(r.numAnswer))+" (typed)";
+  return r.correct==null?"—":optLetter(r.correct);
+}
+function qdbRender(){
+  if(!QDB.loaded) return;
+  qdbFillChapters();
+  const rows=QDB.rows.filter(qdbMatch);
+  const live=val("qdStatus")!=="pending";
+
+  // ---- the tiles across the top
+  const chapters=new Set(rows.map(r=>r.topic).filter(Boolean));
+  const subjects=new Set(rows.map(r=>r.subject).filter(Boolean));
+  const lv={}; rows.forEach(r=>{ const d=r.difficulty||"—"; lv[d]=(lv[d]||0)+1; });
+  el("qdSummary").innerHTML=`<div class="card" style="margin-bottom:16px">
+    <div class="skpis" style="margin-bottom:0">
+      <div class="kpi"><div class="n">${rows.length}</div><div class="l">${live?"questions ready":"waiting in Review"}</div></div>
+      <div class="kpi"><div class="n">${chapters.size}</div><div class="l">chapter${chapters.size===1?"":"s"}</div></div>
+      <div class="kpi"><div class="n">${subjects.size}</div><div class="l">subject${subjects.size===1?"":"s"}</div></div>
+      ${DIFFICULTIES.filter(d=>lv[d]).map(d=>`<div class="kpi"><div class="n">${lv[d]}</div><div class="l">${esc(d)}</div></div>`).join("")}
+    </div></div>`;
+
+  // ---- chapter by chapter
+  const key=r=>(r.subject||"—")+"||"+(r.topic||"—")+"||"+(r.class||"—");
+  const g={};
+  rows.forEach(r=>{ const k=key(r); (g[k]=g[k]||{subject:r.subject||"—",topic:r.topic||"—",cls:r.class||"—",total:0,lv:{}});
+    g[k].total++; const d=r.difficulty||"—"; g[k].lv[d]=(g[k].lv[d]||0)+1; });
+  const groups=Object.values(g).sort((a,b)=>
+    a.subject.localeCompare(b.subject)||a.topic.localeCompare(b.topic)||String(a.cls).localeCompare(String(b.cls)));
+  el("qdChapters").innerHTML=groups.length
+    ? tableHTML(["Subject","Chapter","Class",...DIFFICULTIES.filter(d=>lv[d]),"Total"],
+        groups.map(x=>[subjTag(x.subject),esc(x.topic),esc(String(x.cls)),
+          ...DIFFICULTIES.filter(d=>lv[d]).map(d=>x.lv[d]||"<span class='muted'>—</span>"),
+          `<b>${x.total}</b>`]))
+    : emptyState("Nothing stored for these choices","Upload a chapter from Tests → 📥 Upload into the database.");
+
+  // ---- the questions themselves
+  const show=rows.slice(0,QDB.shown);
+  el("qdList").innerHTML=(show.length
+    ? show.map(r=>`<div style="border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px">
+        <div class="muted" style="font-size:11.5px">${esc(r.subject||"—")} · ${esc(r.topic||"—")} · class ${esc(String(r.class||"—"))} · ${esc(r.difficulty||"—")} · answer ${qdbAnsLabel(r)}${r.year?" · "+esc(String(r.year)):""}${r.uploadName?` · <span title="${esc(r.uploadName)}">from ${esc(truncate(r.uploadName,28))}</span>`:""}</div>
+        <div style="font-size:13.5px;margin:3px 0">${fmtMath(truncate(r.text||"",260),r.subject)}</div>
+        <div class="row end"><button class="btn ghost sm" style="width:auto" onclick="qdbView('${r.id}')">Read it in full</button></div>
+      </div>`).join("")
+    : `<p class="muted">Nothing matches those choices.</p>`)
+    +(rows.length>QDB.shown?`<div class="row center" style="margin-top:4px"><button class="btn ghost sm" style="width:auto" onclick="qdbMore()">Show 80 more (${rows.length-QDB.shown} still to see)</button></div>`:"");
+}
+/* One question, read in full. Nothing on it can be changed from here. */
+async function qdbView(id){
+  modal(`<h2>Question</h2><div id="qdOne" class="muted">Loading…</div>
+    <div class="row end" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`,true);
+  try{
+    const d=await db.collection("questions").doc(id).get();
+    if(!d.exists){ el("qdOne").innerHTML=`<p class="muted">That question is no longer in the database.</p>`; return; }
+    const q=d.data(), n=optCount(q);
+    el("qdOne").innerHTML=`
+      <div class="muted" style="font-size:12.5px;margin-bottom:8px">${esc(q.subject||"—")} · ${esc(q.topic||"—")} · class ${esc(String(q.class||"—"))} · ${esc(q.difficulty||"—")} · for ${esc(q.exam||"—")}${q.year?" · "+esc(String(q.year)):""}${q.uploadName?" · from "+esc(q.uploadName):""}</div>
+      <div style="font-size:15px;line-height:1.55">${fmtMath(q.text,q.subject)}</div>
+      ${(q.answerType==="numeric"||q.numerical)
+        ? `<div class="note" style="margin-top:12px">The student types the answer. Correct value: <b>${esc(String(q.numAnswer==null?"—":q.numAnswer))}</b></div>`
+        : `<div style="margin-top:12px">${(q.options||[]).slice(0,n).map((o,i)=>`
+            <div style="display:flex;gap:8px;padding:6px 8px;border-radius:8px;${i===q.correct?"background:#eef3ee;font-weight:600":""}">
+              <span style="width:22px;flex:none">${optLetter(i)})</span>
+              <span style="flex:1">${fmtMath(o,q.subject)}</span>
+              ${i===q.correct?`<span style="color:var(--gold-ink,#2c4a3b);flex:none">✓ correct</span>`:""}</div>`).join("")}</div>`}
+      <hr class="sep"/>
+      <div style="font-weight:600;margin-bottom:4px">Solution</div>
+      <div style="font-size:14px;line-height:1.55">${q.solution?fmtMath(q.solution,q.subject):`<span class="muted">No solution was found in the file for this one.</span>`}</div>
+      <p class="muted" style="font-size:12px;margin-top:14px">To change anything here, use the Review queue or a paper's ✎ Questions screen — this screen only shows.</p>`;
+  }catch(e){ el("qdOne").innerHTML=errBox(e); }
+}
+
 /* ---------- tool libraries, fetched only when something needs them ----------
    A student's phone never downloads any of these. A staff login starts fetching them quietly in the
    background, so by the time anyone presses "Download report card" they are already there. */
