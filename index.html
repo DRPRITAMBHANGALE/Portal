@@ -1065,7 +1065,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: two databases, kept apart"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: each tool on its own tab"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1127,8 +1127,6 @@ async function pageQuestions(){
       <button class="btn gold" onclick="openAIGen()">✦ Generate with AI</button>
       <button class="btn gold" onclick="openAIGenAll()">✦ Generate all chapters</button>
       ${ME.role==="master"?`<button class="btn gold" onclick="openInstantTest()">⚡ Instant test creation</button>`:""}
-      <button class="btn" onclick="openBankUpload()">📥 Upload a paper into the database</button>
-      <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
       <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
     </div>
     <div class="card" id="bankCounts" style="margin-bottom:16px"><div class="muted">Counting…</div></div>
@@ -1244,6 +1242,15 @@ function pageQuestionDatabase(pool){
     <div class="note" style="margin-bottom:14px">${P.key==="file"
       ? `These are <b>your own questions</b>, read out of the Word files you uploaded. Anything the AI wrote is not here — it lives on its own tab, <b>AI question database</b>. The two are never mixed.`
       : `These are <b>AI-written</b> questions (and any you typed in by hand). Your uploaded Word-file questions are not here — they live on <b>Check the database</b>. The two are never mixed.`}</div>
+    <div class="bar">
+      <div class="spacer" style="flex:1"></div>
+      ${P.key==="file"
+        ? `<button class="btn ghost" onclick="openSelfUploadHistory('bankUpload')">🕘 Previous uploads</button>
+           <button class="btn ghost" onclick="openUploadQ()">⬆ Upload Word file</button>
+           <button class="btn" onclick="openBankUpload()">📥 Upload into the database</button>`
+        : `<button class="btn ghost" onclick="go('review')">⚑ Review queue</button>
+           <button class="btn gold" onclick="go('questions')">✦ Generate with AI</button>`}
+    </div>
     <div class="card" style="margin-bottom:16px">
       <div class="grid cols-3">
         <div><label>Papers it is for</label><select id="qdExam" onchange="qdbLoad()"><option value="all">All</option>${EXAM_TAGS.map(t=>`<option>${esc(t)}</option>`).join("")}</select></div>
@@ -3908,7 +3915,7 @@ const Q_POOLS={
     sub:"Everything that came out of the Word files you uploaded — by subject, chapter, class and level.",
     what:"your uploaded files", what1:"from one of your uploaded files",
     other:"AI-written", otherWhere:"the AI question database",
-    hint:"Upload a chapter from Tests → 📥 Upload into the database.",
+    hint:"Press 📥 Upload into the database at the top of this screen.",
     build:"🗂 Generate from uploaded questions",
     buildTitle:"New test from your uploaded questions"},
   ai:{key:"ai",
@@ -3916,7 +3923,7 @@ const Q_POOLS={
     sub:"Only the questions the AI wrote, and any you typed in by hand — kept quite separate from your uploaded files.",
     what:"the AI database", what1:"written by the AI",
     other:"uploaded", otherWhere:"Check the database",
-    hint:"Generate some from Question bank, then approve them in the Review queue.",
+    hint:"Press ✦ Generate with AI at the top of this screen, then approve them in the Review queue.",
     build:"🤖 Generate from AI database",
     buildTitle:"New test from the AI question database"}
 };
@@ -5205,7 +5212,6 @@ async function pageTests(){
     <p class="page-sub">Schedule tests for your students. Pick the exam — subjects &amp; marking are set automatically.</p>
     <div class="bar"><div class="spacer" style="flex:1"></div>
       <button class="btn ghost" onclick="openSelfUpload()">📄 Self Upload (Word file)</button>
-      <button class="btn ghost" onclick="openBankUpload()">📥 Upload into the database</button>
       <button class="btn ghost" onclick="openBankTest('file')">🗂 Generate from uploaded questions</button>
       <button class="btn ghost" onclick="openBankTest('ai')">🤖 Generate from AI database</button>
       <button class="btn" onclick="openCreateTest()">+ New test</button></div>
