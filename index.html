@@ -1026,7 +1026,6 @@ async function slimForExam(exam,build,fields,cap){
 const STAFF_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
-  {id:"questions",label:"Question bank",ic:"❓"},
   {id:"qdb",label:"Check the database",ic:"🗄"},
   {id:"testqdb",label:"Previous test questions",ic:"📄"},
   {id:"aiqdb",label:"AI question database",ic:"🤖"},
@@ -1066,7 +1065,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: three databases, three doors"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: when it went in"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1136,6 +1135,12 @@ async function pageQuestions(){
   el("qfExam").onchange=()=>{fillSubjects("qfExam","qfSubject",true);loadQuestions();loadBankCounts();};
   el("qfSubject").onchange=loadQuestions; el("qfClass").onchange=()=>{loadQuestions();loadBankCounts();};
   loadQuestions(); loadBankCounts();
+}
+/* A question has just been written, changed or generated. Whichever screen is open is the one
+   that needs re-reading — there is no longer a single Question bank page to send it back to. */
+function refreshAfterQuestionChange(){
+  if(CURRENT_PAGE==="questions"){ loadQuestions(); loadBankCounts(); return; }
+  if(CURRENT_PAGE==="qdb"||CURRENT_PAGE==="testqdb"||CURRENT_PAGE==="aiqdb") qdbLoad();
 }
 async function loadBankCounts(){
   const exam=val("qfExam"),cls=val("qfClass"),subj=val("qfSubject");
@@ -1250,7 +1255,10 @@ function pageQuestionDatabase(pool){
         ? `<button class="btn ghost" onclick="openSelfUploadHistory('selfUpload')">🕘 Previous Self Uploads</button>
            <button class="btn ghost" onclick="openSelfUpload()">📄 Self Upload (Word file)</button>`
         : `<button class="btn ghost" onclick="go('review')">⚑ Review queue</button>
-           <button class="btn gold" onclick="go('questions')">✦ Generate with AI</button>`}
+           <button class="btn ghost" onclick="openManualQ()">+ Add manually</button>
+           ${ME.role==="master"?`<button class="btn gold" onclick="openInstantTest()">⚡ Instant test creation</button>`:""}
+           <button class="btn gold" onclick="openAIGenAll()">✦ Generate all chapters</button>
+           <button class="btn gold" onclick="openAIGen()">✦ Generate with AI</button>`}
     </div>
     <div class="card" style="margin-bottom:16px">
       <div class="grid cols-3">
@@ -1289,7 +1297,8 @@ async function qdbLoad(){
       let q=db.collection("questions").where("status","==",status).where("exam","==",tag);
       if(cls!=="all") q=q.where("class","==",cls);
       const got=await readSlim(q,["text","subject","topic","class","difficulty","exam","correct",
-        "answerType","numAnswer","numerical","year","uploadName","source","uploadId","seq","qNum","block"],9000);
+        "answerType","numAnswer","numerical","year","uploadName","source","uploadId","seq","qNum","block",
+        "createdAt"],9000);
       got.forEach(r=>{ if(!seen.has(r.id)){ seen.add(r.id); rows.push(r); } });
     }
     /* the one place the two are separated — everything downstream sees one pool only */
@@ -1331,6 +1340,35 @@ function qdbMatch(r){
   return true;
 }
 function qdbMore(){ QDB.shown+=80; qdbRender(); }
+/* When a file went in. Every question carries the moment it was written, which is the moment of
+   the upload; and the upload's own id has that moment inside it as well, which covers anything
+   saved before the stamp was kept. Either will do — whichever is there. */
+function stampMs(v){
+  if(v===null||v===undefined) return null;
+  if(typeof v==="number") return isFinite(v)?v:null;
+  if(typeof v.seconds==="number") return v.seconds*1000;
+  if(typeof v.toDate==="function"){ const d=v.toDate(); return d?d.getTime():null; }
+  if(typeof v==="string"){ const t=Date.parse(v); return isFinite(t)?t:null; }
+  return null;
+}
+function uploadIdMs(id){
+  const m=/^(?:bk|su)_(\d{10,})_/.exec(String(id||""));
+  if(!m) return null;
+  const t=parseInt(m[1]);
+  return (isFinite(t)&&t>946684800000)?t:null;        // anything before the year 2000 is nonsense
+}
+function uploadWhen(u){
+  let first=null;
+  (u.rows||[]).forEach(r=>{ const t=stampMs(r.createdAt); if(t&&(first===null||t<first)) first=t; });
+  return first||uploadIdMs(u.key);
+}
+function fmtUploadWhen(ms){
+  if(!ms) return `<span class="muted">not recorded</span>`;
+  const d=new Date(ms);
+  return esc(d.toLocaleDateString([],{day:"numeric",month:"short",year:"numeric"}))
+    +`<br><span class="muted" style="font-size:11.5px">`
+    +esc(d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}))+`</span>`;
+}
 /* One entry per file that was uploaded, holding the questions that came out of it. */
 function qdbUploads(){
   const g={};
@@ -1345,7 +1383,11 @@ function qdbUploads(){
     if(r.subject) x.subjects.add(r.subject);
     if(r.class) x.classes.add(String(r.class));
   });
-  return Object.values(g).sort((a,b)=>a.name.localeCompare(b.name));
+  const list=Object.values(g);
+  list.forEach(u=>{ u.when=uploadWhen(u); });
+  /* Newest first: with the same chapter uploaded many times over, the date is the only thing
+     that tells two rows apart, so it is what they are ordered by. */
+  return list.sort((a,b)=>(b.when||0)-(a.when||0)||a.name.localeCompare(b.name));
 }
 function qdbRenderFiles(){
   const box=el("qdFiles"); if(!box) return;
@@ -1354,8 +1396,9 @@ function qdbRenderFiles(){
   if(!list.length){ box.innerHTML=emptyState("No files here yet",poolInfo(QDB.pool).hint); return; }
   const unplaced=list.filter(u=>!u.placed).length;
   box.innerHTML=(unplaced?`<div class="note" style="margin-bottom:10px">⚠ ${unplaced} file${unplaced===1?" was":"s were"} uploaded before the portal recorded each question's place in its file, so ${unplaced===1?"it":"they"} cannot be printed back in the exact original order — questions numbered 1 in different exercises end up together. Upload ${unplaced===1?"that file":"those files"} again (<a href="#" onclick="openSelfUploadHistory('bankUpload');return false">undo the old upload first</a>) and the order will be exact.</div>`:"")
-    +tableHTML(["File","Subject","Chapter","Class","Questions",""],
+    +tableHTML(["File","Uploaded","Subject","Chapter","Class","Questions",""],
     list.map(u=>[`<b>${esc(u.name)}</b>`+(u.placed?"":`<br><span class="muted" style="font-size:11.5px">order not recorded — upload again for the exact order</span>`),
+      fmtUploadWhen(u.when),
       [...u.subjects].map(subjTag).join(" "),
       esc([...u.chapters].join(", ")||"\u2014"),
       esc([...u.classes].join(", ")||"\u2014"),
@@ -1922,7 +1965,7 @@ async function saveManualQ(){
     await db.collection("questions").add({exam:val("mExam"),subject:val("mSubject"),topic:val("mTopic"),class:val("mClass"),
       difficulty:val("mDiff"),year:val("mYear")?parseInt(val("mYear")):null,numerical:el("mNum").checked,text,options:opts,correct,solution:val("mSol").trim(),status:"live",source:"manual",
       createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-    closeModal(); if(CURRENT_PAGE==="questions") loadQuestions();
+    closeModal(); refreshAfterQuestionChange();
   }catch(e){ setMsg("mMsg",errMsg(e),"err"); setBtn("mSaveBtn",false,"Save to bank (live)"); }
 }
 
@@ -2032,7 +2075,7 @@ async function doImport(){
       await batch.commit();
     }
     setMsg("uMsg",`✓ Imported ${ok.length} question(s) into the live bank.`,"ok");
-    setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="questions")loadQuestions();},1200);
+    setTimeout(()=>{closeModal(); refreshAfterQuestionChange();},1200);
   }catch(e){ setMsg("uMsg",errMsg(e),"err"); setBtn("uImportBtn",false,"Import questions"); }
 }
 
@@ -3826,7 +3869,7 @@ async function bankUploadRun(){
     +(failed?` ⚠ ${failed} file${failed===1?" was":"s were"} not read — see the list above.`:"")
     +` Build a paper from them any time: Tests → 🗂 New test from the database.`, failed?"warn":"ok");
   setBtn("bkAddBtn",BANK_UP_DONE,BANK_UP_DONE?"✓ Added to the database":"Try the files that failed again");
-  if(CURRENT_PAGE==="questions"){ loadQuestions(); loadBankCounts(); }
+  refreshAfterQuestionChange();
 }
 async function bankUploadOne(x,meta){
   if(!/\.docx$/i.test(x.name))
