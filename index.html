@@ -1064,7 +1064,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: the database at a glance"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: put a question right"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1358,10 +1358,91 @@ function qdbRender(){
     : `<p class="muted">Nothing matches those choices.</p>`)
     +(rows.length>QDB.shown?`<div class="row center" style="margin-top:4px"><button class="btn ghost sm" style="width:auto" onclick="qdbMore()">Show 80 more (${rows.length-QDB.shown} still to see)</button></div>`:"");
 }
-/* One question, read in full. Nothing on it can be changed from here. */
+/* Correcting a question where it was noticed. The wording, the choices, which one is right, the
+   typed value, the solution, and how it is filed — all of it, on the question itself, so a wrong
+   answer key or a typo in a chapter does not have to be chased through the Review queue. The
+   change applies everywhere the question is used, including papers already built from it. */
+function qdbEdit(){
+  const q=QDB.one; if(!q) return;
+  const numeric=isNumericQ(q), n=Math.max(4,optCount(q));
+  const chapters=[...new Set(QDB.rows.map(r=>r.topic).filter(Boolean))].sort();
+  if(q.topic&&chapters.indexOf(q.topic)<0) chapters.push(q.topic);
+  el("qdOne").innerHTML=`
+    <p class="muted" style="font-size:12.5px;margin-top:0">Equations are written between $ signs — leave those alone unless you are fixing one. A change here applies to this question everywhere it is used.</p>
+    <label>Question</label><textarea id="qeText" rows="4">${esc(q.text||"")}</textarea>
+    ${imgPickerHTML("qeText","the question")}
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="qeNumeric" style="width:auto" ${numeric?"checked":""} onchange="qdbNumericToggle()"/> The student types the answer (no choices)</label>
+    <div id="qeNumRow" style="display:${numeric?"block":"none"}"><label>Correct value</label>
+      <input id="qeNumAns" style="max-width:240px;font-family:'Courier New',monospace" value="${esc(q.numAnswer===undefined||q.numAnswer===null?"":String(q.numAnswer))}"/></div>
+    <div id="qeOptRows" style="display:${numeric?"none":"block"}">
+      ${[0,1,2,3,4].map(k=>`<label>Option ${optLetter(k)}${k===4?' <span class="muted" style="font-weight:400">— only if this question has five</span>':''}</label>
+        <div class="row"><input id="qeOpt${k}" style="flex:1" value="${esc((q.options||[])[k]||"")}"/>
+          <label style="margin:0;display:flex;gap:5px;align-items:center"><input type="radio" name="qeCorrect" value="${k}" style="width:auto" ${k===q.correct?"checked":""}/> correct</label></div>
+        ${imgPickerHTML("qeOpt"+k,"option "+optLetter(k))}`).join("")}
+    </div>
+    <label>Solution</label><textarea id="qeSol" rows="5">${esc(q.solution||"")}</textarea>
+    ${imgPickerHTML("qeSol","the solution")}
+    <hr class="sep"/>
+    <div class="grid cols-3">
+      <div><label>Subject</label><select id="qeSubject">${(subjectsForTag(q.exam)||[]).concat(q.subject&&(subjectsForTag(q.exam)||[]).indexOf(q.subject)<0?[q.subject]:[]).map(s=>`<option${s===q.subject?" selected":""}>${esc(s)}</option>`).join("")}</select></div>
+      <div><label>Chapter</label><input id="qeTopic" list="qeChapList" value="${esc(q.topic||"")}" autocomplete="off"/><datalist id="qeChapList">${chapters.map(c=>`<option value="${esc(c)}"></option>`).join("")}</datalist></div>
+      <div><label>Level</label><select id="qeDiff">${DIFFICULTIES.map(d=>`<option${d===q.difficulty?" selected":""}>${esc(d)}</option>`).join("")}</select></div>
+    </div>
+    <div class="msg" id="qeMsg"></div>
+    <div class="row end" style="gap:8px;margin-top:14px">
+      <button class="btn ghost" onclick="qdbView('${q.id}')">Cancel</button>
+      <button class="btn" id="qeSave" onclick="qdbEditSave()">Save the change</button></div>`;
+  if(el("qdEditBtn")) el("qdEditBtn").style.display="none";
+  initFieldPics(["qeText","qeOpt0","qeOpt1","qeOpt2","qeOpt3","qeOpt4","qeSol"]);
+}
+function qdbNumericToggle(){
+  const on=el("qeNumeric").checked;
+  el("qeNumRow").style.display=on?"block":"none";
+  el("qeOptRows").style.display=on?"none":"block";
+}
+async function qdbEditSave(){
+  const q=QDB.one; if(!q) return;
+  const numeric=el("qeNumeric")&&el("qeNumeric").checked;
+  const text=val("qeText").trim();
+  if(!text) return setMsg("qeMsg","A question needs its wording.","err");
+  const numAnswer=numeric?parseNumAnswer(val("qeNumAns")):null;
+  if(numeric&&numAnswer===null) return setMsg("qeMsg","Type the correct value (for example 12.5 or −4).","err");
+  let options=["","","",""], correct=null;
+  if(!numeric){
+    options=trimOptions([0,1,2,3,4].map(k=>val("qeOpt"+k).trim()));
+    if(options.slice(0,4).some(o=>!o)) return setMsg("qeMsg","All four choices need their text.","err");
+    const picked=document.querySelector("input[name=qeCorrect]:checked");
+    correct=picked?parseInt(picked.value):null;
+    if(correct==null) return setMsg("qeMsg","Mark which choice is the correct one.","err");
+    if(correct>=options.length||!options[correct]) return setMsg("qeMsg","The choice marked correct is empty — type it in, or mark a different one.","err");
+  }
+  const upd={text,options,correct,answerType:numeric?"numeric":"mcq",numAnswer,numerical:!!numeric,
+    solution:val("qeSol").trim(),subject:val("qeSubject"),topic:val("qeTopic").trim()||val("qeSubject"),
+    difficulty:val("qeDiff")};
+  setBtn("qeSave",true,"Saving…");
+  try{
+    await db.collection("questions").doc(q.id).update(upd);
+    Object.assign(q,upd);
+    const row=QDB.rows.find(r=>r.id===q.id);
+    if(row) Object.assign(row,{text:withoutPictures(upd.text),subject:upd.subject,topic:upd.topic,
+      difficulty:upd.difficulty,correct:upd.correct,answerType:upd.answerType,
+      numAnswer:upd.numAnswer,numerical:upd.numerical});
+    qdbRender();
+    qdbView(q.id);
+  }catch(e){
+    setMsg("qeMsg",/permission|insufficient|denied/i.test(errMsg(e))
+      ? "This question was uploaded by another centre, so the shared copy can't be changed from here."
+      : errMsg(e),"err");
+    setBtn("qeSave",false,"Save the change");
+  }
+}
+/* One question, read in full, with a way to put it right. */
 async function qdbView(id){
   modal(`<h2>Question</h2><div id="qdOne" class="muted">Loading…</div>
-    <div class="row end" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`,true);
+    <div class="row end" style="margin-top:16px;gap:8px">
+      <button class="btn ghost" id="qdEditBtn" style="display:none" onclick="qdbEdit()">✎ Edit this question</button>
+      <button class="btn" onclick="closeModal()">Close</button></div>`,true);
+  QDB.one=null;
   try{
     const d=await db.collection("questions").doc(id).get();
     if(!d.exists){ el("qdOne").innerHTML=`<p class="muted">That question is no longer in the database.</p>`; return; }
@@ -1379,7 +1460,9 @@ async function qdbView(id){
       <hr class="sep"/>
       <div style="font-weight:600;margin-bottom:4px">Solution</div>
       <div style="font-size:14px;line-height:1.55">${q.solution?fmtMath(q.solution,q.subject):`<span class="muted">No solution was found in the file for this one.</span>`}</div>
-      <p class="muted" style="font-size:12px;margin-top:14px">To change anything here, use the Review queue or a paper's ✎ Questions screen — this screen only shows.</p>`;
+      <p class="muted" style="font-size:12px;margin-top:14px">A change made here applies to this question everywhere — in the database and in any paper already built from it.</p>`;
+    QDB.one=Object.assign({id:id},q);
+    if(el("qdEditBtn")) el("qdEditBtn").style.display="";
   }catch(e){ el("qdOne").innerHTML=errBox(e); }
 }
 
