@@ -830,8 +830,25 @@ function renderQTable(payload,subject){
    whole line fails to draw. The space was only there to hold the prime off the letter, which a
    prime does on its own, so it comes out. Spaces anywhere else are left exactly as they are. */
 const TEX_SPACE_BEFORE_SCRIPT=/(?:(?:\\[,;:!]|\\quad|\\qquad|\\thinspace)[ \t]*)+(?=['^_])/g;
+/* ---- telling a multiplication sign from a dot product ----
+   A dot between two plain numbers can only mean "multiplied by", and that is written × here:
+   6.023 × 10²³, not 6.023 · 10²³.
+   A dot with a symbol on either side is left exactly as the author wrote it. In a Vectors
+   chapter F·d is a dot product and F×d is the cross product — a different quantity, pointing a
+   different way — so guessing there would change what the question asks. A wrong × is an error;
+   a dot left standing between two numbers is only old-fashioned, so the doubt always falls that
+   way. Anything carrying vector notation, or naming a dot, cross or scalar product, keeps every
+   dot it was written with. \cdots is never touched. */
+const VECTOR_WORK=/\\vec\b|\\overrightarrow|\\overline\s*\{|\\mathbf|\\boldsymbol|\\hat\s*\{|dot\s*product|cross\s*product|scalar\s*product|vector/i;
+const TEX_DOT_AFTER_NUMBER=/(\d[ \t]*)\\cdot(?![a-zA-Z])/g;
+const TEX_DOT_AFTER_GROUP=/([})][ \t]*)\\cdot(?![a-zA-Z])([ \t]*)(?=[\d(]|\\d?frac)/g;
+function timesNotDot(s){
+  const t=String(s==null?"":s);
+  if(VECTOR_WORK.test(t)) return t;
+  return t.replace(TEX_DOT_AFTER_NUMBER,"$1\\times").replace(TEX_DOT_AFTER_GROUP,"$1\\times$2");
+}
 function texRepair(s){
-  return String(s==null?"":s).replace(TEX_SPACE_BEFORE_SCRIPT,"");
+  return timesNotDot(String(s==null?"":s).replace(TEX_SPACE_BEFORE_SCRIPT,""));
 }
 function fmtMathCore(s,subject){
   const parts=s.split(/(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g);
@@ -1045,7 +1062,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: one Biology"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: cross or dot"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1732,7 +1749,7 @@ function mtefToLatex(bytes){
     if(code>=0xE000&&code<=0xF8FF){ // MT Extra / private area
       const PUA={0xEB00:"\\,",0xEB01:"\\,",0xEB02:"\\;",0xEB03:"\\quad",0xEB04:"\\,",0xEB05:"",0xEB08:"",0xEF00:"\\;",0xEF01:"\\,",0xEF02:"\\,",0xEF03:"\\;",0xEF04:"\\,",0xEF05:"",0xEF06:"\\,",0xEF07:"",0xEF08:"\\quad",
         0xEC00:"\\longrightarrow",0xEC01:"\\longleftarrow",0xEC02:"\\longleftrightarrow",0xEB19:"\\rightleftharpoons",0xEB1A:"\\rightleftharpoons",0xE98F:"\\rightarrow",0xE98B:"\\rightleftharpoons",0xE92D:"\\rightarrow",0xE900:"\\rightarrow",0xEB14:"\\hbar",0xEC0C:"\\ell",
-        0xF0B2:"''",0xF0A2:"'",0xF0B0:"^{\\circ}",0xF0D7:"\\times",0xF0B4:"\\times",0xF02D:"-",0xF02B:"+",0xF03D:"=",0xF0AE:"\\rightarrow",0xF0DE:"\\Rightarrow",0xF05C:"\\therefore",0xF0A5:"\\infty",0xF0B9:"\\ne",0xF0A3:"\\le",0xF0B3:"\\ge",0xF0BB:"\\approx",0xF0B1:"\\pm",0xF0D6:"\\sqrt{}",0xF0E5:"\\sum",0xF0F2:"\\int",0xF0B6:"\\partial",0xF0D1:"\\nabla",0xF0B5:"\\propto",0xF0C5:"\\oplus",0xF0C4:"\\otimes",0xF0AC:"\\leftarrow",0xF0AB:"\\leftrightarrow",0xF0DB:"\\Leftrightarrow",0xF0D0:"\\angle",0xF0BC:"\\ldots",0xF0B7:"\\cdot",0xF0D7:"\\cdot",0xF0E6:"(",0xF0F6:")",0xF0E7:"(",0xF0E8:"(",0xF0F7:")",0xF0F8:")",0xF0E9:"[",0xF0F9:"]",0xF0EC:"\\{",0xF0FC:"\\}"};
+        0xF0B2:"''",0xF0A2:"'",0xF0B0:"^{\\circ}",0xF0B4:"\\times",0xF02D:"-",0xF02B:"+",0xF03D:"=",0xF0AE:"\\rightarrow",0xF0DE:"\\Rightarrow",0xF05C:"\\therefore",0xF0A5:"\\infty",0xF0B9:"\\ne",0xF0A3:"\\le",0xF0B3:"\\ge",0xF0BB:"\\approx",0xF0B1:"\\pm",0xF0D6:"\\sqrt{}",0xF0E5:"\\sum",0xF0F2:"\\int",0xF0B6:"\\partial",0xF0D1:"\\nabla",0xF0B5:"\\propto",0xF0C5:"\\oplus",0xF0C4:"\\otimes",0xF0AC:"\\leftarrow",0xF0AB:"\\leftrightarrow",0xF0DB:"\\Leftrightarrow",0xF0D0:"\\angle",0xF0BC:"\\ldots",0xF0B7:"\\cdot",0xF0D7:"\\cdot",0xF0E6:"(",0xF0F6:")",0xF0E7:"(",0xF0E8:"(",0xF0F7:")",0xF0F8:")",0xF0E9:"[",0xF0F9:"]",0xF0EC:"\\{",0xF0FC:"\\}"};
       if(code in PUA) return PUA[code];
       // Symbol-font chars remapped into F0xx
       if(code>=0xF020&&code<=0xF0FF){ return symbolFont(code-0xF000); }
@@ -2782,7 +2799,7 @@ async function handleSelfUpload(){
     const defaults={exam:val("suExam"),subject:suSubj,cls:suCls,topic:suSubj,difficulty:"Moderate"};
     const ranges=readSectionRanges("suSec",val("suExam"));
     SELF_UPLOAD_PARSED=parsePaperDoc(raw,defaults,W);
-    SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.seq||q.num,ranges,q.subject); q.topic=q.subject; });
+    SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.seq||q.num,ranges,q.subject); q.topic=q.subject; fixTimesSigns(q); });
     if(!SELF_UPLOAD_PARSED.length){ setMsg("suMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err"); return; }
     const ready=SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready");
     const fixable=SELF_UPLOAD_PARSED.filter(q=>q.tier==="fixable");
@@ -3226,6 +3243,42 @@ function chapterFromFileName(name){
   return s.replace(/\s+/g," ").trim();
 }
 
+/* The database is filled from books, and a book says a good deal about how hard a question is:
+   which exercise it came from (an NCERT topic-wise set is not a Skill Enhancer set), whether it
+   is an assertion–reason or a matching question, how much working the solution needs, and
+   whether an answer has to be calculated rather than chosen. Each question is filed at a level
+   on that basis, so a paper can later be asked for one. It is an estimate from the paper's own
+   shape, not a judgement of the physics — any question's level can be changed afterwards from
+   the Review queue or from the paper's ✎ Questions screen. */
+/* At upload the whole question is in view — its wording, its working, its options and its
+   chapter — so "is this about vectors?" can be answered properly instead of one equation at a
+   time. When the answer is no, a dot after a bracket or a fraction counts as a multiplication
+   too. When it is yes, nothing in the question is touched at all. */
+function fixTimesSigns(q){
+  const whole=[q&&q.text,q&&q.solution,q&&q.topic].concat((q&&q.options)||[]).join(" ");
+  if(VECTOR_WORK.test(whole)) return q;
+  const conv=s=>typeof s==="string"
+    ? s.replace(TEX_DOT_AFTER_NUMBER,"$1\\times").replace(/([})][ \t]*)\\cdot(?![a-zA-Z])/g,"$1\\times")
+    : s;
+  q.text=conv(q.text); q.solution=conv(q.solution);
+  if(Array.isArray(q.options)) q.options=q.options.map(conv);
+  return q;
+}
+function gradeDifficulty(q){
+  const label=String(q&&q.blockLabel||"").toLowerCase();
+  const text=String(q&&q.text||""), sol=String(q&&q.solution||"");
+  const eqs=((text.match(/\$/g)||[]).length+(sol.match(/\$/g)||[]).length)/2;
+  let score=0;
+  if(/skill\s*enhanc|advanced|hots|challeng/.test(label)) score+=2;
+  else if(/exemplar/.test(label)) score+=1;
+  if(/assertion|matching|statement/.test(label)) score+=1;
+  if(q&&q.answerType==="numeric") score+=1;
+  if(eqs>=3) score+=1;
+  if(sol.length>260) score+=1;
+  if(text.length>230) score+=1;
+  if(!eqs&&sol.length&&sol.length<70) score-=1;
+  return score<=0?"Easy-Moderate":(score===1?"Moderate":(score<=3?"Moderate-Difficult":"Difficult"));
+}
 let BK_FILES=[], BANK_UP_PARSED=[], BANK_UP_FILE="", BANK_UP_DONE=false;
 function openBankUpload(){
   modal(`<h2>📥 Upload questions into the database</h2>
@@ -3329,7 +3382,8 @@ async function bankUploadOne(x,meta){
   const parsed=parsePaperDoc(raw,{exam:meta.exam,subject:meta.subject,cls:meta.cls,topic:chapter,difficulty:BANK_DEFAULT_DIFF},W);
   if(!parsed.length)
     throw new Error("no questions found — check it has numbered questions with (a)(b)(c)(d) and an “Answer Keys” section");
-  parsed.forEach(q=>{ q.exam=meta.exam; q.subject=meta.subject; q.cls=meta.cls; q.difficulty=BANK_DEFAULT_DIFF; q.topic=chapter; });
+  parsed.forEach(q=>{ q.exam=meta.exam; q.subject=meta.subject; q.cls=meta.cls; q.topic=chapter;
+    fixTimesSigns(q); q.difficulty=gradeDifficulty(q); });
   const good=parsed.filter(q=>q.tier==="ready"), fixable=parsed.filter(q=>q.tier==="fixable");
   const r=await bankUploadImport(good,fixable,x.name);
   if(BK_FILES.length===1){ BANK_UP_PARSED=parsed; BANK_UP_FILE=x.name; bkRenderPreview(W,parsed,chapter); }
@@ -3343,6 +3397,8 @@ function bkRenderPreview(W,parsed,chapter){
   box.innerHTML=`<div class="muted" style="font-size:12.5px;margin-top:10px">
       Filed under <b>${esc(val("bkSubject"))} · ${esc(chapter)}</b>${parsed.exercises>1?` — read as <b>${parsed.exercises} exercises</b>, each with its own answer key and solutions`:""}.
       ${W?`${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)}${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""}. `:""}Solutions found for ${withSol} of ${parsed.length}.
+      <br>Levels worked out from the paper: ${(()=>{const d={};parsed.forEach(q=>d[q.difficulty]=(d[q.difficulty]||0)+1);
+        return DIFFICULTIES.filter(k=>d[k]).map(k=>esc(k)+" "+d[k]).join(" \u00b7 ")||"\u2014";})()}. You can change any of them later.
       ${(parsed.passedOver&&parsed.passedOver.length)?`<span style="color:var(--danger)">The file's own numbering passes over ${parsed.passedOver.length} question${parsed.passedOver.length===1?"":"s"} (${parsed.passedOver.join(", ")}).</span>`:""}
     </div>
     <div style="max-height:280px;overflow:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px">`
@@ -3433,8 +3489,8 @@ function openBankTest(){
   BT={sel:[],pool:[],shown:60,loaded:false};
   btExamChanged();
   el("btExam").onchange=btExamChanged;
-  el("btClass").onchange=()=>{ BT.loaded=false; BT.pool=[]; btFillChaps(); btRenderPool(); };
-  el("btSubject").onchange=()=>{ BT.loaded=false; BT.pool=[]; btFillChaps(); btRenderPool(); };
+  el("btClass").onchange=btLoadPool;
+  el("btSubject").onchange=btLoadPool;
   btRenderSel(); updTitlePrev("bt");
 }
 function btSolModeChanged(){ solModeChanged("btSolMode","btSolAtRow","btSolAt","btEnd"); }
@@ -3442,17 +3498,19 @@ function btExamChanged(){
   fillSubjects("btExam","btSubject",true);
   BT.loaded=false; BT.pool=[];
   btFillChaps(); btRenderPool(); updTitlePrev("bt");
+  btLoadPool();                      // so the chapter list shows what is really there
 }
-/* Chapters offered: what the syllabus lists, and — once questions are loaded — whatever the
-   stored questions are actually filed under, so a chapter typed on upload is never hidden. */
+/* Only the chapters actually in the database are offered — the ones whose files have been
+   uploaded. The syllabus is not consulted here: a chapter with nothing stored under it would
+   only be a dead end, and each one is shown with how many questions it holds. */
 function btFillChaps(){
   const box=el("btChap"); if(!box) return;
   const keep=box.value||"all";
-  const subj=val("btSubject"), set=new Set();
-  if(subj!=="all") scopeClasses(val("btClass")).forEach(c=>{ (topicsFor(val("btExam"),c,subj)||[]).forEach(t=>set.add(t)); });
-  (BT.pool||[]).forEach(x=>{ if(x.topic&&(subj==="all"||x.subject===subj)) set.add(x.topic); });
-  const list=[...set].sort((a,b)=>a.localeCompare(b));
-  box.innerHTML=`<option value="all">All chapters</option>`+list.map(t=>`<option${t===keep?" selected":""}>${esc(t)}</option>`).join("");
+  const subj=val("btSubject"), n={};
+  (BT.pool||[]).forEach(x=>{ if(x.topic&&(subj==="all"||x.subject===subj)) n[x.topic]=(n[x.topic]||0)+1; });
+  const list=Object.keys(n).sort((a,b)=>a.localeCompare(b));
+  box.innerHTML=`<option value="all">All chapters${BT.loaded?" ("+(BT.pool||[]).length+")":""}</option>`
+    +list.map(t=>`<option value="${esc(t)}"${t===keep?" selected":""}>${esc(t)} (${n[t]})</option>`).join("");
   if(keep!=="all"&&!list.includes(keep)) box.value="all";
 }
 async function btLoadPool(){
@@ -3498,7 +3556,10 @@ function btRenderPool(){
   const left=all.filter(x=>!chosen.has(x.id));
   const rows=all.slice(0,BT.shown);
   const shownLeft=rows.filter(x=>!chosen.has(x.id)).length;
+  const lv={}; all.forEach(x=>{ const d=x.difficulty||"\u2014"; lv[d]=(lv[d]||0)+1; });
+  const spread=DIFFICULTIES.filter(k=>lv[k]).map(k=>esc(k)+" "+lv[k]).join(" \u00b7 ");
   el("btPoolMsg").innerHTML=`<b>${all.length}</b> question${all.length===1?"":"s"} in your database match${all.length===1?"es":""} these filters — ${left.length} not yet in the paper.`
+    +(spread&&val("btDiff")==="all"?`<br><span style="font-size:12px">By level: ${spread}</span>`:"")
     +(shownLeft?` &nbsp;<a href="#" onclick="btAddAllShown();return false">Add the ${shownLeft} shown below</a>`:"")
     +(left.length>shownLeft?` &nbsp;\u00b7&nbsp; <a href="#" onclick="btAddAllMatching();return false">Add all ${left.length}</a>`:"");
   box.innerHTML=(rows.length?rows.map(x=>{
