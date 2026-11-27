@@ -977,13 +977,21 @@ async function loadSyllabus(){
    same stored question is worth 4 marks in a JEE paper and 1 in an MHT-CET one, with
    nothing to change in the database.
    ============================================================ */
-const EXAM_TAGS=["JEE/MHT-CET","NEET/MHT-CET","MHT-CET"];
+/* A question uploaded into the bank is not asked which exam it suits, because the answer is
+   always all of them: the same mole-concept question is a JEE question, a NEET question and an
+   MHT-CET question. It is stored under one tag that says so, and every paper may draw on it.
+   What changes between the three is the marking, and that belongs to the PAPER — it is chosen
+   when the test is built, so one stored question is worth 4 marks in a JEE paper and 1 in an
+   MHT-CET one with nothing to change in the database. */
+const ALL_TAG="JEE/NEET/MHT-CET";
+const EXAM_TAGS=[ALL_TAG,"JEE/MHT-CET","NEET/MHT-CET","MHT-CET"];
 const BANK_DEFAULT_DIFF="Moderate";
 
 /* Three subjects a side, and Biology is one subject — papers here are set mixed, so splitting
    it into Botany and Zoology only got in the way. The marking still lands right either way:
    Biology scores 4 in a NEET paper and 1 in an MHT-CET one, which is what both boards do. */
 const EXAM_TAG_SUBJECTS={
+  [ALL_TAG]:["Physics","Chemistry","Mathematics","Biology"],
   "JEE/MHT-CET":["Physics","Chemistry","Mathematics"],
   "NEET/MHT-CET":["Physics","Chemistry","Biology"],
   "MHT-CET":["Physics","Chemistry","Mathematics","Biology"]
@@ -994,9 +1002,9 @@ function examTagSelect(id){ return `<select id="${id}">${EXAM_TAGS.map(t=>`<opti
 /* Which stored tags a paper of this exam may use. Questions saved before tags existed carry
    the exam's own name, so that is always included and nothing older is left stranded. */
 function examTagsFor(exam){
-  if(exam==="JEE Main") return ["JEE/MHT-CET","JEE Main"];
-  if(exam==="NEET")     return ["NEET/MHT-CET","NEET"];
-  return ["MHT-CET","JEE/MHT-CET","NEET/MHT-CET"];       // an MHT-CET paper may use them all
+  if(exam==="JEE Main") return [ALL_TAG,"JEE/MHT-CET","JEE Main"];
+  if(exam==="NEET")     return [ALL_TAG,"NEET/MHT-CET","NEET"];
+  return [ALL_TAG,"MHT-CET","JEE/MHT-CET","NEET/MHT-CET"];   // an MHT-CET paper may use them all
 }
 /* Firestore cannot ask for "any of these" together with the other filters without a new index,
    so the same query is simply run once per tag and the answers are put together, without
@@ -1067,7 +1075,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: the old papers have a door too"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: one question, three exams"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1264,7 +1272,7 @@ function pageQuestionDatabase(pool){
     </div>
     <div class="card" style="margin-bottom:16px">
       <div class="grid cols-3">
-        <div><label>Papers it is for</label><select id="qdExam" onchange="qdbLoad()"><option value="all">All</option>${EXAM_TAGS.map(t=>`<option>${esc(t)}</option>`).join("")}</select></div>
+        <div><label>Papers it is for</label><select id="qdExam" onchange="qdbLoad()"><option value="all">All</option>${EXAM_TAGS.map(t=>`<option${t===ALL_TAG?' title="Questions uploaded for all three exams"':""}>${esc(t)}</option>`).join("")}</select></div>
         <div><label>Class</label><select id="qdClass" onchange="qdbLoad()"><option value="all">Both classes</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
         <div><label>Status</label><select id="qdStatus" onchange="qdbLoad()"><option value="live">Ready to use</option><option value="pending">Waiting in the Review queue</option></select></div>
       </div>
@@ -1292,7 +1300,7 @@ async function qdbLoad(){
   el("qdList").innerHTML=`<div class="muted">Loading…</div>`;
   /* everything carrying one of the tags, and anything saved before the tags existed, so nothing
      in the database can be invisible on the one screen meant to show all of it */
-  const tags=exam==="all"?[...new Set([...EXAM_TAGS,...EXAM_KEYS])]:[exam];
+  const tags=exam==="all"?[...new Set([...EXAM_TAGS,...EXAM_KEYS])]:[exam];   // EXAM_TAGS leads with ALL_TAG
   try{
     const seen=new Set(), rows=[];
     for(const tag of tags){
@@ -1405,7 +1413,7 @@ function qdbRenderFiles(){
       esc([...u.chapters].join(", ")||"\u2014"),
       esc([...u.classes].join(", ")||"\u2014"),
       u.rows.length,
-      `<div class="rowacts"><button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',true)">🖨 With answers &amp; solutions</button>
+      `<div class="rowacts"><button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',true)">🖨 Print with answers &amp; solutions</button>
         ${ME.role==="master"?`<button class="btn ghost sm danger" onclick="qdbDeleteFile('${u.key}')">\ud83d\uddd1 Delete this file</button>`:""}</div>`]));
 }
 /* The whole file, printed back in its own order. The browser's print window offers
@@ -3789,12 +3797,11 @@ function openBankUpload(){
   modal(`<h2>📥 Upload questions into the database</h2>
     <p class="muted">Upload one chapter — or a whole subject at once — as <b>.docx</b> files laid out like your question papers: the numbered questions, then <b>“Answer Keys”</b>, then <b>“Hints &amp; Solutions”</b>. A file holding several exercises is read as several papers, each with its own key.
     <b>The file name becomes the chapter name</b>, so later you can pick a chapter and build a paper straight out of it. <b>No test is created here.</b></p>
-    <div class="grid cols-3">
-      <div><label>These questions suit</label>${examTagSelect("bkExam")}</div>
+    <div class="grid cols-2">
       <div><label>Class</label>${classSelect("bkClass",false)}</div>
       <div><label>Subject</label><select id="bkSubject"></select></div>
     </div>
-    <p class="muted" style="font-size:12.5px;margin:4px 0 0">This only says which papers may draw on them. The marking scheme is set later, when you build the paper and choose the exam.</p>
+    <div class="note" style="margin-top:10px">These questions go in for <b>JEE, NEET and MHT-CET</b> together — there is nothing to choose. A stored question belongs to all three; what differs is the <b>marking</b>, and that is set when you build the paper and pick the exam there.</div>
     <div class="row" style="margin-top:16px;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn ghost sm" style="width:auto" onclick="downloadPaperTemplate()">⬇ Download the blank paper</button>
       <span class="muted" style="font-size:12.5px">For staff to type into — it already has the three sections and fifty numbered slots.</span>
@@ -3809,11 +3816,11 @@ function openBankUpload(){
       <button class="btn" id="bkAddBtn" onclick="bankUploadRun()" disabled>Add to the database</button></div>`,true);
   BK_FILES=[]; BANK_UP_PARSED=[]; BANK_UP_FILE=""; BANK_UP_DONE=false;
   bkFillSubjects();
-  el("bkExam").onchange=bkFillSubjects;
+
 }
 /* The subjects offered follow whichever exams these questions are for. */
 function bkFillSubjects(){
-  const subs=subjectsForTag(val("bkExam"));
+  const subs=subjectsForTag(ALL_TAG);          // all four, since the questions suit all three exams
   const keep=val("bkSubject");
   el("bkSubject").innerHTML=subs.map(s=>`<option${s===keep?" selected":""}>${esc(s)}</option>`).join("");
 }
@@ -3849,7 +3856,7 @@ function bkRenderList(){
 async function bankUploadRun(){
   if(!BK_FILES.length||BANK_UP_DONE) return;
   if(!await ready(needWord)) return;
-  const meta={exam:val("bkExam"),subject:val("bkSubject"),cls:val("bkClass")};
+  const meta={exam:ALL_TAG,subject:val("bkSubject"),cls:val("bkClass")};
   setBtn("bkAddBtn",true,`<span class="loader"></span> Working…`);
   let live=0,pend=0,skip=0,failed=0,done=0;
   for(const x of BK_FILES){
@@ -5589,6 +5596,7 @@ function buildPaperDoc(meta,groups,withSolutions){
    exam, so the tag is mapped back to one. */
 function examForTag(tag){
   if(EXAMS[tag]) return tag;
+  if(tag===ALL_TAG) return "MHT-CET";    // suits all three; MHT-CET is the one that covers them
   if(tag==="JEE/MHT-CET") return "JEE Main";
   if(tag==="NEET/MHT-CET") return "NEET";
   return "MHT-CET";
