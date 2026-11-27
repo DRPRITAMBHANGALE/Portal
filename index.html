@@ -1025,11 +1025,13 @@ async function slimForExam(exam,build,fields,cap){
    ============================================================ */
 const STAFF_NAV=[
   {id:"dashboard",label:"Dashboard",ic:"▣"},{id:"tests",label:"Tests",ic:"✎"},
+  {id:"drafts",label:"Draft papers",ic:"📝"},
   {id:"papers",label:"Print papers (PDF)",ic:"🖶"},
   {id:"qdb",label:"Check the database",ic:"🗄"},
   {id:"testqdb",label:"Previous test questions",ic:"📄"},
   {id:"aiqdb",label:"AI question database",ic:"🤖"},
   {id:"review",label:"Review queue",ic:"⚑"},
+  {id:"oldtestpaper",label:"Generate from previous test questions",ic:"📄"},
   {id:"proofread",label:"Proofread a paper",ic:"🔎"},
   {id:"answeraudit",label:"Answer Key Audit",ic:"🩺"},{id:"dupfinder",label:"Duplicate Finder",ic:"🧬"},
   {id:"syllabus",label:"Syllabus / chapters",ic:"≣"},
@@ -1065,7 +1067,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: when it went in"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: the old papers have a door too"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1073,7 +1075,7 @@ function go(page){
   CURRENT_PAGE=page;
   document.querySelectorAll("nav.side a").forEach(a=>a.classList.remove("active"));
   el("nav-"+page)?.classList.add("active");
-  ({dashboard:pageDashboard,tests:pageTests,papers:pagePapers,questions:pageQuestions,qdb:()=>pageQuestionDatabase("file"),testqdb:()=>pageQuestionDatabase("test"),aiqdb:()=>pageQuestionDatabase("ai"),review:pageReview,proofread:pageProofread,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
+  ({dashboard:pageDashboard,tests:pageTests,drafts:pageDrafts,papers:pagePapers,questions:pageQuestions,qdb:()=>pageQuestionDatabase("file"),testqdb:()=>pageQuestionDatabase("test"),aiqdb:()=>pageQuestionDatabase("ai"),review:pageReview,oldtestpaper:pageOldTestPaper,proofread:pageProofread,answeraudit:pageAnswerAudit,dupfinder:pageDupFinder,students:pageStudents,
     searchstudent:pageSearchStudent,results:pageResults,toppers:pageToppers,absentees:pageAbsentees,sendmarks:pageSendMarks,centreupdates:pageCentreUpdates,syllabus:pageSyllabus,myhome:pageStudentHome,practice:pagePractice,pasttests:pagePastTests,history:pageHistory})[page]();
 }
 
@@ -1403,8 +1405,7 @@ function qdbRenderFiles(){
       esc([...u.chapters].join(", ")||"\u2014"),
       esc([...u.classes].join(", ")||"\u2014"),
       u.rows.length,
-      `<div class="rowacts"><button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',false)">🖨 Question paper</button>
-        <button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',true)">🖨 With answers &amp; solutions</button>
+      `<div class="rowacts"><button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',true)">🖨 With answers &amp; solutions</button>
         ${ME.role==="master"?`<button class="btn ghost sm danger" onclick="qdbDeleteFile('${u.key}')">\ud83d\uddd1 Delete this file</button>`:""}</div>`]));
 }
 /* The whole file, printed back in its own order. The browser's print window offers
@@ -2802,7 +2803,7 @@ async function openTestQuestions(id){
         <button class="btn ghost sm" onclick="tqAddBank()">🔎 Add from question bank</button></div>
       <input id="tqFind" placeholder="Question number or keywords…" oninput="tqFindChanged()"/>
       <div id="tqList" style="max-height:60vh;overflow:auto;margin-top:10px"></div>
-      <div class="row end" style="margin-top:12px"><button class="btn ghost" onclick="closeModal();if(CURRENT_PAGE==='tests')loadTests();">Close</button></div>`;
+      <div class="row end" style="margin-top:12px"><button class="btn ghost" onclick="closeModal();refreshTestLists();">Close</button></div>`;
     renderTQList();
   }catch(e){ el("tqBody").innerHTML=errBox(e); }
 }
@@ -3193,7 +3194,7 @@ async function solApply(){
     setMsg("solMsg",`✓ ${done} solution${done===1?"":"s"} attached to “${esc(SOLU.title)}”.`
       +(failed.length?` ${failed.length} couldn't be saved (questions uploaded by another centre): ${failed.slice(0,12).join(", ")}${failed.length>12?"…":""}`:""),failed.length?"warn":"ok");
     setBtn("solBtn",false,"Attach solutions");
-    if(CURRENT_PAGE==="tests") loadTests();
+    refreshTestLists();
   }catch(e){ setMsg("solMsg",errMsg(e),"err"); setBtn("solBtn",false,"Attach solutions"); }
 }
 
@@ -3954,7 +3955,7 @@ function cameFromAFile(q){ return !!FILE_SOURCES[String((q&&q.source)||"")]; }
    nothing ever draws from both at once — so a paper is either all your own material or all
    AI material, and you always know which. */
 const Q_POOLS={
-  file:{key:"file", icon:"🗂", files:true,
+  file:{key:"file", icon:"🗂", files:true, buildable:true,
     nav:"Check the database", title:"Uploaded question database",
     sub:"Only the chapters you uploaded to build up the bank — by subject, chapter, class and level.",
     what:"your uploaded chapters", what1:"from a chapter you uploaded into the bank",
@@ -3966,7 +3967,7 @@ const Q_POOLS={
     buildTitle:"New test from your uploaded chapters",
     buildNote:`This paper is built <b>only from the chapters you uploaded into the bank</b>. Nothing from a previous test and nothing the AI wrote can get into it.`,
     draftNote:"picked from your uploaded chapters"},
-  test:{key:"test", icon:"📄", files:true,
+  test:{key:"test", icon:"📄", files:true, buildable:false,
     nav:"Previous test questions", title:"Previous test questions",
     sub:"Questions that came into the portal along with a test — a Self Upload paper, or an older Word-file upload.",
     what:"the previous test questions", what1:"that came in with a test",
@@ -3978,7 +3979,7 @@ const Q_POOLS={
     buildTitle:"New test from previous test questions",
     buildNote:`This paper is built <b>only from questions that came in with an earlier test</b>. Nothing from the uploaded question bank and nothing the AI wrote can get into it.`,
     draftNote:"picked from previous test questions"},
-  ai:{key:"ai", icon:"🤖", files:false,
+  ai:{key:"ai", icon:"🤖", files:false, buildable:true,
     nav:"AI question database", title:"AI question database",
     sub:"Only the questions the AI wrote, and any you typed in by hand — kept quite separate from your own files.",
     what:"the AI database", what1:"written by the AI",
@@ -4008,7 +4009,7 @@ function openBankTest(src){
     <p class="muted">Pick questions out of ${esc(P.what)} — one at a time, or a batch at random — and the paper is built from exactly those. Each question carries its own answer key and solution, so the marking can't slip out of line.
     <b>For a mixed paper</b>, add from one subject, then change the subject above and add more — what you have already picked stays where it is.</p>
     <div class="note" style="margin-bottom:12px">${P.buildNote}
-      <br>For one of the others, close this and choose ${Object.keys(Q_POOLS).filter(k=>k!==P.key).map(k=>"<b>"+esc(Q_POOLS[k].build)+"</b>").join(" or ")} on the Tests screen.</div>
+      <br>For the other, close this and choose ${Object.keys(Q_POOLS).filter(k=>k!==P.key&&Q_POOLS[k].buildable).map(k=>"<b>"+esc(Q_POOLS[k].build)+"</b>").join(" or ")} on the Tests screen.</div>
     <div class="card" style="padding:12px;margin-bottom:12px">
       <div style="font-weight:600;margin-bottom:6px">① Find the questions</div>
       <div class="grid cols-3">
@@ -4263,7 +4264,7 @@ async function btCreate(asDraft){
       logCentreUpdate("test_created",logCentreForTest(ASG),testLogDetail({title,exam,questionIds:ids},ASG));
     }
     closeModal();
-    if(CURRENT_PAGE==="tests") loadTests(); else go("tests");
+    if(CURRENT_PAGE==="tests"||CURRENT_PAGE==="drafts") refreshTestLists(); else go(asDraft?"drafts":"tests");
   }catch(e){
     setMsg("btMsg",errMsg(e),"err");
     setBtn(btnId,false,asDraft?"Save as draft":"Create &amp; schedule");
@@ -4327,7 +4328,7 @@ async function selfUploadFinalize(){
   try{ const ranges=readSectionRanges("suSec",val("suExam")); if(ranges.length) await applySectionsToTest(SELF_UPLOAD_DRAFT_ID,ranges); }
   catch(e){ setBtn("suTestBtn",false,"✓ Save as final paper"); return setMsg("suActionMsg",errMsg(e),"err"); }
   const ok=await finalizeDraft(SELF_UPLOAD_DRAFT_ID,fields);
-  if(ok){ setMsg("suActionMsg","✓ Saved as final paper. It's now in your Tests list.","ok"); setTimeout(()=>{closeModal(); if(CURRENT_PAGE==="tests")loadTests();},1300); }
+  if(ok){ setMsg("suActionMsg","✓ Saved as final paper. It's now in your Tests list.","ok"); setTimeout(()=>{closeModal(); refreshTestLists();},1300); }
   else setBtn("suTestBtn",false,"✓ Save as final paper");
 }
 // Turns a draft into a normal test. Warns if questions are still waiting in the Review queue.
@@ -4396,7 +4397,7 @@ async function saveFinalizeDraft(id){
     const secR=readSectionRanges("fdSec",val("fdExam")); if(secR.length){ setBtn("fdBtn",true,"Setting sections…"); await applySectionsToTest(id,secR); }
     const fields={title:composeTestTitle("fd","Test"),exam:val("fdExam"),class:val("fdClass"),duration:parseInt(val("fdDur"))||60,...ASG,solutionsAt};
     setBtn("fdBtn",true,"Saving…");
-    if(await finalizeDraft(id,fields)){ closeModal(); loadTests(); } else setBtn("fdBtn",false,"✓ Save as final paper");
+    if(await finalizeDraft(id,fields)){ closeModal(); refreshTestLists(); } else setBtn("fdBtn",false,"✓ Save as final paper");
   }catch(e){ setMsg("fdMsg",errMsg(e),"err"); }
 }
 async function deleteDraft(id){
@@ -4405,7 +4406,7 @@ async function deleteDraft(id){
   if(!await askDelete("Delete this draft paper?","The questions stay in your question bank.","Yes, delete the draft")) return;
   try{ const t=(await db.collection("tests").doc(id).get()).data()||{};
     await db.collection("tests").doc(id).delete();
-    logCentreUpdate("draft_deleted",logCentreForTest(null,t),testLogDetail(t,t)); loadTests(); }
+    logCentreUpdate("draft_deleted",logCentreForTest(null,t),testLogDetail(t,t)); refreshTestLists(); }
   catch(e){ alert("Could not delete: "+errMsg(e)); }
 }
 
@@ -5276,32 +5277,73 @@ async function pageTests(){
     <p class="page-sub">Schedule tests for your students. Pick the exam — subjects &amp; marking are set automatically.</p>
     <div class="bar"><div class="spacer" style="flex:1"></div>
       <button class="btn ghost" onclick="openSelfUpload()">📄 Self Upload (Word file)</button>
-      ${Object.keys(Q_POOLS).map(k=>`<button class="btn ghost" onclick="openBankTest('${k}')">${Q_POOLS[k].build}</button>`).join("\n      ")}
+      ${Object.keys(Q_POOLS).filter(k=>Q_POOLS[k].buildable).map(k=>`<button class="btn ghost" onclick="openBankTest('${k}')">${Q_POOLS[k].build}</button>`).join("\n      ")}
       <button class="btn" onclick="openCreateTest()">+ New test</button></div>
-    <div class="card" id="draftCard" style="display:none;margin-bottom:16px"><h3 style="margin-top:0">📝 Draft papers</h3><p class="muted" style="margin-top:-4px">Papers waiting to be checked — from Self Upload, or built from either question database. <b>Students cannot see a draft.</b> Print it for a teacher to go through, then press “Save as final paper” to set the dates and let students in.</p><div id="draftList"></div></div>
+    <div class="card" id="draftCard" style="display:none;margin-bottom:16px"><h3 style="margin-top:0">📝 Draft papers</h3><p class="muted" style="margin-top:-4px">Papers waiting to be checked — from Self Upload, or built from either question database. <b>Students cannot see a draft.</b> Print it for a teacher to go through, then press “Save as final paper” to set the dates and let students in. They are also on their own tab, <a href="#" onclick="go('drafts');return false"><b>Draft papers</b></a>.</p><div id="draftList"></div></div>
     <div class="card"><div id="testList" class="muted">Loading…</div></div>`);
   loadTests();
 }
+/* Every paper this login may see, newest first. Two screens want the same list — the Tests
+   screen and the Draft papers screen — so it is fetched in one place. */
+async function fetchTestDocs(){
+  if(ME.role==="master") return (await db.collection("tests").orderBy("createdAt","desc").limit(60).get()).docs;
+  const own=await db.collection("tests").where("scope","==",ME.centreId).get();
+  const all=await db.collection("tests").where("scope","==","all").get();
+  const dr=await db.collection("tests").where("scope","==","draft_"+ME.centreId).get();
+  const mc=await db.collection("tests").where("centres","array-contains",ME.centreId).get();
+  const mine=await db.collection("tests").where("createdBy","==",ME.uid).get();
+  const seen=new Set();
+  return [...own.docs,...all.docs,...dr.docs,...mc.docs,...mine.docs]
+    .filter(d=>!seen.has(d.id)&&seen.add(d.id))
+    .sort((a,b)=>(b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0));
+}
+/* One row per draft, the same on the Tests screen and on the tab of its own. */
+function draftRowsHTML(drafts){
+  return tableHTML(["Title","Exam","Questions","Waiting in Review queue",""],drafts.map(d=>{const t=d.data();const w=(t.pendingIds||[]).length;
+    return [`<b>${esc(t.title)}</b><br><span class="muted">${esc(t.uploadName||"")}</span>`,examTag(examOf(t)),(t.questionIds||[]).length,
+      w?`<a href="#" onclick="go('review');return false">${w} to approve →</a>`:'<span class="muted">none — ready</span>',
+      (canEditTest(t)
+        ? `<div class="rowacts"><button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button>`+(ME.role==="master"?` <button class="btn ghost sm" onclick="proofreadTest('${d.id}')">🔎 Proofread</button>`:"")+` <button class="btn ghost sm danger" onclick="deleteDraft('${d.id}')">🗑 Delete</button></div>`
+        : `<button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <span class="muted" style="font-size:12px">· made by the head office</span>`)];}));
+}
+/* Whichever of the two is open is the one that needs re-reading. */
+function refreshTestLists(){
+  if(CURRENT_PAGE==="tests") loadTests();
+  else if(CURRENT_PAGE==="drafts") loadDrafts();
+}
+/* A paper set from the questions that came in with earlier tests. It is not offered on the
+   Tests screen, where the two everyday databases are — it has a place of its own, so reaching
+   for it is a decision rather than a slip. The builder opens straight away; the screen behind it
+   is there for when it is closed. */
+function pageOldTestPaper(){
+  setView(`<h1 class="page-title">📄 Generate from previous test questions</h1>
+    <p class="page-sub">A paper built out of the questions that came into the portal with earlier tests.</p>
+    <div class="note" style="margin-bottom:14px">These are the questions on <b><a href="#" onclick="go('testqdb');return false">Previous test questions</a></b> — the ones that arrived with a Self Upload paper or an older Word-file upload. A paper built here takes <b>only</b> those: nothing from the chapters you uploaded into the bank, and nothing the AI wrote.</div>
+    <div class="card"><div class="row center" style="padding:10px 0">
+      <button class="btn" style="width:auto" onclick="openBankTest('test')">📄 Build a paper from them</button></div></div>`);
+  openBankTest("test");
+}
+function pageDrafts(){
+  setView(`<h1 class="page-title">📝 Draft papers</h1>
+    <p class="page-sub">Papers that are finished but have no dates on them yet. <b>Students cannot see a draft.</b></p>
+    <div class="note" style="margin-bottom:14px">Print a draft with 🖨 <b>Print</b> and hand it to a teacher to go through. Put any corrections right with ✎ <b>Questions</b>, then press ✓ <b>Save as final paper</b> to set the dates and let students in. Nothing reaches a student until you do.</div>
+    <div class="card"><div id="draftOnly" class="muted">Loading…</div></div>`);
+  loadDrafts();
+}
+async function loadDrafts(){
+  try{
+    const drafts=(await fetchTestDocs()).filter(d=>d.data().draft);
+    el("draftOnly").innerHTML=drafts.length?draftRowsHTML(drafts)
+      :emptyState("No drafts waiting","A paper kept as a draft — from Self Upload, or built from one of the question databases — waits here until you schedule it.");
+  }catch(e){ el("draftOnly").innerHTML=errBox(e); }
+}
 async function loadTests(){
   try{
-    let docs;
-    if(ME.role==="master"){ docs=(await db.collection("tests").orderBy("createdAt","desc").limit(60).get()).docs; }
-    else{
-      const own=await db.collection("tests").where("scope","==",ME.centreId).get();
-      const all=await db.collection("tests").where("scope","==","all").get();
-      const dr=await db.collection("tests").where("scope","==","draft_"+ME.centreId).get();
-      const mc=await db.collection("tests").where("centres","array-contains",ME.centreId).get();
-      const mine=await db.collection("tests").where("createdBy","==",ME.uid).get();
-      const seen=new Set(); docs=[...own.docs,...all.docs,...dr.docs,...mc.docs,...mine.docs].filter(d=>!seen.has(d.id)&&seen.add(d.id)).sort((a,b)=>(b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0));
-    }
+    let docs=await fetchTestDocs();
     const drafts=docs.filter(d=>d.data().draft); docs=docs.filter(d=>!d.data().draft);
     if(el("draftCard")){ el("draftCard").style.display=drafts.length?"block":"none";
-      el("draftList").innerHTML=drafts.length?tableHTML(["Title","Exam","Questions","Waiting in Review queue",""],drafts.map(d=>{const t=d.data();const w=(t.pendingIds||[]).length;
-        return [`<b>${esc(t.title)}</b><br><span class="muted">${esc(t.uploadName||"")}</span>`,examTag(examOf(t)),(t.questionIds||[]).length,
-          w?`<a href="#" onclick="go('review');return false">${w} to approve →</a>`:'<span class="muted">none — ready</span>',
-          (canEditTest(t)
-            ? `<button class="btn sm" onclick="openFinalizeDraft('${d.id}')">✓ Save as final paper</button> <button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openTestQuestions('${d.id}')">✎ Questions</button> <button class="btn ghost sm" onclick="openAddSolutions('${d.id}')">📘 Solutions</button>`+(ME.role==="master"?` <button class="btn ghost sm" onclick="proofreadTest('${d.id}')">🔎 Proofread</button>`:"")+` <button class="btn ghost sm danger" onclick="deleteDraft('${d.id}')">🗑 Delete</button>`
-            : `<button class="btn ghost sm" onclick="printTestPaper('${d.id}')">🖨 Print</button> <span class="muted" style="font-size:12px">· made by the head office</span>`)];})):""; }
+      el("draftList").innerHTML=drafts.length?draftRowsHTML(drafts):""; }
+    if(!el("testList")) return;
     el("testList").innerHTML=!docs.length?emptyState("No tests yet","Create your first test above.")
       :tableHTML(["Title","Q","Scope","Window","Status",""],
         docs.map(d=>{const t=d.data();const canEdit=canEditTest(t);return [`<b>${esc(t.title)}</b><br><span style="display:inline-block;margin:4px 0 2px">${examTag(examOf(t))} ${subjChips(t.subjects)}</span><br><span class="muted">${t.duration} min · Class ${clsLabel(t.class)}${t.solutionsAt?` · 🔒 Solutions from ${fmtDate(t.solutionsAt)}`:""}</span>`,
