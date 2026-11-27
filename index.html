@@ -1064,7 +1064,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: checked before it goes out"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: type delete to delete"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1235,7 +1235,7 @@ function openAIGen(){
    Everything is read slim — a few lines per question, with the diagrams left behind — so a bank
    of several thousand can be looked through on a phone.
    ============================================================ */
-let QDB={rows:[],shown:80,loaded:false};
+let QDB={rows:[],shown:80,loaded:false,sel:new Set()};
 function pageQuestionDatabase(){
   setView(`<h1 class="page-title">Question database</h1>
     <p class="page-sub">Everything stored, by subject, chapter, class and level. Nothing here changes anything — it is a place to look.</p>
@@ -1256,8 +1256,10 @@ function pageQuestionDatabase(){
       <p class="muted" style="margin-top:-4px">Each file exactly as it went in, in its own order. Open one to print it or save it as a PDF — useful for checking what the portal read against the Word file you started from.</p>
       <div id="qdFiles" class="muted">Loading…</div></div>
     <div class="card" style="margin-bottom:16px"><h3 style="margin-top:0">What is stored, chapter by chapter</h3><div id="qdChapters" class="muted">Loading…</div></div>
-    <div class="card"><h3 style="margin-top:0">The questions</h3><div id="qdList" class="muted">Loading…</div></div>`);
-  QDB={rows:[],shown:80,loaded:false};
+    <div class="card"><h3 style="margin-top:0">The questions</h3>
+      <div id="qdTools"></div><div class="msg" id="qdMsg"></div>
+      <div id="qdList" class="muted">Loading…</div></div>`);
+  QDB={rows:[],shown:80,loaded:false,sel:new Set()};
   qdbLoad();
 }
 async function qdbLoad(){
@@ -1321,8 +1323,9 @@ function qdbUploads(){
     if(!r.uploadId&&!r.uploadName) return;                 // not from a file
     const key=r.uploadId||("name:"+r.uploadName);
     const x=g[key]||(g[key]={key,name:r.uploadName||"(unnamed file)",rows:[],
-      chapters:new Set(),subjects:new Set(),classes:new Set(),exam:r.exam});
+      chapters:new Set(),subjects:new Set(),classes:new Set(),exam:r.exam,placed:true});
     x.rows.push(r);
+    if(r.seq==null) x.placed=false;          // uploaded before the position was recorded
     if(r.topic) x.chapters.add(r.topic);
     if(r.subject) x.subjects.add(r.subject);
     if(r.class) x.classes.add(String(r.class));
@@ -1333,14 +1336,17 @@ function qdbRenderFiles(){
   const box=el("qdFiles"); if(!box) return;
   const list=qdbUploads();
   if(!list.length){ box.innerHTML=emptyState("No uploaded files here yet","Upload a chapter from Tests → 📥 Upload into the database."); return; }
-  box.innerHTML=tableHTML(["File","Subject","Chapter","Class","Questions",""],
-    list.map(u=>[`<b>${esc(u.name)}</b>`,
+  const unplaced=list.filter(u=>!u.placed).length;
+  box.innerHTML=(unplaced?`<div class="note" style="margin-bottom:10px">⚠ ${unplaced} file${unplaced===1?" was":"s were"} uploaded before the portal recorded each question's place in its file, so ${unplaced===1?"it":"they"} cannot be printed back in the exact original order — questions numbered 1 in different exercises end up together. Upload ${unplaced===1?"that file":"those files"} again (<a href="#" onclick="openSelfUploadHistory('bankUpload');return false">undo the old upload first</a>) and the order will be exact.</div>`:"")
+    +tableHTML(["File","Subject","Chapter","Class","Questions",""],
+    list.map(u=>[`<b>${esc(u.name)}</b>`+(u.placed?"":`<br><span class="muted" style="font-size:11.5px">order not recorded — upload again for the exact order</span>`),
       [...u.subjects].map(subjTag).join(" "),
       esc([...u.chapters].join(", ")||"\u2014"),
       esc([...u.classes].join(", ")||"\u2014"),
       u.rows.length,
       `<div class="rowacts"><button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',false)">🖨 Question paper</button>
-        <button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',true)">🖨 With answers &amp; solutions</button></div>`]));
+        <button class="btn ghost sm" onclick="qdbPrintUpload('${u.key}',true)">🖨 With answers &amp; solutions</button>
+        ${ME.role==="master"?`<button class="btn ghost sm danger" onclick="qdbDeleteFile('${u.key}')">\ud83d\uddd1 Delete this file</button>`:""}</div>`]));
 }
 /* The whole file, printed back in its own order. The browser's print window offers
    "Save as PDF", which is how the PDF is kept. */
@@ -1403,12 +1409,15 @@ function qdbRender(){
 
   // ---- the questions themselves
   const show=rows.slice(0,QDB.shown);
+  qdbRenderTools(rows.length,show.length);
   el("qdList").innerHTML=(show.length
-    ? show.map(r=>`<div style="border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px">
+    ? show.map(r=>`<div style="border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px;display:flex;gap:10px;align-items:flex-start">
+        <input type="checkbox" class="qdck" style="width:auto;margin-top:3px;flex:none" ${QDB.sel.has(r.id)?"checked":""} onchange="qdbTick('${r.id}',this.checked)" title="Pick this question"/>
+        <div style="flex:1;min-width:0">
         <div class="muted" style="font-size:11.5px">${esc(r.subject||"—")} · ${esc(r.topic||"—")} · class ${esc(String(r.class||"—"))} · ${esc(r.difficulty||"—")} · answer ${qdbAnsLabel(r)}${r.year?" · "+esc(String(r.year)):""}${r.uploadName?` · <span title="${esc(r.uploadName)}">from ${esc(truncate(r.uploadName,28))}</span>`:""}</div>
         <div style="font-size:13.5px;margin:3px 0">${fmtMath(truncate(oneLine(r.text),260),r.subject)}</div>
         <div class="row end"><button class="btn ghost sm" style="width:auto" onclick="qdbView('${r.id}')">Read it in full</button></div>
-      </div>`).join("")
+        </div></div>`).join("")
     : `<p class="muted">Nothing matches those choices.</p>`)
     +(rows.length>QDB.shown?`<div class="row center" style="margin-top:4px"><button class="btn ghost sm" style="width:auto" onclick="qdbMore()">Show 80 more (${rows.length-QDB.shown} still to see)</button></div>`:"");
 }
@@ -1490,6 +1499,70 @@ async function qdbEditSave(){
     setBtn("qeSave",false,"Save the change");
   }
 }
+/* Picking questions out to be removed. Ticks survive a change of filter, so the count shown is
+   always the whole of what would go — never only what happens to be on screen. */
+function qdbTick(id,on){ if(on) QDB.sel.add(id); else QDB.sel.delete(id); qdbRenderTools(); }
+function qdbSelectShown(){
+  QDB.rows.filter(qdbMatch).slice(0,QDB.shown).forEach(r=>QDB.sel.add(r.id));
+  qdbRender();
+}
+function qdbSelectMatching(){
+  QDB.rows.filter(qdbMatch).forEach(r=>QDB.sel.add(r.id));
+  qdbRender();
+}
+function qdbClearSel(){ QDB.sel.clear(); qdbRender(); }
+function qdbRenderTools(matching,shown){
+  const box=el("qdTools"); if(!box) return;
+  if(matching==null){ const all=QDB.rows.filter(qdbMatch); matching=all.length; shown=Math.min(QDB.shown,all.length); }
+  const n=QDB.sel.size;
+  box.innerHTML=`<div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+    <b style="font-size:13px">${n?n+" picked":"Pick questions to remove"}</b>
+    <button class="btn ghost sm" style="width:auto" onclick="qdbSelectShown()">Pick the ${shown} shown</button>
+    ${matching>shown?`<button class="btn ghost sm" style="width:auto" onclick="qdbSelectMatching()">Pick all ${matching} matching</button>`:""}
+    ${n?`<button class="btn ghost sm" style="width:auto" onclick="qdbClearSel()">Unpick all</button>`:""}
+    <div class="spacer" style="flex:1"></div>
+    ${ME.role==="master"?`<button class="btn danger sm" style="width:auto" ${n?"":"disabled"} onclick="qdbDeleteSelected()">\ud83d\uddd1 Delete the ${n||""} picked</button>`:""}
+  </div>`;
+}
+async function qdbDeleteSelected(){
+  if(ME.role!=="master"||!QDB.sel.size) return;
+  const ids=[...QDB.sel];
+  const chapters=[...new Set(QDB.rows.filter(r=>QDB.sel.has(r.id)).map(r=>r.topic).filter(Boolean))];
+  await qdbDeleteIds(ids,"Delete "+ids.length+" question"+(ids.length===1?"":"s")+"?",
+    chapters.length?("From: "+chapters.slice(0,4).join(", ")+(chapters.length>4?" and "+(chapters.length-4)+" more":"")+"\n\n"):"");
+}
+async function qdbDeleteFile(key){
+  if(ME.role!=="master") return;
+  const u=qdbUploads().find(x=>x.key===key); if(!u) return;
+  await qdbDeleteIds(u.rows.map(r=>r.id),"Delete everything from this file?",
+    u.name+"\n\n");
+}
+/* Nothing brings these back, so what is about to happen is spelled out first — including
+   whether any of them is already sitting in a paper that has been built. */
+async function qdbDeleteIds(ids,title,lead){
+  if(!ids.length) return;
+  let used=0;
+  try{ const u=await loadUsedQuestionIds(); used=ids.filter(id=>u.has(id)).length; }catch(_){}
+  const msg=(lead||"")
+    +ids.length+" question"+(ids.length===1?"":"s")+" will be removed from the database for good."
+    +(used?"\n\n\u26a0 "+used+" of them "+(used===1?"is":"are")+" already used in a paper you have built. "
+        +(used===1?"It":"They")+" will disappear from that paper too, and a scheduled paper would be left with fewer questions than it was set with.":"")
+    +"\n\nThis cannot be undone.";
+  if(!await askTypedDelete(title,msg)) return;
+  setMsg("qdMsg","Deleting\u2026","ok");
+  try{
+    for(let i=0;i<ids.length;i+=400){
+      const batch=db.batch();
+      ids.slice(i,i+400).forEach(id=>batch.delete(db.collection("questions").doc(id)));
+      await batch.commit();
+      setMsg("qdMsg","Deleting\u2026 "+Math.min(i+400,ids.length)+" of "+ids.length,"ok");
+    }
+    ids.forEach(id=>QDB.sel.delete(id));
+    await qdbLoad();
+    setMsg("qdMsg","\u2713 "+ids.length+" question"+(ids.length===1?"":"s")+" deleted.","ok");
+  }catch(e){ setMsg("qdMsg",errMsg(e),"err"); }
+}
+
 /* One question, read in full, with a way to put it right. */
 async function qdbView(id){
   modal(`<h2>Question</h2><div id="qdOne" class="muted">Loading…</div>
@@ -3786,7 +3859,10 @@ function bkRenderPreview(W,parsed,chapter){
 async function bankUploadImport(good,fixable,fileName){
   const liveIds=[],pendingIds=[];
   const uploadId="bk_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
-  const all=[...good.map(q=>({q,status:"live"})),...fixable.map(q=>({q,status:"pending"}))];
+  /* Written in the file's own order — a question that needs a fix keeps its place rather than
+     being swept to the end, so the order in the database is the order on the page. */
+  const all=[...good.map(q=>({q,status:"live"})),...fixable.map(q=>({q,status:"pending"}))]
+    .sort((x,y)=>((x.q.seq||x.q.num||0)-(y.q.seq||y.q.num||0)));
   for(let i=0;i<all.length;i+=400){
     const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
     chunk.forEach(({q,status})=>{
@@ -8457,6 +8533,40 @@ async function subjectMarksForDocs(docs){
 }
 function tableHTML(head,rows,cls){return `<div class="tablewrap${cls?" "+cls:""}"><table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;}
 // Every delete in the portal goes through this: a clear Yes / No box, so nothing is removed by a stray click.
+/* A delete that cannot happen by a slip of the finger: the word has to be typed out. Used
+   wherever questions leave the database for good, because nothing brings them back. */
+function askTypedDelete(title,message){
+  return new Promise(res=>{
+    const bg=document.createElement("div");
+    bg.style.cssText="position:fixed;inset:0;background:rgba(20,18,14,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px";
+    bg.innerHTML=`<div class="card" style="max-width:540px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,.32)">
+      <h3 style="margin:0 0 8px;color:var(--danger)">\ud83d\uddd1 ${esc(title||"Delete?")}</h3>
+      <p class="muted" style="margin:0 0 14px;white-space:pre-line">${esc(message||"")}</p>
+      <label style="margin-top:0">Type <b>delete</b> below to confirm</label>
+      <input id="tdWord" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="delete"/>
+      <div class="msg" id="tdMsg"></div>
+      <div class="row end" style="gap:8px;margin-top:14px">
+        <button class="btn ghost" id="tdNo">Cancel \u2014 keep them</button>
+        <button class="btn danger" id="tdYes">Delete for good</button></div></div>`;
+    document.body.appendChild(bg);
+    const finish=v=>{ document.removeEventListener("keydown",onKey); bg.remove(); res(v); };
+    function onKey(e){ if(e.key==="Escape") finish(false); }
+    const box=bg.querySelector("#tdWord");
+    bg.querySelector("#tdNo").onclick=()=>finish(false);
+    bg.querySelector("#tdYes").onclick=()=>{
+      if(String(box.value||"").trim().toLowerCase()!=="delete"){
+        const m=bg.querySelector("#tdMsg");
+        m.className="msg err"; m.textContent="Type the word delete to confirm \u2014 nothing has been deleted.";
+        box.focus(); return;
+      }
+      finish(true);
+    };
+    box.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); bg.querySelector("#tdYes").click(); } };
+    bg.onclick=e=>{ if(e.target===bg) finish(false); };
+    document.addEventListener("keydown",onKey);
+    setTimeout(()=>box.focus(),30);
+  });
+}
 function askDelete(title,message,yesLabel){
   return new Promise(res=>{
     const bg=document.createElement("div");
