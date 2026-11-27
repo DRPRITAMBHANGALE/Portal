@@ -1064,7 +1064,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: a look at the database"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: the database at a glance"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1245,10 +1245,9 @@ function pageQuestionDatabase(){
         <div><label>Class</label><select id="qdClass" onchange="qdbLoad()"><option value="all">Both classes</option><option value="11">Class 11</option><option value="12">Class 12</option></select></div>
         <div><label>Status</label><select id="qdStatus" onchange="qdbLoad()"><option value="live">Ready to use</option><option value="pending">Waiting in the Review queue</option></select></div>
       </div>
-      <div class="grid cols-3">
+      <div class="grid cols-2">
         <div><label>Subject</label><select id="qdSubject" onchange="qdbRender()"><option value="all">All subjects</option></select></div>
         <div><label>Chapter</label><select id="qdChap" onchange="qdbRender()"><option value="all">All chapters</option></select></div>
-        <div><label>Level</label><select id="qdDiff" onchange="qdbRender()"><option value="all">Any level</option>${DIFFICULTIES.map(d=>`<option>${esc(d)}</option>`).join("")}</select></div>
       </div>
       <label>Search the wording</label><input id="qdFind" placeholder="Keywords…" oninput="qdbRender()"/>
     </div>
@@ -1300,12 +1299,14 @@ function qdbFillChapters(){
     +list.map(t=>`<option value="${esc(t)}"${t===keep?" selected":""}>${esc(t)} (${n[t]})</option>`).join("");
   if(keep!=="all"&&!list.includes(keep)) el("qdChap").value="all";
 }
+/* The level is not filtered on here — the whole point of this screen is to see the spread,
+   which the tiles and the chapter table already give, level by level. Choosing questions at a
+   level is done where it matters, on the New-test-from-the-database screen. */
 function qdbMatch(r){
-  const subj=val("qdSubject"), chap=val("qdChap"), dif=val("qdDiff");
+  const subj=val("qdSubject"), chap=val("qdChap");
   const f=(val("qdFind")||"").trim().toLowerCase();
   if(subj!=="all"&&r.subject!==subj) return false;
   if(chap!=="all"&&(r.topic||"")!==chap) return false;
-  if(dif!=="all"&&(r.difficulty||"")!==dif) return false;
   if(f&&!((r.text||"")+" "+(r.topic||"")+" "+(r.subject||"")).toLowerCase().includes(f)) return false;
   return true;
 }
