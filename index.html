@@ -524,9 +524,11 @@ const EXAMS = {
     note:"+4 for correct, −1 for wrong, 0 if skipped"
   },
   "NEET": {
-    streams:{ PCB:["Physics","Chemistry","Botany","Zoology"], PCMB:["Physics","Chemistry","Botany","Zoology"] },
-    marks:{Physics:4,Chemistry:4,Botany:4,Zoology:4}, negative:1,
-    full:{Physics:45,Chemistry:45,Botany:45,Zoology:45}, fullDuration:200,
+    streams:{ PCB:["Physics","Chemistry","Biology"], PCMB:["Physics","Chemistry","Biology"] },
+    // Botany and Zoology are kept in the marking only, so questions filed under them before
+    // still score 4 in a NEET paper. Nothing new is filed under them.
+    marks:{Physics:4,Chemistry:4,Biology:4,Botany:4,Zoology:4}, negative:1,
+    full:{Physics:45,Chemistry:45,Biology:90}, fullDuration:200,
     note:"+4 for correct, −1 for wrong, 0 if skipped"
   }
 };
@@ -611,10 +613,12 @@ function pullKey(x){
   return (x.subject||"")+"|"+t;
 }
 async function pullQuestions({exam,subject,classes,chapters,count,diffs,numerical}){
-  let q=db.collection("questions").where("status","==","live").where("exam","==",exam).where("subject","==",subject);
-  if(classes.length===1) q=q.where("class","==",classes[0]);
-  const snap=await q.get();
-  let docs=snap.docs.filter(d=>{const x=d.data();
+  const all=await docsForExam(exam,tag=>{
+    let q=db.collection("questions").where("status","==","live").where("exam","==",tag).where("subject","==",subject);
+    if(classes.length===1) q=q.where("class","==",classes[0]);
+    return q;
+  });
+  let docs=all.filter(d=>{const x=d.data();
     if(classes.length>1 && !classes.includes(x.class)) return false;
     if(chapters && chapters.length && !chapters.includes(x.topic)) return false;
     if(x.difficulty===RETIRED_DIFF) return false;              // the Easy level is retired
@@ -948,6 +952,58 @@ async function loadSyllabus(){
 }
 
 /* ============================================================
+   WHICH PAPERS MAY DRAW ON A QUESTION
+   ------------------------------------------------------------
+   A question goes into the database marked with the exams it suits, not with one exam it
+   belongs to: most of the Physics and Chemistry that serves JEE serves MHT-CET as well.
+   The marking scheme is a property of the PAPER, chosen when the paper is built — so the
+   same stored question is worth 4 marks in a JEE paper and 1 in an MHT-CET one, with
+   nothing to change in the database.
+   ============================================================ */
+const EXAM_TAGS=["JEE/MHT-CET","NEET/MHT-CET","MHT-CET"];
+const BANK_DEFAULT_DIFF="Moderate";
+
+/* Three subjects a side, and Biology is one subject — papers here are set mixed, so splitting
+   it into Botany and Zoology only got in the way. The marking still lands right either way:
+   Biology scores 4 in a NEET paper and 1 in an MHT-CET one, which is what both boards do. */
+const EXAM_TAG_SUBJECTS={
+  "JEE/MHT-CET":["Physics","Chemistry","Mathematics"],
+  "NEET/MHT-CET":["Physics","Chemistry","Biology"],
+  "MHT-CET":["Physics","Chemistry","Mathematics","Biology"]
+};
+function subjectsForTag(tag){ return EXAM_TAG_SUBJECTS[tag]||examSubjects(EXAM_KEYS[0]); }
+function examTagSelect(id){ return `<select id="${id}">${EXAM_TAGS.map(t=>`<option>${esc(t)}</option>`).join("")}</select>`; }
+
+/* Which stored tags a paper of this exam may use. Questions saved before tags existed carry
+   the exam's own name, so that is always included and nothing older is left stranded. */
+function examTagsFor(exam){
+  if(exam==="JEE Main") return ["JEE/MHT-CET","JEE Main"];
+  if(exam==="NEET")     return ["NEET/MHT-CET","NEET"];
+  return ["MHT-CET","JEE/MHT-CET","NEET/MHT-CET"];       // an MHT-CET paper may use them all
+}
+/* Firestore cannot ask for "any of these" together with the other filters without a new index,
+   so the same query is simply run once per tag and the answers are put together, without
+   repeats. `build(tag)` returns the query for one tag. */
+async function docsForExam(exam,build){
+  const seen=new Set(), out=[];
+  for(const tag of examTagsFor(exam)){
+    const snap=await build(tag).get();
+    snap.forEach(d=>{ if(!seen.has(d.id)){ seen.add(d.id); out.push(d); } });
+  }
+  return out;
+}
+async function slimForExam(exam,build,fields,cap){
+  cap=cap||6000;
+  const seen=new Set(), out=[];
+  for(const tag of examTagsFor(exam)){
+    if(out.length>=cap) break;
+    const rows=await readSlim(build(tag),fields,cap-out.length);
+    rows.forEach(r=>{ if(!seen.has(r.id)){ seen.add(r.id); out.push(r); } });
+  }
+  return out;
+}
+
+/* ============================================================
    4. NAVIGATION
    ============================================================ */
 const STAFF_NAV=[
@@ -989,7 +1045,7 @@ function buildNav(){
   if(ME.role!=="student") wrap.innerHTML=`<div class="navlabel">Manage</div>`;
   navFor().forEach(n=>{const a=document.createElement("a");a.id="nav-"+n.id;
     a.innerHTML=`<span style="width:18px;text-align:center">${n.ic}</span> ${n.label}`;a.onclick=()=>go(n.id);wrap.appendChild(a);});
-  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: a paper to type into"; wrap.appendChild(v);
+  const v=document.createElement("div"); v.className="navlabel"; v.style.cssText="margin-top:22px;opacity:.55;font-size:10.5px"; v.textContent="Build: one Biology"; wrap.appendChild(v);
 }
 function go(page){
   const allowed=navFor().map(n=>n.id);
@@ -1063,19 +1119,31 @@ async function pageQuestions(){
   loadQuestions(); loadBankCounts();
 }
 async function loadBankCounts(){
-  const exam=val("qfExam"),cls=val("qfClass");
-  el("bankCounts").innerHTML=`<h3 style="margin-bottom:10px">Live questions in the bank — ${esc(exam)}${cls!=="all"?" · Class "+cls:""}</h3><div class="muted">Counting…</div>`;
+  const exam=val("qfExam"),cls=val("qfClass"),subj=val("qfSubject");
+  const head=`Questions an ${esc(exam)} paper can draw on${cls!=="all"?" \u00b7 Class "+cls:""}`;
+  el("bankCounts").innerHTML=`<h3 style="margin-bottom:10px">${head}</h3><div class="muted">Counting\u2026</div>`;
   try{
-    let q=db.collection("questions").where("status","==","live").where("exam","==",exam);
-    if(cls!=="all") q=q.where("class","==",cls);
-    const snap=await q.get();
-    const tally={}; examSubjects(exam).forEach(s=>tally[s]=0);
-    snap.forEach(d=>{const s=d.data().subject; if(s in tally) tally[s]++; else tally[s]=(tally[s]||0)+1;});
-    const total=snap.size;
+    /* a few lines per question, never the diagrams \u2014 counting used to pull every picture
+       in the bank into a phone's memory at once */
+    const rows=await slimForExam(exam,tag=>{
+      let q=db.collection("questions").where("status","==","live").where("exam","==",tag);
+      if(cls!=="all") q=q.where("class","==",cls);
+      return q;
+    },["subject","topic","class"],9000);
+    const tally={}; subjectsForTag(exam==="JEE Main"?"JEE/MHT-CET":(exam==="NEET"?"NEET/MHT-CET":"MHT-CET")).forEach(s=>tally[s]=0);
+    rows.forEach(x=>{ const s=x.subject||"\u2014"; tally[s]=(tally[s]||0)+1; });
     const parts=Object.keys(tally).map(s=>`<div class="kpi"><div class="n">${tally[s]}</div><div class="l">${esc(s)}</div></div>`);
-    el("bankCounts").innerHTML=`<h3 style="margin-bottom:4px">Live questions in the bank — ${esc(exam)}${cls!=="all"?" · Class "+cls:""}</h3>
-      <p class="muted" style="margin:0 0 12px">${total} total approved question${total===1?"":"s"} available for tests &amp; practice.</p>
-      <div class="skpis" style="margin-bottom:0">${parts.join("")}</div>`;
+    const chap={};
+    rows.forEach(x=>{ if(subj==="all"||x.subject===subj){ const t=(x.topic||"\u2014"); chap[t]=(chap[t]||0)+1; } });
+    const chapters=Object.keys(chap).sort((a,b)=>chap[b]-chap[a]||a.localeCompare(b));
+    el("bankCounts").innerHTML=`<h3 style="margin-bottom:4px">${head}</h3>
+      <p class="muted" style="margin:0 0 12px">${rows.length} question${rows.length===1?"":"s"} ready to use${rows.length>=9000?" (showing the first 9000)":""}.</p>
+      <div class="skpis" style="margin-bottom:0">${parts.join("")}</div>
+      ${chapters.length?`<div style="margin-top:14px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:6px">By chapter${subj!=="all"?" \u2014 "+esc(subj):""} <span class="muted" style="font-weight:400">(${chapters.length})</span></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto">
+          ${chapters.map(t=>`<span class="pill" style="background:#eef3ee;color:#2c4a3b;font-size:12px">${esc(t)} <b>${chap[t]}</b></span>`).join("")}
+        </div></div>`:""}`;
   }catch(e){ el("bankCounts").innerHTML=errBox(e); }
 }
 /* Reading a whole collection in one go is what kills a phone. A question carries its diagram
@@ -1106,14 +1174,16 @@ async function readSlim(query,fields,cap){
 }
 async function loadQuestions(){
   const exam=val("qfExam"),subj=val("qfSubject"),cls=val("qfClass");
-  let q=db.collection("questions").where("status","==","live").where("exam","==",exam);
-  if(subj!=="all") q=q.where("subject","==",subj);
-  if(cls!=="all") q=q.where("class","==",cls);
   try{
-    const snap=await q.limit(100).get();
-    el("qList").innerHTML=snap.empty?emptyState("No live questions yet","Generate or add some, then approve them in the Review queue.")
-      :tableHTML(["Question","Subject","Topic","Class","Diff."],
-        snap.docs.map(d=>{const x=d.data();return [esc(truncate(x.text,90))+(x.year?` <b style="color:var(--gold)">(${x.year})</b>`:""),subjTag(x.subject),esc(x.topic||"—"),x.class,x.difficulty];}));
+    const rows=await slimForExam(exam,tag=>{
+      let q=db.collection("questions").where("status","==","live").where("exam","==",tag);
+      if(subj!=="all") q=q.where("subject","==",subj);
+      if(cls!=="all") q=q.where("class","==",cls);
+      return q;
+    },["text","subject","topic","class","difficulty","year","exam"],100);
+    el("qList").innerHTML=!rows.length?emptyState("No questions here yet","Upload a chapter, or generate some and approve them in the Review queue.")
+      :tableHTML(["Question","Subject","Chapter","Class","Suits"],
+        rows.map(x=>[esc(truncate(x.text,90))+(x.year?` <b style="color:var(--gold)">(${x.year})</b>`:""),subjTag(x.subject),esc(x.topic||"\u2014"),x.class,esc(x.exam||"\u2014")]));
   }catch(e){ el("qList").innerHTML=errBox(e); }
 }
 function openAIGen(){
@@ -1969,6 +2039,26 @@ async function readWordWithEquations(arrayBuffer){
   }
   const body=doc.getElementsByTagName("w:body")[0]||doc.documentElement;
   const inFallback=n=>{ for(let a=n.parentNode;a;a=a.parentNode) if(a.nodeType===1&&local(a)==="Fallback") return true; return false; };
+  const childEls=(n,name)=>{ const o=[]; for(let c=n.firstChild;c;c=c.nextSibling) if(c.nodeType===1&&local(c)===name) o.push(c); return o; };
+  /* Some papers set their two columns with an invisible table instead of Word's own column
+     layout: one row, two cells, a whole run of numbered questions down each. That is the page's
+     shape, not a table of data, and freezing it into one token hides every question inside it.
+     A table counts as the page's columns only when it is at most two rows of two or three cells
+     and one of those cells holds a run of numbered items — which a matching-columns table or a
+     data table inside a question never does. */
+  function tableIsPageColumns(tbl){
+    const rows=childEls(tbl,"tr");
+    if(!rows.length||rows.length>2) return false;
+    const cells=childEls(rows[0],"tc");
+    if(cells.length<2||cells.length>3) return false;
+    return cells.some(tc=>{
+      const ps=childEls(tc,"p");
+      if(ps.length<3) return false;
+      let starts=0;
+      ps.forEach(p=>{ if(/^\s*\d{1,3}[.)]?(?:\s|\t)\s*\S/.test(paraText(p))) starts++; });
+      return starts>=2;
+    });
+  }
   // A Word table (matching columns, data tables) becomes one token that keeps its rows and columns:
   // [[tbl: r1c1 ~|~ r1c2 ~||~ r2c1 ~|~ r2c2 :tbl]]
   function tableToken(tbl){
@@ -1995,7 +2085,10 @@ async function readWordWithEquations(arrayBuffer){
         const label=autoNumberLabel(c), txt=paraText(c);
         out.push(label?(label+"\t"+txt.replace(/^[ \t]+/,"")):txt);   // put Word's own list number back
       } }
-      else if(ln==="tbl"){ const t=tableToken(c); if(t) out.push(t); }
+      else if(ln==="tbl"){
+        if(tableIsPageColumns(c)) childEls(c,"tr").forEach(tr=>childEls(tr,"tc").forEach(tc=>walkBody(tc)));
+        else { const t=tableToken(c); if(t) out.push(t); }
+      }
       else if(ln!=="sectPr") walkBody(c);          // content controls, etc.
     }
   })(body);
@@ -2396,9 +2489,9 @@ async function tqAddBank(){
 async function loadTQBank(){
   el("tbList").innerHTML="Loading…";
   try{
-    const snap=await db.collection("questions").where("exam","==",TQ.t.exam).where("subject","==",val("tbSubject")).where("status","==","live").limit(600).get();
+    const docs=await docsForExam(TQ.t.exam,tag=>db.collection("questions").where("exam","==",tag).where("subject","==",val("tbSubject")).where("status","==","live").limit(600));
     const inTest=new Set(TQ.ordered.map(q=>q.id));
-    TQ.pool=snap.docs.map(d=>({id:d.id,...d.data()})).filter(q=>!inTest.has(q.id));
+    TQ.pool=docs.map(d=>({id:d.id,...d.data()})).filter(q=>!inTest.has(q.id));
     renderTQBank();
   }catch(e){ el("tbList").innerHTML=errBox(e); }
 }
@@ -2483,7 +2576,7 @@ async function tqReplace(i){
     <div id="tqRList" class="muted" style="max-height:380px;overflow:auto;margin-top:10px">Loading…</div>
     <div class="row end" style="margin-top:12px"><button class="btn ghost" onclick="openTestQuestions('${TQ.id}')">Back</button></div>`;
   try{
-    const snap=await db.collection("questions").where("exam","==",TQ.t.exam).where("subject","==",x.subject).where("status","==","live").limit(600).get();
+    const snap={docs:await docsForExam(TQ.t.exam,tag=>db.collection("questions").where("exam","==",tag).where("subject","==",x.subject).where("status","==","live").limit(600))};
     const inTest=new Set(TQ.ordered.map(q=>q.id));
     TQ.pool=snap.docs.map(d=>({id:d.id,...d.data()})).filter(q=>!inTest.has(q.id));
     renderTQReplace(i);
@@ -2688,8 +2781,8 @@ async function handleSelfUpload(){
     const suSubj=(examSubjects(val("suExam"))[0])||"Physics";   // corrected by the question-number ranges, if any
     const defaults={exam:val("suExam"),subject:suSubj,cls:suCls,topic:suSubj,difficulty:"Moderate"};
     const ranges=readSectionRanges("suSec",val("suExam"));
-    SELF_UPLOAD_PARSED=parseSelfUploadDoc(raw,defaults,W);
-    SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.num,ranges,q.subject); q.topic=q.subject; });
+    SELF_UPLOAD_PARSED=parsePaperDoc(raw,defaults,W);
+    SELF_UPLOAD_PARSED.forEach(q=>{ q.subject=subjectForNum(q.seq||q.num,ranges,q.subject); q.topic=q.subject; });
     if(!SELF_UPLOAD_PARSED.length){ setMsg("suMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err"); return; }
     const ready=SELF_UPLOAD_PARSED.filter(q=>q.tier==="ready");
     const fixable=SELF_UPLOAD_PARSED.filter(q=>q.tier==="fixable");
@@ -2717,6 +2810,7 @@ async function handleSelfUpload(){
         +(pendingCount?` — ${pendingCount} more will join automatically when you approve them in the Review queue.`:"."),"ok");
     }catch(err){ setMsg("suActionMsg","Questions were added, but the draft paper couldn't be created: "+errMsg(err),"err"); }
     setMsg("suMsg",`Found ${SELF_UPLOAD_PARSED.length} question${SELF_UPLOAD_PARSED.length===1?"":"s"}`
+      +(SELF_UPLOAD_PARSED.exercises>1?` across ${SELF_UPLOAD_PARSED.exercises} exercises \u2014 each read with its own answer key and its own solutions`:"")
       +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)}${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
       +`✓ ${liveIds.length} added live to your question bank.`
       +(pendingCount?` ⚠ ${pendingCount} saved to the Review queue — something in them couldn't be read (see the red notes below); fix it there and approve.`:"")
@@ -2735,7 +2829,7 @@ async function handleSelfUpload(){
     el("suPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
       +SELF_UPLOAD_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
         return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
-          <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
+          <div style="font-size:13px">${icon} <b>${qTag(q)}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
           <div class="muted" style="font-size:11.5px">${esc(q.subject)} · answer ${q.answerType==="numeric"?esc(String(q.numAnswer))+" (typed)":(q.correct!=null?optLetter(q.correct):"—")}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${q.problems.join("; ")}</span>`:""}</div></div>`;}).join("")+`</div>`;
   }catch(e){ setMsg("suMsg","Could not read file: "+errMsg(e),"err"); }
 }
@@ -2758,6 +2852,70 @@ function downloadPaperTemplate(){
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }catch(e){ alert("Could not download the template: "+(e&&e.message?e.message:e)); }
 }
+/* "1.3 Properties of Matter" is a heading in the middle of a paper; "2.6 has two significant
+   figures." is a line of working, and "1.5 g of NaCl is dissolved in 500 mL" is a question.
+   The three are told apart by length, by punctuation, and by whether the line ends like a
+   sentence — a heading does not. */
+const SECTION_HEADING=/^\d{1,3}\.\d{1,3}(?:\.\d{1,3})?[ \t]+[A-Za-z]/;
+function looksLikeSectionHeading(p){
+  const t=String(p==null?"":p).replace(/\s+/g," ").trim();
+  if(!SECTION_HEADING.test(t)) return false;
+  if(/[.?!:]$/.test(t)) return false;                 // a sentence, not a heading
+  if(/[()=\u27e6]/.test(t)) return false;              // options, a formula, an equation
+  return t.length<=80 && t.split(" ").length<=9;
+}
+
+/* A chapter file is often four papers in one — "Exercise 1", "Exercise 2" and so on — each
+   numbering its questions from 1 again, each with its own key block and its own solutions block
+   further down the file. Read as a single paper, the last key block quietly overwrites the first,
+   and every question after the first restart is lost. So the file is cut into one small
+   self-contained paper per exercise, and each is read entirely on its own. */
+const EX_HEAD=/^[ \t]*(?:exercise|part|set)[ \t]*[-\u2013\u2014:.]?[ \t]*(\d{1,2})\b[^\n]{0,90}$/gim;
+function exerciseBlocks(text){
+  const out=[]; let m; EX_HEAD.lastIndex=0;
+  while((m=EX_HEAD.exec(text))) out.push({num:parseInt(m[1]),label:m[0].trim(),at:m.index,from:m.index+m[0].length});
+  return out.map((x,i)=>({num:x.num,label:x.label,text:text.slice(x.from,i+1<out.length?out[i+1].at:text.length)}));
+}
+/* Returns one little paper per exercise, or null when the file is an ordinary single paper. */
+function splitByExercise(raw){
+  const akIdx=raw.search(/answer\s*keys?/i);
+  let hsIdx=raw.search(/hints?\s*(?:&|and|\+)?\s*solutions?/i);
+  if(hsIdx<0) hsIdx=raw.search(/^[^\S\n]*(?:detailed\s+)?(?:solutions?|explanations?)(?:\s*(?:&|and)\s*(?:hints?|answers?))?[^\S\n]*$/im);
+  if(hsIdx<0) hsIdx=raw.search(/answers?\s*(?:&|and|with)\s*solutions?/i);
+  if(akIdx<0) return null;                                  // no key section — nothing to pair up
+  const paperEnd=akIdx;
+  const paper=raw.slice(0,paperEnd);
+  const ak=raw.slice(akIdx,(hsIdx>=0&&hsIdx>akIdx)?hsIdx:raw.length);
+  const sol=hsIdx>=0?raw.slice(hsIdx):"";
+  const P=exerciseBlocks(paper);
+  if(P.length<2) return null;                               // one paper, read it whole as before
+  const A=exerciseBlocks(ak), S=exerciseBlocks(sol);
+  if(A.length<P.length) return null;                        // a single continuous key — don't guess
+  const pick=(list,i,num)=>{ const byNum=list.filter(x=>x.num===num); return (byNum.length===1?byNum[0]:list[i])||null; };
+  return P.map((p,i)=>{
+    const a=pick(A,i,p.num), s=pick(S,i,p.num);
+    return {num:p.num, label:p.label,
+      text:p.text+"\n\nANSWER KEYS\n\n"+((a&&a.text)||"")+"\n\nHINTS & SOLUTIONS\n\n"+((s&&s.text)||"")};
+  });
+}
+/* The one entry point everything uses: reads a whole file, however many exercises are in it. */
+function parsePaperDoc(raw,defaults,W){
+  const parts=splitByExercise(raw);
+  if(!parts) return parseSelfUploadDoc(raw,defaults,W);
+  const out=[], passedOver=[]; let seq=0, solCount=0, solFound=false;
+  parts.forEach(p=>{
+    const got=parseSelfUploadDoc(p.text,defaults,W);
+    solFound=solFound||SU_SOL_STATS.sectionFound; solCount+=SU_SOL_STATS.count;
+    (got.passedOver||[]).forEach(n=>{ if(passedOver.indexOf(p.num+"."+n)<0) passedOver.push(p.num+"."+n); });
+    got.forEach(q=>{ q.block=p.num; q.blockLabel=p.label; q.seq=++seq; out.push(q); });
+  });
+  SU_SOL_STATS={sectionFound:solFound,count:solCount};
+  out.passedOver=passedOver;
+  out.exercises=parts.length;
+  return out;
+}
+/* How a question is named on screen: "Q7" in a plain paper, "Ex 2 · Q7" in a chapter file. */
+function qTag(q){ return (q&&q.block?("Ex "+q.block+" · Q"):"Q")+(q?q.num:""); }
 let SU_SOL_STATS={sectionFound:false,count:0};
 // Split the raw mammoth text into paper / answer-key / solutions, then parse each per question number.
 // Every question is classified into a tier: "ready" (imports live), "fixable" (has text + a valid
@@ -2795,6 +2953,7 @@ function parseSelfUploadDoc(raw,defaults,W){
         const mp=p.match(plainRe); const np=mp?parseInt(mp[1]):NaN;
         if(mp && (last===0 ? np===1 : np===last+1)){ cur={num:np,body:p.slice(mp[0].length),paras:[]}; chunks.push(cur); last=np; return; }
       }
+      if(looksLikeSectionHeading(p)) return;   // a chapter heading between two questions
       if(cur) cur.paras.push(p);
     });
     return chunks;
@@ -2956,7 +3115,7 @@ function parseSelfUploadDoc(raw,defaults,W){
   solText=solText.replace(/(^|\n)((?:⟦(?:[FE]\d+|FIG\?|EQ\?)⟧)+)[ \t]*(\d{1,3}[.)][ \t]*\t?)/g,"$1$3 $2 ");
 
   const out=[], opened=[];
-  numberedChunks(paperText,/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/).forEach(c=>{
+  numberedChunks(paperText,/^\s*(\d{1,3})(?:\s*\.(?:[ \t]+|(?!\d))|\t+|[ ]{2,})(?=\S)/).forEach(c=>{
     opened.push(c.num);
     const num=c.num;
     let rest=[c.body,...c.paras].join("\n\n");
@@ -3005,7 +3164,7 @@ function parseSelfUploadDoc(raw,defaults,W){
   // numbering: the same number twice, or one that goes backwards.
   const passedOver=[]; let seenUpTo=0;
   paperText.split(/\n[ \t]*\n/).forEach(para=>{
-    const m=para.match(/^\s*(\d{1,3})(?:\s*\.[ \t]*|\t+|[ ]{2,})(?=\S)/);
+    const m=para.match(/^\s*(\d{1,3})(?:\s*\.(?:[ \t]+|(?!\d))|\t+|[ ]{2,})(?=\S)/);
     if(!m) return;
     const n=parseInt(m[1]);
     if(seenUpTo===0 ? n<=250 : (n>seenUpTo && n<=seenUpTo+5)){ seenUpTo=n; return; }  // this one did start a question
@@ -3022,14 +3181,14 @@ async function selfUploadImport(ready,fixable,fileName,draftTestId){
   const all=[...ready.map(q=>({q,status:"live"})),...fixable.map(q=>({q,status:"pending"}))];
   for(let i=0;i<all.length;i+=400){
     const chunk=all.slice(i,i+400), batch=db.batch(), refs=[];
-    chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status}); byNum.push({num:q.num,id:ref.id});
+    chunk.forEach(({q,status})=>{ const ref=db.collection("questions").doc(); refs.push({ref,status}); byNum.push({num:q.seq||q.num,id:ref.id});
       batch.set(ref,{exam:q.exam,subject:q.subject,topic:q.topic,class:q.cls,difficulty:q.difficulty,
         text:q.text,options:q.options,correct:q.correct,answerType:q.answerType||"mcq",numAnswer:(q.numAnswer===undefined?null:q.numAnswer),solution:q.solution,year:null,numerical:q.answerType==="numeric",status,source:"selfUpload",uploadId,uploadName:fileName||"",draftTestId:draftTestId||null,qNum:q.num,
         createdBy:ME.uid,centreId:ME.role==="admin"?ME.centreId:"all",createdAt:firebase.firestore.FieldValue.serverTimestamp()}); });
     await batch.commit();
     refs.forEach(r=>{ if(r.status==="live") liveIds.push(r.ref.id); else pendingIds.push(r.ref.id); });
   }
-  const order=byNum.sort((a,b)=>a.num-b.num).map(x=>x.id);
+  const order=byNum.sort((a,b)=>a.num-b.num).map(x=>x.id);   // single paper: paper order
   const liveSet=new Set(liveIds);
   return {liveIds:order.filter(id=>liveSet.has(id)),pendingIds,order,uploadId};
 }
@@ -3054,172 +3213,146 @@ async function selfUploadImport(ready,fixable,fileName,draftTestId){
    answer and solution come with it.
    ============================================================ */
 
-/* ---------- the subject / chapter blocks on the upload screen ---------- */
-let BK_ROW_SEQ=0;
-function bkRangeRowHTML(from,to,subject,exam){
-  const i=++BK_ROW_SEQ, subs=examSubjects(exam);
-  return `<div class="bkrange" id="bkR${i}" style="display:flex;gap:6px;align-items:flex-end;margin-bottom:6px;flex-wrap:wrap">
-    <div style="width:78px"><label style="font-size:11.5px;margin-top:0">From Q</label><input class="bkFrom" type="number" min="1" value="${from}"/></div>
-    <div style="width:78px"><label style="font-size:11.5px;margin-top:0">To Q</label><input class="bkTo" type="number" min="1" value="${to}"/></div>
-    <div style="flex:1;min-width:120px"><label style="font-size:11.5px;margin-top:0">Subject</label>
-      <select class="bkSubj" onchange="bkChapHints(this)">${subs.map(s=>`<option${s===subject?" selected":""}>${esc(s)}</option>`).join("")}</select></div>
-    <div style="flex:1.5;min-width:150px"><label style="font-size:11.5px;margin-top:0">Chapter</label>
-      <input class="bkChap" list="bkChapList${i}" placeholder="e.g. Chemical kinetics" autocomplete="off"/><datalist id="bkChapList${i}"></datalist></div>
-    <button class="btn ghost sm bkX" style="width:auto;flex:none" onclick="bkDropRange('bkR${i}')" title="Remove this block">✕</button>
-  </div>`;
+/* ---------- Upload papers straight into the database ----------
+   A chapter arrives as a file named after itself — "1._Some_Basic_Concepts_of_Chemistry.docx" —
+   so the chapter name is taken from the file name and a whole subject can go in one armful.
+   Each file is still read, filed and reported on entirely on its own. */
+function chapterFromFileName(name){
+  let s=String(name==null?"":name).replace(/\.(docx|doc)$/i,"");
+  s=s.replace(/_+/g," ").replace(/\s+/g," ").trim();
+  s=s.replace(/^[\s.\-–—)\]]*\d{1,3}[\s.\-–—)\]]+/,"");                 // "1." · "01 -" · "(2)"
+  s=s.replace(/^(?:chapters?|chap|ch|units?|lessons?)\b[\s.\-–—:]*\d{0,3}[\s.\-–—:]+/i,"");
+  s=s.replace(/[\s.\-–—_]*\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}\s*$/,"");             // a date on the end
+  return s.replace(/\s+/g," ").trim();
 }
-function bkResetRanges(){
-  const box=el("bkRanges"); if(!box) return;
-  box.innerHTML=bkRangeRowHTML(1,999,examSubjects(val("bkExam"))[0]||"",val("bkExam"));
-  document.querySelectorAll(".bkSubj").forEach(bkChapHints);
-  bkSyncX();
-}
-/* With a single block there is nothing to remove, so its ✕ is greyed rather than silently doing nothing. */
-function bkSyncX(){
-  const box=el("bkRanges"); if(!box) return;
-  const rows=[...box.querySelectorAll(".bkrange")], only=rows.length<=1;
-  rows.forEach(r=>{ const b=r.querySelector(".bkX"); if(b){ b.disabled=only; b.style.opacity=only?".3":"1"; } });
-}
-function bkAddRange(){
-  const box=el("bkRanges"); if(!box) return;
-  const rows=[...box.querySelectorAll(".bkrange")];
-  const lastTo=rows.length?parseInt(rows[rows.length-1].querySelector(".bkTo").value)||0:0;
-  const from=(lastTo&&lastTo<999)?lastTo+1:1;
-  box.insertAdjacentHTML("beforeend",bkRangeRowHTML(from,999,examSubjects(val("bkExam"))[0]||"",val("bkExam")));
-  bkChapHints(box.querySelector(".bkrange:last-child .bkSubj"));
-  bkSyncX();
-}
-function bkDropRange(rowId){
-  const box=el("bkRanges"); if(!box) return;
-  if(box.querySelectorAll(".bkrange").length<=1) return;   // one block always stays
-  const r=el(rowId); if(r) r.remove();
-  bkSyncX();
-}
-/* fill one row's chapter suggestions from the syllabus for that exam / class / subject */
-function bkChapHints(sel){
-  if(!sel) return;
-  const row=sel.closest(".bkrange"); if(!row) return;
-  const list=row.querySelector("datalist"); if(!list) return;
-  let chaps=[]; try{ chaps=topicsFor(val("bkExam"),val("bkClass"),sel.value)||[]; }catch(_){ chaps=[]; }
-  list.innerHTML=chaps.map(c=>`<option value="${esc(c)}"></option>`).join("");
-}
-function bkReadRanges(){
-  return [...document.querySelectorAll("#bkRanges .bkrange")].map(r=>({
-    from:parseInt(r.querySelector(".bkFrom").value)||1,
-    to:parseInt(r.querySelector(".bkTo").value)||999,
-    subject:r.querySelector(".bkSubj").value,
-    chapter:(r.querySelector(".bkChap").value||"").trim()
-  })).filter(x=>x.to>=x.from);
-}
-/* The first block whose numbers cover this question wins. */
-function bkRangeFor(num,ranges){ return (ranges||[]).find(r=>num>=r.from&&num<=r.to)||null; }
 
-/* ---------- Upload a paper straight into the database ---------- */
-let BANK_UP_PARSED=[], BANK_UP_FILE="", BANK_UP_DONE=false;
+let BK_FILES=[], BANK_UP_PARSED=[], BANK_UP_FILE="", BANK_UP_DONE=false;
 function openBankUpload(){
   modal(`<h2>📥 Upload questions into the database</h2>
-    <p class="muted">Upload a <b>.docx</b> laid out exactly like one of your question papers — the numbered questions first, then an <b>“Answer Keys”</b> section for all of them, then a <b>“Hints &amp; Solutions”</b> section for all of them. Each question is filed in your database together with its own answer and solution, ready to be used again.
-    <b>No test is created here.</b> Build one whenever you like from <b>Tests → 🗂 New test from the database</b>.</p>
-    <div class="grid cols-2">
-      <div><label>Exam <span class="muted" style="font-weight:400">— sets the marking scheme</span></label>${examSelect("bkExam")}</div>
+    <p class="muted">Upload one chapter — or a whole subject at once — as <b>.docx</b> files laid out like your question papers: the numbered questions, then <b>“Answer Keys”</b>, then <b>“Hints &amp; Solutions”</b>. A file holding several exercises is read as several papers, each with its own key.
+    <b>The file name becomes the chapter name</b>, so later you can pick a chapter and build a paper straight out of it. <b>No test is created here.</b></p>
+    <div class="grid cols-3">
+      <div><label>These questions suit</label>${examTagSelect("bkExam")}</div>
       <div><label>Class</label>${classSelect("bkClass",false)}</div>
+      <div><label>Subject</label><select id="bkSubject"></select></div>
     </div>
-    <label>File them under which difficulty</label>${difficultySelect("bkDiff")}
-    <div style="margin-top:16px">
-      <div style="font-weight:600">Which questions belong to which subject &amp; chapter</div>
-      <p class="muted" style="font-size:12.5px;margin:4px 0 8px">One block is enough for a single-chapter file — leave <b>From 1</b> and <b>To 999</b> and just type the chapter. For a mixed paper add a block for each part, for example 1–50 Physics · Rotational motion, then 51–100 Chemistry · Chemical kinetics. Leave a chapter empty and those questions are filed under the subject's own name.</p>
-      <div id="bkRanges"></div>
-      <button class="btn ghost sm" style="width:auto" onclick="bkAddRange()">+ Add another block</button>
-    </div>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 0">This only says which papers may draw on them. The marking scheme is set later, when you build the paper and choose the exam.</p>
     <div class="row" style="margin-top:16px;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn ghost sm" style="width:auto" onclick="downloadPaperTemplate()">⬇ Download the blank paper</button>
-      <span class="muted" style="font-size:12.5px">Hand this to your staff to type into — it already has the three sections and fifty numbered slots.</span>
+      <span class="muted" style="font-size:12.5px">For staff to type into — it already has the three sections and fifty numbered slots.</span>
     </div>
-    <label style="margin-top:14px">Choose file (.docx only)</label><input type="file" id="bkFile" accept=".docx" onchange="bankUploadRead()"/>
-    <p class="muted" style="font-size:12.5px;margin-top:6px">Uploaded the wrong file? <a href="#" onclick="openSelfUploadHistory('bankUpload');return false">🗂 See &amp; undo previous database uploads</a></p>
+    <label style="margin-top:14px">Choose the files (.docx) — pick as many chapters as you like</label>
+    <input type="file" id="bkFile" accept=".docx" multiple onchange="bkFilesChosen()"/>
+    <div id="bkList"></div>
     <div id="bkPreview"></div>
+    <p class="muted" style="font-size:12.5px;margin-top:8px">Uploaded the wrong file? <a href="#" onclick="openSelfUploadHistory('bankUpload');return false">🗂 See &amp; undo previous database uploads</a></p>
     <div class="msg" id="bkMsg"></div>
     <div class="row end" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Close</button>
-      <button class="btn" id="bkAddBtn" onclick="bankUploadSave()" disabled>Add to the database</button></div>`,true);
-  BANK_UP_PARSED=[]; BANK_UP_FILE=""; BANK_UP_DONE=false;
-  if(el("bkDiff")) el("bkDiff").value="Moderate";
-  bkResetRanges();
-  el("bkExam").onchange=bkResetRanges;
-  el("bkClass").onchange=()=>document.querySelectorAll(".bkSubj").forEach(bkChapHints);
+      <button class="btn" id="bkAddBtn" onclick="bankUploadRun()" disabled>Add to the database</button></div>`,true);
+  BK_FILES=[]; BANK_UP_PARSED=[]; BANK_UP_FILE=""; BANK_UP_DONE=false;
+  bkFillSubjects();
+  el("bkExam").onchange=bkFillSubjects;
 }
-async function bankUploadRead(){
-  const f=el("bkFile").files[0]; if(!f) return;
+/* The subjects offered follow whichever exams these questions are for. */
+function bkFillSubjects(){
+  const subs=subjectsForTag(val("bkExam"));
+  const keep=val("bkSubject");
+  el("bkSubject").innerHTML=subs.map(s=>`<option${s===keep?" selected":""}>${esc(s)}</option>`).join("");
+}
+function bkFilesChosen(){
+  const picked=[...(el("bkFile").files||[])];
+  BK_FILES=picked.map((f,i)=>({file:f,name:f.name,chapter:chapterFromFileName(f.name),state:"waiting",note:"",live:0,pending:0,i}));
+  BANK_UP_DONE=false; BANK_UP_PARSED=[]; el("bkPreview").innerHTML=""; setMsg("bkMsg","","ok");
+  bkRenderList();
+  setBtn("bkAddBtn",!BK_FILES.length,
+    BK_FILES.length>1?`Read and add all ${BK_FILES.length} files`:"Read and add this file");
+}
+function bkChapterEdited(i,v){ if(BK_FILES[i]) BK_FILES[i].chapter=v; }
+function bkStateText(x){
+  if(x.state==="working") return `<span class="muted"><span class="loader"></span> reading…</span>`;
+  if(x.state==="done") return `✓ ${x.live} added${x.pending?` · ${x.pending} to review`:""}`;
+  if(x.state==="fail") return `<span style="color:var(--danger)">✕ ${esc(x.note||"could not be read")}</span>`;
+  return `<span class="muted">waiting</span>`;
+}
+function bkSetState(i){ const e=el("bkS"+i); if(e) e.innerHTML=bkStateText(BK_FILES[i]); }
+function bkRenderList(){
+  const box=el("bkList"); if(!box) return;
+  if(!BK_FILES.length){ box.innerHTML=""; return; }
+  box.innerHTML=`<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden">
+      <div class="row" style="gap:0;background:#f2efe8;padding:7px 10px;font-size:12px;font-weight:600">
+        <div style="flex:1.1">File</div><div style="flex:1.3">Chapter it is filed under</div><div style="width:150px;flex:none">What happened</div></div>
+      ${BK_FILES.map((x,i)=>`<div class="row" style="gap:0;padding:7px 10px;border-top:1px solid var(--line);align-items:center">
+        <div style="flex:1.1;font-size:12.5px;min-width:0;word-break:break-word;padding-right:8px">${esc(x.name)}</div>
+        <div style="flex:1.3;padding-right:8px"><input value="${esc(x.chapter)}" oninput="bkChapterEdited(${i},this.value)" style="font-size:13px;margin:0"/></div>
+        <div style="width:150px;flex:none;font-size:12px" id="bkS${i}">${bkStateText(x)}</div></div>`).join("")}
+    </div>
+    <p class="muted" style="font-size:12.5px;margin:6px 0 0">The chapter comes from each file's name — change it here if you want it filed under something else.</p>`;
+}
+async function bankUploadRun(){
+  if(!BK_FILES.length||BANK_UP_DONE) return;
   if(!await ready(needWord)) return;
-  BANK_UP_DONE=false; el("bkPreview").innerHTML=""; setBtn("bkAddBtn",true,"Add to the database");
-  setMsg("bkMsg","Reading the file and converting equations…","ok");
-  try{
-    if(!f.name.toLowerCase().endsWith(".docx"))
-      throw new Error("Please upload a .docx file — a legacy .doc must be saved as .docx first in Word (File → Save As → Word Document).");
-    const buf=await f.arrayBuffer();
-    let W=null,raw;
-    try{ W=await readWordWithEquations(buf); raw=W.raw; }
-    catch(err){ console.warn("Equation reader failed, falling back to text only:",err); W=null; }
-    if(!W){
-      if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
-      raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
-    }
-    const ranges=bkReadRanges();
-    const fallbackSubject=(ranges[0]&&ranges[0].subject)||examSubjects(val("bkExam"))[0]||"Physics";
-    const defaults={exam:val("bkExam"),subject:fallbackSubject,cls:val("bkClass"),
-      topic:(ranges[0]&&ranges[0].chapter)||fallbackSubject,difficulty:val("bkDiff")};
-    BANK_UP_PARSED=parseSelfUploadDoc(raw,defaults,W);
-    BANK_UP_FILE=f.name;
-    BANK_UP_PARSED.forEach(q=>{
-      const r=bkRangeFor(q.num,ranges);
-      q.exam=val("bkExam");
-      q.cls=val("bkClass");
-      q.difficulty=val("bkDiff");
-      q.subject=(r&&r.subject)||fallbackSubject;
-      q.topic=((r&&r.chapter)||"").trim()||q.subject;
-    });
-    if(!BANK_UP_PARSED.length){
-      setMsg("bkMsg",'No questions found. Check the file has numbered questions (e.g. "1.") with (a)(b)(c)(d) options, and an "Answer Keys" section.',"err");
-      return;
-    }
-    const good=BANK_UP_PARSED.filter(q=>q.tier==="ready");
-    const fixable=BANK_UP_PARSED.filter(q=>q.tier==="fixable");
-    const skipped=BANK_UP_PARSED.filter(q=>q.tier==="skip");
-    const withSol=BANK_UP_PARSED.filter(q=>q.solution&&q.solution.trim()).length;
-    setMsg("bkMsg",`Found ${BANK_UP_PARSED.length} question${BANK_UP_PARSED.length===1?"":"s"}`
-      +(W?` (${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)}${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""})`:"")+". "
-      +`✓ ${good.length} ready to file.`
-      +(fixable.length?` ⚠ ${fixable.length} need a quick fix — those go to the Review queue.`:"")
-      +(skipped.length?` ✕ ${skipped.length} can't be imported at all (no question text, or no usable answer key entry).`:"")
-      +` 📘 Solutions found for ${withSol} of them.`
-      +((BANK_UP_PARSED.passedOver&&BANK_UP_PARSED.passedOver.length)
-        ?` ⚠ The file's own numbering passes over ${BANK_UP_PARSED.passedOver.length} question${BANK_UP_PARSED.passedOver.length===1?"":"s"} — numbered ${BANK_UP_PARSED.passedOver.join(", ")} in the file. Fix the numbering in Word and upload again.`:""),
-      (fixable.length||skipped.length)?"warn":"ok");
-    setBtn("bkAddBtn",!(good.length||fixable.length),`Add ${good.length+fixable.length} question${(good.length+fixable.length)===1?"":"s"} to the database`);
-    el("bkPreview").innerHTML=`<div style="max-height:280px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px">`
-      +BANK_UP_PARSED.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
-        return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
-          <div style="font-size:13px">${icon} <b>Q${q.num}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
-          <div class="muted" style="font-size:11.5px">${esc(q.subject)} · ${esc(q.topic)} · class ${esc(q.cls)} · answer ${q.answerType==="numeric"?esc(String(q.numAnswer))+" (typed)":(q.correct!=null?optLetter(q.correct):"—")}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${esc(q.problems.join("; "))}</span>`:""}</div></div>`;}).join("")+`</div>`;
-  }catch(e){ setMsg("bkMsg","Could not read file: "+errMsg(e),"err"); }
+  const meta={exam:val("bkExam"),subject:val("bkSubject"),cls:val("bkClass")};
+  setBtn("bkAddBtn",true,`<span class="loader"></span> Working…`);
+  let live=0,pend=0,skip=0,failed=0,done=0;
+  for(const x of BK_FILES){
+    if(x.state==="done"){ live+=x.live; pend+=x.pending; done++; continue; }
+    x.state="working"; bkSetState(x.i);
+    setMsg("bkMsg",`Reading ${x.name}… (${done+failed+1} of ${BK_FILES.length})`,"ok");
+    try{
+      const r=await bankUploadOne(x,meta);
+      x.live=r.live; x.pending=r.pending; x.state="done";
+      live+=r.live; pend+=r.pending; skip+=r.skipped; done++;
+    }catch(e){ x.state="fail"; x.note=errMsg(e); failed++; }
+    bkSetState(x.i);
+  }
+  BANK_UP_DONE=!failed&&(live+pend)>0;
+  setMsg("bkMsg",`✓ ${live} question${live===1?"":"s"} added to your database from ${done} file${done===1?"":"s"}`
+    +(pend?`, ${pend} sent to the Review queue for a quick fix`:"")
+    +(skip?`, ${skip} could not be read at all`:"")+"."
+    +(failed?` ⚠ ${failed} file${failed===1?" was":"s were"} not read — see the list above.`:"")
+    +` Build a paper from them any time: Tests → 🗂 New test from the database.`, failed?"warn":"ok");
+  setBtn("bkAddBtn",BANK_UP_DONE,BANK_UP_DONE?"✓ Added to the database":"Try the files that failed again");
+  if(CURRENT_PAGE==="questions"){ loadQuestions(); loadBankCounts(); }
 }
-async function bankUploadSave(){
-  if(BANK_UP_DONE) return;
-  const good=BANK_UP_PARSED.filter(q=>q.tier==="ready");
-  const fixable=BANK_UP_PARSED.filter(q=>q.tier==="fixable");
-  if(!good.length&&!fixable.length) return;
-  setBtn("bkAddBtn",true,"Adding…");
-  try{
-    const r=await bankUploadImport(good,fixable,BANK_UP_FILE);
-    BANK_UP_DONE=true;
-    const chaps=[...new Set([...good,...fixable].map(q=>q.subject+" · "+q.topic))];
-    setMsg("bkMsg",`✓ ${r.liveIds.length} question${r.liveIds.length===1?"":"s"} ${r.liveIds.length===1?"is":"are"} now in your database`
-      +(r.pendingIds.length?`, and ${r.pendingIds.length} went to the Review queue for a quick fix.`:".")
-      +` Filed under: ${chaps.join(", ")}.`
-      +` Build a paper from them any time — Tests → 🗂 New test from the database.`,"ok");
-    setBtn("bkAddBtn",true,"✓ Added to the database");
-    if(CURRENT_PAGE==="questions"){ loadQuestions(); loadBankCounts(); }
-  }catch(e){ setMsg("bkMsg",errMsg(e),"err"); setBtn("bkAddBtn",false,"Add to the database"); }
+async function bankUploadOne(x,meta){
+  if(!/\.docx$/i.test(x.name))
+    throw new Error("not a .docx — open it in Word and use File → Save As → Word Document first");
+  const buf=await x.file.arrayBuffer();
+  let W=null,raw;
+  try{ W=await readWordWithEquations(buf); raw=W.raw; }
+  catch(err){ console.warn("Equation reader failed, falling back to text only:",err); W=null; }
+  if(!W){
+    if(typeof mammoth==="undefined") throw new Error("Word reader didn't load — check your internet and reload.");
+    raw=(await mammoth.extractRawText({arrayBuffer:buf})).value;
+  }
+  const chapter=(x.chapter||"").trim()||meta.subject;
+  const parsed=parsePaperDoc(raw,{exam:meta.exam,subject:meta.subject,cls:meta.cls,topic:chapter,difficulty:BANK_DEFAULT_DIFF},W);
+  if(!parsed.length)
+    throw new Error("no questions found — check it has numbered questions with (a)(b)(c)(d) and an “Answer Keys” section");
+  parsed.forEach(q=>{ q.exam=meta.exam; q.subject=meta.subject; q.cls=meta.cls; q.difficulty=BANK_DEFAULT_DIFF; q.topic=chapter; });
+  const good=parsed.filter(q=>q.tier==="ready"), fixable=parsed.filter(q=>q.tier==="fixable");
+  const r=await bankUploadImport(good,fixable,x.name);
+  if(BK_FILES.length===1){ BANK_UP_PARSED=parsed; BANK_UP_FILE=x.name; bkRenderPreview(W,parsed,chapter); }
+  return {live:r.liveIds.length,pending:r.pendingIds.length,
+          skipped:parsed.filter(q=>q.tier==="skip").length,exercises:parsed.exercises||1};
 }
+/* With one file there is room to show what went in, question by question. */
+function bkRenderPreview(W,parsed,chapter){
+  const box=el("bkPreview"); if(!box) return;
+  const withSol=parsed.filter(q=>q.solution&&q.solution.trim()).length;
+  box.innerHTML=`<div class="muted" style="font-size:12.5px;margin-top:10px">
+      Filed under <b>${esc(val("bkSubject"))} · ${esc(chapter)}</b>${parsed.exercises>1?` — read as <b>${parsed.exercises} exercises</b>, each with its own answer key and solutions`:""}.
+      ${W?`${W.stats.equations-W.stats.eqFailed} of ${W.stats.equations} equations converted${roughNote(W)}${W.stats.figures?`, ${W.stats.figures} diagram${W.stats.figures===1?"":"s"} kept`:""}. `:""}Solutions found for ${withSol} of ${parsed.length}.
+      ${(parsed.passedOver&&parsed.passedOver.length)?`<span style="color:var(--danger)">The file's own numbering passes over ${parsed.passedOver.length} question${parsed.passedOver.length===1?"":"s"} (${parsed.passedOver.join(", ")}).</span>`:""}
+    </div>
+    <div style="max-height:280px;overflow:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px">`
+    +parsed.map(q=>{const icon=q.tier==="ready"?"✓":(q.tier==="fixable"?"⚠️":"✕");
+      return `<div style="padding:8px 4px;border-bottom:1px solid var(--line)">
+        <div style="font-size:13px">${icon} <b>${qTag(q)}.</b> ${fmtMath(truncate((q.text||"(no text found)").replace(/\[\[img:[^\]]*\]\]/g," [diagram] ").replace(/\$[^$]*\$/g,m=>m.length>90?" [equation] ":m),140),q.subject)}</div>
+        <div class="muted" style="font-size:11.5px">${esc(q.subject)} · ${esc(q.topic)} · class ${esc(q.cls)} · answer ${q.answerType==="numeric"?esc(String(q.numAnswer))+" (typed)":(q.correct!=null?optLetter(q.correct):"—")}${q.solution?" · has solution":" · no solution text found"}${q.problems.length?` · <span style="color:var(--danger)">${esc(q.problems.join("; "))}</span>`:""}</div></div>`;}).join("")
+    +`</div>`;
+}
+
 /* Ready questions go in live. Ones with something unreadable go to the Review queue instead of
    being thrown away, carrying the same upload stamp so the whole upload can be undone in one go. */
 async function bankUploadImport(good,fixable,fileName){
@@ -3247,11 +3380,12 @@ async function bankUploadImport(good,fixable,fileName){
 let BT={sel:[],pool:[],shown:60,loaded:false};
 function openBankTest(){
   modal(`<h2>🗂 New test from the question database</h2>
-    <p class="muted">Pick questions out of your database — one at a time, or a batch at random — and the paper is built from exactly those. Each question carries its own answer key and solution, so the marking can't slip out of line.</p>
+    <p class="muted">Pick questions out of your database — one at a time, or a batch at random — and the paper is built from exactly those. Each question carries its own answer key and solution, so the marking can't slip out of line.
+    <b>For a mixed paper</b>, add from one subject, then change the subject above and add more — what you have already picked stays where it is.</p>
     <div class="card" style="padding:12px;margin-bottom:12px">
       <div style="font-weight:600;margin-bottom:6px">① Find the questions</div>
       <div class="grid cols-3">
-        <div><label>Exam</label>${examSelect("btExam")}</div>
+        <div><label>Exam <span class="muted" style="font-weight:400">\u2014 sets the marking</span></label>${examSelect("btExam")}</div>
         <div><label>Class</label><select id="btClass"><option value="11">Class 11</option><option value="12">Class 12</option><option value="both">Both 11 &amp; 12</option></select></div>
         <div><label>Subject</label><select id="btSubject"></select></div>
       </div>
@@ -3326,12 +3460,14 @@ async function btLoadPool(){
   setBtn("btLoadBtn",true,"Looking…");
   el("btPoolMsg").textContent="";
   try{
-    let q=db.collection("questions").where("status","==","live").where("exam","==",exam);
-    if(subj!=="all") q=q.where("subject","==",subj);
-    if(classes.length===1) q=q.where("class","==",classes[0]);
-    /* only the few lines each question is listed by — never the diagrams, never the solutions.
+    /* only the few lines each question is listed by \u2014 never the diagrams, never the solutions.
        That is what keeps this screen open on a phone. */
-    const rows=await readSlim(q,["text","correct","answerType","numAnswer","subject","topic","class","difficulty","numerical","year","exam"],4000);
+    const rows=await slimForExam(exam,tag=>{
+      let q=db.collection("questions").where("status","==","live").where("exam","==",tag);
+      if(subj!=="all") q=q.where("subject","==",subj);
+      if(classes.length===1) q=q.where("class","==",classes[0]);
+      return q;
+    },["text","correct","answerType","numAnswer","subject","topic","class","difficulty","numerical","year","exam"],4000);
     BT.pool=rows.filter(x=>classes.includes(x.class)&&x.difficulty!==RETIRED_DIFF);
     BT.loaded=true; BT.shown=60;
     btFillChaps(); btRenderPool();
@@ -3363,7 +3499,8 @@ function btRenderPool(){
   const rows=all.slice(0,BT.shown);
   const shownLeft=rows.filter(x=>!chosen.has(x.id)).length;
   el("btPoolMsg").innerHTML=`<b>${all.length}</b> question${all.length===1?"":"s"} in your database match${all.length===1?"es":""} these filters — ${left.length} not yet in the paper.`
-    +(shownLeft?` &nbsp;<a href="#" onclick="btAddAllShown();return false">Add the ${shownLeft} shown below</a>`:"");
+    +(shownLeft?` &nbsp;<a href="#" onclick="btAddAllShown();return false">Add the ${shownLeft} shown below</a>`:"")
+    +(left.length>shownLeft?` &nbsp;\u00b7&nbsp; <a href="#" onclick="btAddAllMatching();return false">Add all ${left.length}</a>`:"");
   box.innerHTML=(rows.length?rows.map(x=>{
     const inP=chosen.has(x.id);
     return `<div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px${inP?";opacity:.5":""}">
@@ -3385,6 +3522,14 @@ function btAddAllShown(){
   if(!rows.length) return;
   rows.forEach(x=>BT.sel.push(x));
   setMsg("btMsg",`Added ${rows.length} question${rows.length===1?"":"s"} to the paper.`,"ok");
+  btRenderSel(); btRenderPool();
+}
+function btAddAllMatching(){
+  const chosen=new Set(BT.sel.map(q=>q.id));
+  const rows=BT.pool.filter(x=>btMatch(x)&&!chosen.has(x.id));
+  if(!rows.length) return;
+  rows.forEach(x=>BT.sel.push(x));
+  setMsg("btMsg",`Added all ${rows.length} matching question${rows.length===1?"":"s"} to the paper.`,"ok");
   btRenderSel(); btRenderPool();
 }
 function btAddRandom(){
@@ -3425,9 +3570,8 @@ function btRenderSel(){
 }
 async function btCreate(asDraft){
   if(!BT.sel.length) return setMsg("btMsg","Pick at least one question for the paper.","err");
-  const exams=[...new Set(BT.sel.map(x=>x.exam).filter(Boolean))];
-  if(exams.length>1) return setMsg("btMsg",`The picked questions come from more than one exam (${exams.join(", ")}). One paper can only follow one exam's marking — press “Clear all” and pick again.`,"err");
-  const exam=exams[0]||val("btExam");
+  const exam=val("btExam");                 // the paper's exam sets the marking, not the questions'
+
   const title=composeTestTitle("bt");
   if(!val("btTitle").trim()) return setMsg("btMsg","Give the paper a name.","err");
   const ids=[...new Set(BT.sel.map(x=>x.id))];
